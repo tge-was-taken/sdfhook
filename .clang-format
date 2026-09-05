@@ -1,0 +1,13 @@
+# ps2-runtime's style.
+BasedOnStyle: Google
+IndentWidth: 4
+ColumnLimit: 100
+UseTab: Never
+NamespaceIndentation: None
+AccessModifierOffset: -4
+BreakBeforeBraces: Attach
+DerivePointerAlignment: false
+PointerAlignment: Left
+FixNamespaceComments: true
+ShortNamespaceLines: 0
+AllowShortFunctionsOnASingleLine: Inline

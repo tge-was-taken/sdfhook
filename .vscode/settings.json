@@ -1,0 +1,15 @@
+{
+    "cmake.useCMakePresets": "always",
+    "cmake.buildDirectory": "${workspaceFolder}/build",
+    "cmake.configureOnOpen": false,
+
+    // CMake Tools feeds IntelliSense directly, which keeps the editor and the build tree in step.
+    // The compile database stays as the fallback for anything that does not ask CMake Tools.
+    "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+    "clangd.arguments": ["--compile-commands-dir=${workspaceFolder}/build"],
+
+    "files.associations": {
+        "*.h": "cpp"
+    }
+}

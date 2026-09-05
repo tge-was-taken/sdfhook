@@ -1,0 +1,29 @@
+{
+    "version": 3,
+    "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+    "configurePresets": [
+        {
+            "name": "default",
+            "displayName": "sdfhook (Ninja)",
+            "description": "What the command line uses, so an editor and a terminal share one build tree.",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "sdfhook",
+            "displayName": "sdfhook",
+            "configurePreset": "default",
+            "targets": [ "sdfhook" ]
+        },
+        {
+            "name": "all",
+            "displayName": "everything, including the emulator",
+            "configurePreset": "default"
+        }
+    ]
+}

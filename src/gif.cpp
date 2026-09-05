@@ -1,0 +1,230 @@
+#include "gif.h"
+
+#include <cstring>
+
+#include "unsupported.h"
+
+namespace sdfhook {
+namespace {
+
+constexpr u32 kQwordBytes = 16;
+
+constexpr u32 kDmaRefe = 0;
+constexpr u32 kDmaRef = 3;
+constexpr u32 kDmaRefs = 4;
+
+// Collects vertices into runs, one per PRIM and texture. A run closes when either changes, since
+// together they are what a single draw call can carry.
+class GeometryWalk {
+public:
+    explicit GeometryWalk(GifCounts* counts) : mCounts(counts) {}
+    ~GeometryWalk() { close(); }
+
+    void finish() { close(); }
+
+    void setPrim(u32 prim) {
+        if (mHavePrim && prim == mPrim) return;
+        close();
+        mPrim = prim;
+        mHavePrim = true;
+    }
+
+    // A texture bound mid-run starts a new run, since a draw call can only carry one.
+    void setTex0(u64 value) {
+        if (value == mTex0) return;
+        close();
+        mTex0 = value;
+    }
+
+    void rgbaq(const sdfGifRgbaq_t&) {}
+    void uv(const sdfGifUv_t&) {}
+
+    void position(const sdfGifXyz2_t& xyz) {
+        if (!mHavePrim) return;
+        (void)xyz;
+        mCounts->verts[sdfPrimType(mPrim)]++;
+        mCount++;
+    }
+
+private:
+    void close() {
+        if (!mCount) return;
+        mCounts->prims[sdfPrimType(mPrim)]++;
+        if (sdfPrimTme(mPrim) && mTex0) {
+            mCounts->texDraws[sdfDecodeTex0(mTex0).psm & 0x3F]++;
+        } else {
+            mCounts->untexturedDraws++;
+        }
+        mCount = 0;
+    }
+
+    GifCounts* mCounts;
+    u32 mPrim = 0;
+    bool mHavePrim = false;
+    u32 mCount = 0;
+    u64 mTex0 = 0;
+};
+
+// PACKED spreads one register over a whole quadword, each field in its own 32-bit word.
+void feedPacked(GeometryWalk& walk, u32 reg, const u8* qword) {
+    switch (reg) {
+        case sdfGifRegRgbaq: {
+            sdfGifRgbaq_t value{};
+            std::memcpy(&value, qword, sizeof(value));
+            walk.rgbaq(value);
+            break;
+        }
+        case sdfGifRegUv: {
+            sdfGifUv_t value{};
+            std::memcpy(&value, qword, sizeof(value));
+            walk.uv(value);
+            break;
+        }
+        case sdfGifRegXyz2:
+        case sdfGifRegXyzf2: {
+            sdfGifXyz2_t value{};
+            std::memcpy(&value, qword, sizeof(value));
+            walk.position(value);
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+// GS register addresses for PRIM through XYZ2 match the GIF descriptor ids, so one decoder serves
+// REGLIST and A+D both.
+void feedRegister(GeometryWalk& walk, u32 reg, u64 word) {
+    switch (reg) {
+        case sdfGifRegPrim:
+            walk.setPrim(u32(word & 0x7FF));
+            break;
+        case sdfGifRegRgbaq:
+            walk.rgbaq(sdfGifRgbaq_t{u32(word & 0xFF), u32((word >> 8) & 0xFF),
+                                     u32((word >> 16) & 0xFF), u32((word >> 24) & 0xFF)});
+            break;
+        case sdfGifRegUv:
+            walk.uv(sdfGifUv_t{u32(word & 0x3FFF), u32((word >> 16) & 0x3FFF), {0, 0}});
+            break;
+        case sdfGifRegXyzf2:
+            walk.position(sdfGifXyz2_t{u32(word & 0xFFFF), u32((word >> 16) & 0xFFFF),
+                                       u32((word >> 32) & 0xFFFFFF), 0});
+            break;
+        case sdfGifRegXyz2:
+            walk.position(sdfGifXyz2_t{u32(word & 0xFFFF), u32((word >> 16) & 0xFFFF),
+                                       u32(word >> 32), 0});
+            break;
+        default:
+            break;
+    }
+}
+
+// An A+D quadword is a value and the register address to put it in. Geometry arrives this way as
+// readily as state does: a full-screen quad sets PRIM, RGBAQ and two XYZ2 through it.
+void feedAd(GeometryWalk& walk, const u8* qword) {
+    u64 value = 0;
+    u64 addr = 0;
+    std::memcpy(&value, qword, sizeof(value));
+    std::memcpy(&addr, qword + 8, sizeof(addr));
+    const u32 reg = u32(addr & 0xFF);
+    if (reg <= sdfGifRegXyz2) {
+        feedRegister(walk, reg, value);
+    } else if (reg == sdfGsRegTex0_1 || reg == sdfGsRegTex0_2) {
+        walk.setTex0(value);
+    }
+}
+
+// Quadwords a tag's own data occupies, which is how the walk finds the next tag.
+constexpr u32 kNotAGifList = 0xFFFFFFFF;
+
+u32 payloadQwords(u32 flg, u32 nloop, u32 nreg) {
+    switch (flg) {
+        case 0:
+            return nloop * nreg;
+        case 1:
+            return (nloop * nreg + 1) / 2;
+        case 2:
+            return nloop;  // IMAGE, one quadword per loop
+        default:
+            return kNotAGifList;  // FLG 3 is reserved: these quadwords are not a GIF list
+    }
+}
+
+}  // namespace
+
+bool readDmaTag(const Guest& guest, u32 packetAddr, DmaTag& out) {
+    const u8* packet = static_cast<const u8*>(guest.map(packetAddr, kQwordBytes));
+    if (!packet) return false;
+    u64 tag = 0;
+    std::memcpy(&tag, packet, sizeof(tag));
+    out.qwc = u32(tag & 0xFFFF);
+    out.id = u32((tag >> 28) & 7);
+    out.addr = u32(tag >> 32);
+    return true;
+}
+
+class GifWalk::State {
+public:
+    explicit State(GifCounts* counts) : walk(counts), counts(counts) {}
+    GeometryWalk walk;
+    GifCounts* counts;
+};
+
+GifWalk::GifWalk(GifCounts* counts) : mState(std::make_unique<State>(counts)) {}
+
+GifWalk::~GifWalk() = default;
+
+void GifWalk::packet(const Guest& guest, u32 packetAddr) {
+    GeometryWalk& walk = mState->walk;
+    GifCounts& counts = *mState->counts;
+    DmaTag tag{};
+    if (!readDmaTag(guest, packetAddr, tag) || !tag.qwc) return;
+
+
+    // REF-family tags leave their quadwords at ADDR; the rest carry them straight after the tag.
+    const bool byRef = tag.id == kDmaRef || tag.id == kDmaRefs || tag.id == kDmaRefe;
+    const u32 dataAddr = byRef ? tag.addr : packetAddr + kQwordBytes;
+    const u8* data = static_cast<const u8*>(guest.map(dataAddr, tag.qwc * kQwordBytes));
+    if (!data) return;
+
+    u32 left = tag.qwc;
+    while (left) {
+        sdfGifTagWords_t gif{};
+        std::memcpy(&gif, data, sizeof(gif));
+        data += kQwordBytes;
+        left--;
+
+        const u32 nloop = sdfGifNloop(gif);
+        const u32 nreg = sdfGifNreg(gif) ? sdfGifNreg(gif) : 16;  // the field encodes 16 as zero
+        const u32 flg = sdfGifFlg(gif);
+        const u32 payload = payloadQwords(flg, nloop, nreg);
+        if (!nloop || payload == kNotAGifList || payload > left) {
+            counts.unparsed++;
+            return;
+        }
+        if (sdfGifPre(gif)) walk.setPrim(sdfGifPrim(gif));
+
+        if (flg == 0) {
+            for (u32 i = 0; i < payload; i++) {
+                const u32 reg = sdfGifRegAt(gif.regs, i % nreg);
+                const u8* qword = data + i * kQwordBytes;
+                if (reg == sdfGifRegAD) {
+                    feedAd(walk, qword);
+                } else {
+                    feedPacked(walk, reg, qword);
+                }
+            }
+        } else if (flg == 1) {
+            for (u32 i = 0; i < nloop * nreg; i++) {
+                u64 word = 0;
+                std::memcpy(&word, data + i * 8, sizeof(word));
+                feedRegister(walk, sdfGifRegAt(gif.regs, i % nreg), word);
+            }
+        }
+
+        data += payload * kQwordBytes;
+        left -= payload;
+    }
+}
+
+}  // namespace sdfhook
