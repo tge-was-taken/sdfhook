@@ -9,7 +9,11 @@ add_executable(sdfhook
 	render/sprite.cpp
 	render/render_thread.cpp
 	${CMAKE_SOURCE_DIR}/thirdparty/glad/gl.c
+	config.cpp
+	guest_ptr.cpp
+	log.cpp
 	gif.cpp
+	model.cpp
 	texture.cpp
 	unsupported.cpp
 	hooks.cpp
@@ -22,6 +26,7 @@ target_include_directories(sdfhook PRIVATE
 
 set_target_properties(sdfhook PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 target_compile_options(sdfhook PRIVATE -Wall -Wextra)
+
 target_link_libraries(sdfhook PRIVATE pcsx2hook SDL3::SDL3 PNG::PNG)
 
 # The emulator looks for resources/ beside the running binary.

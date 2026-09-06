@@ -15,6 +15,40 @@ handled, and a silent fallback is a measurement that lies. `applyBlend` mapping 
 ALPHA to ordinary alpha blending, and the texture decode treating every non-paletted format as
 32-bit, both looked like working code.
 
+## Unfinished work is written down, not left in the tree
+
+`applyGsRegisterWrites` and `ModelParser::getGsState` were built to keep the running GS state a
+frame's A+D packets leave in force, and then nothing called either of them for months. Every mesh
+kept the hardcoded `sdfGsStateForOt` table instead, and AREF was wrong on two thirds of the batches
+the hardware ran. Nothing was broken; something was simply never connected, and no artefact said so.
+
+So, in order:
+
+- **`scripts/lint.sh` names every function nothing calls.** cppcheck's `unusedFunction` is
+  whole-program, which is what this needs: `-Wall` only warns about unused statics, and clang-tidy
+  runs per translation unit so a public member always looks like it might be called elsewhere. Run
+  it before calling a piece of work done. **The list is expected to be empty.**
+- **A thing that has to stay uncalled says why**, either an inline `cppcheck-suppress unusedFunction`
+  with a reason where it is complete by design (a level in a logging API, one field decoder of a
+  family), or an `@todo` naming the TODO.md item where it is genuinely unfinished. `applyGsRegisterWrites`
+  and `getGsState` carry the second kind and stay on the list until they are wired.
+- **A deferral becomes a TODO.md entry the moment it is made**, not when someone next notices. The
+  entry says what was left, what it costs, and how the cost was measured. An item nobody can put a
+  number against is a note, not a task.
+
+## Reimplement the whole function, not the parts that fire
+
+A branch that measures zero in every sample savestate is not a branch that does not exist. Skipping
+it because nothing reached it is how it gets forgotten, and the savestates are a window, not the
+game: the same reasoning that makes a clean caller net mean "nothing unexpected happened in this
+window" applies to our own code.
+
+So model every path, and where a path genuinely cannot be modelled, `reportUnsupported` it so a run
+that trips it says so in the summary instead of rendering short in silence. Zero is then a
+**measurement**, not an assumption. `sdfModelTempPacketLinkOt` and `sdfModelLinkShapedDrawPacket`
+were both skipped on exactly that reasoning and are now walked; `faceDivBias` and `corePktSoftenBias`
+are reported when non-zero, which is what proves they are inert here rather than merely unseen.
+
 ## Colour stays in the shader
 
 Never scale a colour channel on the way into a vertex buffer. Attributes carry the guest's value
@@ -263,9 +297,29 @@ which is ordinary renderer work rather than a decode problem. Do not go looking 
 
 Reproducing a load: `smt3_field_underground_facility` begins mid-load and needs no input, but the
 save is on the host card, so pass `PCSX2HOOK_MCD=smt3_host.ps2` (copied from the Windows PCSX2
-memcards folder). That run decodes 33 of 33 textures and the compass draws correctly. The moon icon
-and the location label do not, so their textures are registered by some path other than
-`sdfTexSetEx`; that is the open end.
+memcards folder). That run decodes 33 of 33 textures and the compass draws correctly.
+
+### Recovering a texture from GS memory
+
+A savestate taken after a load never runs `sdfTexSetEx`, so the GS holds the only copy. That is what
+made four of six scenes measurable rather than one: field unknown realm went 167.60 to 11.47 and the
+title screen 54.05 to 8.44. `sdfTexGetTex0Reg` says where to look, at `+32` in the handle's own
+upload packet, and `pcsx2hook_read_gs_pixels` reads it. Two rules, both learned by crashing:
+
+**Never read through the renderer's CLUT cache.** `GSClut::Read32` leaves it loaded for a TEX0 the
+game never asked for, and the emulated draws after that die: the first read succeeded and every one
+after it took the EE down inside `recExecute` with a corrupt stack, which reads as a recompiler bug
+and is not one. Read raw values per texel through the format's own `readPixel`, the way
+`GSLocalMemory::SaveBMP` does, and apply the palette on our side.
+
+**Never read from inside a hook.** The read runs on the GS thread and blocks for it. Queue the
+handle at the lookup, drain it in the runner's frame callback, and let the uploads reach the next
+frame the builder opens; a draw goes untextured once and resolves after that.
+
+**A recovered texture is not always its own.** The GS reuses memory, so a TEX0 recorded at upload
+can name a region the display buffer has since taken: the battle scene recovers slices of its own
+frame buffer, UI panels included, and every mesh sampling one saturates to white.
+`SDF_DUMP_TEXTURES` writes the recovered ones as `gs_*.png`, which is how to tell.
 
 ## What is out of reach at this level
 
@@ -277,16 +331,38 @@ outright, so the projection can be done natively instead of read back. Both need
 their own engine-level entry points (`sdfCorePacketGen`, `sdfBillBoardMakeN` and the layers above),
 which is where the semantics still exist. That is the next boundary to hook, not a VU1 interpreter.
 
-## Fix wrong names in the database
+## Correct the database when you prove it wrong
 
-Many symbols are inferred rather than known, and an inferred name that contradicts the code is worse
-than `sub_239FD0`, because it is believed. Rename it in the IDB when the body says otherwise, note
-the evidence and the old name in a comment there, then re-export with `scripts/export_symbols.py`
-and update the hooks: `cmpDrawQuad` draws one gouraud triangle (PRIM `0x14B`, `REGS 0x515151`, three
-RGBAQ and XYZ2 pairs), so it is `cmpDrawTriG`. `frFontTable` names the first field of an
-`frGsTex_t`, not a table.
+Much of the IDB is inferred rather than known, and an inferred fact that contradicts the code is
+worse than no fact at all, because it is believed. **Anything proven wrong here gets fixed there**,
+in the same sitting: the IDB outlives the session, so a correction made in it is worth more than one
+made in this tree, and a workaround left only in the source means the next reader re-derives the
+same thing from the same wrong starting point.
 
-The IDB outlives the session, so a correction made there is worth more than one made here.
+That covers every kind of discrepancy, not just names:
+
+- **Names.** Rename in the IDB when the body says otherwise: `cmpDrawQuad` draws one gouraud
+  triangle (PRIM `0x14B`, `REGS 0x515151`, three RGBAQ and XYZ2 pairs), so it is `cmpDrawTriG`.
+  `frFontTable` names the first field of an `frGsTex_t`, not a table.
+- **Layouts and sizes.** `sdfMatPacket_t::texTm` was `f32**[1]` at `+0x68` with `cmd_call_spec` and
+  `cmd_call_kind` behind it, neither of which had a single xref. `sdfMatSetUvwParm` (0x002B3620)
+  writes six floats through that address, a 2x2 and a 2-vector offset, and stores three qwords of
+  identity in its else branch, so `texTm` is `f32[6]` spanning `0x68..0x80` over both of those and
+  the packet is 128 bytes, not 120. **Corrected in the IDB**, with the evidence on the two functions
+  that prove it.
+- **A missing header.** `sdf3DLightParallelPacket_t` was 212 bytes with `dmatag` as one word, which
+  put every field 12 bytes early. `LOWORD(dmatag) = 13` is the DMA tag's QWC, and 13 quadwords is
+  208 bytes, exactly `normal[3]` + `colorBase` + `color[5]` + `TM`; the writes the decompiler showed
+  as `normal[0].y` and `.z` were the two VIF codes. It is 224 with a 16-byte header, and the four
+  offsets measured at runtime then land exactly, the specular axis included at `TM.row[3]`.
+  `sdf3DFogPacket_t` is the same shape and is 80, not 44 (QWC 4). **Both corrected in the IDB.**
+- **Argument meaning.** `sdfPrimLinkFt4`'s argument 2 and `sdfPrimLinkG4`'s argument 1 are `aPrim`,
+  a GS PRIM word, and reading them as an ALPHA register picked a blend at random.
+
+Record the evidence and the old value in a comment on the IDB item, so the correction can be checked
+rather than taken on faith, then re-export with `scripts/export_symbols.py` and update the hooks. A
+discrepancy that cannot be proven yet stays a comment in this tree saying what is uncertain and why,
+not a silent workaround.
 
 ## Naming
 
@@ -294,6 +370,24 @@ The IDB outlives the session, so a correction made there is worth more than one 
 (shop, terminal, recovery), `dds3` the game kernel, `sdf` the engine library. A prefix says which
 scene a function serves, which is why the sample states have to cover more than one: `nbPnlSprite`
 is the single biggest sprite producer in the game and never runs outside battle.
+
+### End to end: diff the GS state, not the picture
+
+`scripts/gsdiff.py <trace.jsonl> <gs.jsonl>` compares the state we believe each draw runs under
+against the state the hardware ran. Both traces name their fields identically (`prim`, `tme`, `abe`,
+`psm`, `tfx`, `tcc`, `a`/`b`/`c`/`d`, `ate`/`atst`/`aref`/`afail`), so it is a set comparison rather
+than a translation: a state in the GS trace we never produce is something unmodelled, and a state we
+produce the hardware never ran is something modelled wrongly. **The goal is no state diffs at all**,
+leaving only float differences in the picture.
+
+Match on screen bounds, with the texture as a **tiebreak and never a filter**, and let one batch
+match several draws. VU1 culls, clips and merges before the GS sees anything, so counts never line
+up and a merged batch needs a draw a greedy match has already consumed. Get any of that wrong and
+the tool invents missing geometry: a one-to-one match with a texture filter reported 302 phantom
+missing batches on a scene where every one of the 1848 matches.
+
+Never compare our triangle count against the GS's. Ours is what we submit, the GS's is what survived
+VU1; the GPU culls ours after the fact, so the two are not the same quantity.
 
 ### What is left, ranked
 
@@ -349,6 +443,304 @@ Game (`dds3DrawProcess`, once a frame) -> scene (`sdfModelLinkOt`) -> object (`s
 per-vertex (`corePktXfmLightClip`, `corePktSkinVert*`) -> assembly (`corePktBuildFaceList`) -> emit
 (`corePktEmitTris`) -> transport (`sdfGrReqDraw`). `sdfCorePacketGen` is the floor worth hooking;
 below it `corePktInitCb` flattens the packet into untyped scratch offsets and the semantics are gone.
+`sdfModelLinkOt` itself is reimplemented rather than hooked for information; see the next section.
+
+## The scene walk
+
+`ModelWalk` (`src/model.{h,cpp}`) is `sdfModelLinkOt` walked again on our side: the same node list,
+the same `flags & 0x11` test, the same VU0 clip-code bounds cull, the same packet chain, so what the
+engine files into an ordering table we turn into meshes instead. It runs from the entry hook, over
+state the engine has not touched yet.
+
+`ModelLedger` is how that claim is checked rather than asserted. `sdfCorePacketGen` and
+`sdfModelLinkShapedDrawPacket` have no caller but `sdfModelLinkOt`, so their own hooks count what the
+engine reached and the walk counts what it reached; **equal counts mean the traversal is faithful**,
+and a difference is our walk visiting a different set of nodes, not a different way of drawing them.
+Everything else is bucketed: node outcomes, packet types, mesh shapes, and per shape a triangle
+count seen against drawn. A scene that renders short names the branch that swallowed it.
+
+## Mesh bodies
+
+Three sources, in order of authority. The **reconstructed SMT3 HD sources**
+(`~/projects/smt3hd-reconstructed-sources`) carry the engine's own struct and field names in their
+headers, even though the function bodies are Il2Cpp stubs: `sdfCorePacketHeader_t`,
+`sdfCorePrimHeader_t` and `sdfCorePacketCb_t` are what named `packetType`, `mpgType`, `attrBits`,
+`packetBits`, `faceCount`, `pointCount`, and the cb's `facePtr` / `vertexPtr` / `normalPtr` /
+`uvPtr` / `uv2Ptr` / `vertColPtr`. They carry no enum for the packet type values. The **DDS3 format
+work** (`tge-was-taken/010-Editor-Templates` `templates/dds3_model.bt` and
+`tge-was-taken/DDS3-Model-Studio` `Source/DDS3ModelLibrary/Models/MeshTypes/`) is authoritative for
+the body layouts. The disassembly settles anything those two disagree on: the format library merges
+`attrBits` and `packetBits` into one 32-bit `MeshFlags` and mis-names the high half, calling
+`packetBits & 0x100` (uv) `FieldTexture` and `& 0x20` (the face list) `RequiredForField`.
+
+The in-memory packet is the file record shifted forward by four bytes, so `MeshType8.Read`'s
+offsets are ours minus four.
+
+- **`attrBits`** is the GS PRIM word in its low bits (`IIP`, `TME`, `FGE`, `ABE`) with engine flags
+  above it: `0x1000` a second UV set, `0x4000` draw back faces too. `sdfModelLinkOt` masks it with
+  the node's own `drawAttr`.
+- **`packetBits`** says which arrays the body carries: `0x20` faces, `0x80` normals, `0x100` uv,
+  `0x800` weights, `0x1000` blend shapes.
+
+A body is **VIF-tagged and batched**. Each vertex array is preceded by an UNPACK naming its element
+width and count, so the stream states its own shape and a misread offset is refused rather than
+decoded into plausible numbers. A batch caps at what fits in VU0 memory, so a mesh over that arrives
+split across batches whose vertices concatenate; the triangle indices address the whole. Reading the
+count from `packetBits` instead of the UNPACK is what limited the first version to small meshes.
+
+- **Type 8, rigid**: per batch a header UNPACK (`[pointCount, 0]`), then float3 positions, float3
+  normals, float2 texcoords, a microprogram kick and a flush.
+- **Type 7, weighted**: the packet names the nodes it blends before its triangles, and every batch
+  blends the same set, so the palette is built once. Per batch a header (`[usedNodes - 1,
+  pointCount]`), then per used node a float4 position array whose w is that node's weight and a
+  float3 normal array, then one float2 texcoord array for the batch.
+- **Type 5, blend shape**: plain arrays, not VIF-tagged. `extData[0]` holds the shape count in its
+  low half and a morph-controller index in its high half. Shape zero is the mesh and the rest are
+  deltas; the controller (`root->morphList`, two `sdfModelMorphParm_t` per entry) says which two to
+  mix and by how much, over `blend > 0.000001`.
+
+- **Type 1, VIF stream**: not a generated packet at all. `sdfModelLinkOt` links it with
+  `sdfDrawTagLinkCall` as a DMA source chain the hardware runs directly, so it reaches us as a run
+  of REF tags rather than a body. The chain alternates the material's own packet (the buffer
+  `sdfMatMakePacket` filled) with the mesh that draws under it, and `sdfModelSetNormalDrawPacket` is
+  what says so: it reads the material index from the shape record's `matIndex` and the stream's
+  address and length from `extData[0]` and `size`. A REF is identified by **what its data is**, not
+  by its size: an address in the root's material-packet map is a material, an address opening with
+  the batch-header unpack is a mesh, and anything else is setup (a 7-quadword transform block, 2950
+  of them on the battle scene) that we already have by other means. The batches themselves are the
+  same self-describing VIF, with a header of `[faceCount, pointCount, attrBits, packetBits]`, byte
+  triangle indices local to the batch, and optional normals, one or two UV sets and vertex colours.
+  These are the world geometry: they are three quarters of a field scene's triangles.
+
+A second UV set, when `attrBits` asks for one, trails every batch as a plain array. Vertex colours
+appear only in the type 1 streams, under `attrBits & 0x800`.
+
+**A blended mesh must not write depth.** One with nothing to show still occludes everything behind
+it, which is how a transparent panel in front of the camera turned a whole scene black while every
+mesh in it decoded correctly. `attrBits & 0x40` (the GS ABE bit) says which meshes blend, and they
+draw in a second pass with the depth write off.
+
+**The engine's projection is not GL clip space.** Its z leaves GL's `[-w, w]` for near geometry,
+which GL then throws away outright. Depth is rebuilt linearly from `w`, the view distance, and
+deliberately not clamped: a vertex nearer than the near plane has to fall outside `[-w, w]` so that
+GL clips it. Clamping instead pins it to the front of the depth range, where it covers the scene it
+should have been behind.
+
+**Skinning is on the GPU, and a rigid body is the one-bone case**, so `DrawMesh` always carries a
+bone palette and the shader runs a single path. The format gives each bone **its own copy** of a
+vertex's position and normal, already in that bone's space, rather than one position in a shared
+space, so a vertex carries a position per influence and the shader sums transformed points. That
+needs no bind pose, which is just as well because there is none to read. Measured over the three 3D
+scenes: a palette is at most **4** bones and a vertex uses at most **3** influences, so
+`kMaxBoneInfluences` of 4 has a slot of margin and the ledger prints `OVER THE CAP` if a scene ever
+exceeds it.
+
+Every draw packet in every sample scene decodes: **100% of triangles**, no rejects and no chain ref
+that looked like a mesh and would not read. The field scenes come to 66,460 and 970,920 triangles a
+run, the battle scene 193,933.
+
+## What still has to be modelled
+
+`TODO.md` holds the list and the score each item has to move. Read it before starting render work.
+
+## Measuring a render change
+
+`scripts/refdiff_all.sh` renders every scene at 512x448 and scores it against the emulated frame
+buffer with `refdiff.py` from pcsx2-hook. **1:1 is the point**: `SDF_SCALE=1` makes the two
+comparable, and anything larger is for looking at. Judging a render by eye is what let a
+transparent panel writing depth pass for a depth-formula bug through a dozen runs.
+
+Only `smt3_field_underground_facility` scores meaningfully today: the other five savestates start
+after the game loaded its textures, so `sdfTexSetEx` never fires and they render untextured.
+
+## Ground truth from VU1
+
+`PCSX2HOOK_VU_TRACE=1` with `PCSX2HOOK_DUMP_DIR` writes `vu1_programs.jsonl` and
+`vu1_images.jsonl`; pcsx2-hook's own `scripts/vu2c.py` reads the JSONL directly and `--check`
+re-derives every mnemonic against PCSX2's disassembler (0 mismatches over 1884 instructions here).
+**The image is the unit worth reading, not the programs**: SDF's MSCAL entries are dispatch stubs
+(`XITOP`, `IADDIU`, `JR`) and the bodies they reach never appear as a program of their own.
+
+What the image gave, at 0x0150-0x0194, which no struct in the game states:
+
+- **Lighting is three parallel directions, one colour each, plus a base term**, summed against the
+  vertex normal, each term clamped at zero, and the whole **clamped to 255 per vertex** before the
+  rasterizer interpolates it. Clamping per fragment instead washes out a gradient's dark side.
+- The per-draw colour multiplies the light colours *before* the sum and the clamp.
+- The vertex-colour variant scales that draw colour by **1/128** first, which is the same 128-is-one
+  convention the GS modulate uses.
+
+Neither the light nor the fog packet matches the HD build's struct, because both open with a
+16-byte DMA and VIF header the struct does not have. Measured offsets: light directions at +16 as a
+matrix whose **columns** are the light vectors, the base at +64, the three colours at +80; fog
+parameters at +16 and a GIF A+D write of GS FOGCOL at +48.
+
+## Ground truth from the GS trace
+
+`PCSX2HOOK_GS_TRACE=<file>` records every batch with its resolved registers, which is the fastest
+way to learn what state a draw actually ran under. One field frame, 164 triangle batches: ALPHA
+0x44 x158 and 0x48 x6; ABE, IIP and TCC set on all; TFX MODULATE on all; **ZMSK 0 on all**, so
+hardware writes depth for every 3D batch and suppresses it through AFAIL=FB_ONLY rather than a
+depth mask; FGE on 148; TEX1 linear with no mipmaps on 159; CLAMP REPEAT on 163.
+
+**ALPHA and TEST come from the ordering table, not the draw** — but AREF does not fit that story.
+`scripts/gsdiff.py` puts the hardware's AREF at 128 on most batches and 96 on some, against the 127
+that table 0/1's `0x717FB` decodes to, and it is wrong on 1101 of 1546 matched batches. Treat the
+sentence below as measured for ALPHA and unsettled for AREF.
+
+ `sdfModelSetDrawEnv` builds one pair
+per table and `sdfPrimSetOpaqueElem` and its three siblings hold the values, so a packet's own
+`otIndex` picks them: tables 0 and 1 get ALPHA 0x44 with TEST 0x717FB (ATST GEQUAL 127, AFAIL
+FB_ONLY), table 2 gets 0x48 with 0x71801 (ATST NEVER), table 3 gets 0x42 with the same. They match
+the GS trace exactly. **AFAIL is the depth mechanism**: FB_ONLY means a failing fragment still
+writes colour and only its depth is suppressed, which is two draws in GL, the passing half writing
+depth and the failing half not. Getting this right, rather than guessing at opaque and blended, took
+the field scene from 32.43 to 15.46 mean abs and its signed mean from -24.59 to -0.90; the
+brightness was never a lighting or a fog problem.
+
+**Fog is an offset plus a reciprocal**, `F = minimum + scale / w`, not a clamped reciprocal. The GS
+trace settles it: the per-batch fog values are 255 on 128 of the 148 fogged batches and 118-190 on
+the rest, which only the offset form fits. It was worth 0.54 once the blend was right and cost 1.3
+while the blend was wrong, which is the argument for never A/B testing against a broken baseline.
+
+**Back-face culling is a signed area against a per-draw sign.** `corePktBuildFaceList` takes the
+cross product of the triangle's three transformed screen positions and keeps it when that times
+`cb->backfaceSign` is `>= 0`; `sdfCorePacketGen` sets that sign from `root->flags & 0x08`, the same
+flag that suppresses its linked packets. GL's own `glCullFace` reproduces it. **It appeared to cost
+26 points for half a dozen measurements because it leaked into the sprite pass** and deleted half of
+every 2D quad; `glDisable(GL_CULL_FACE)` at the end of the mesh pass is what makes it free. Without
+it the character's face shows through the back of his head.
+
+**A mesh carries less GS state than it looks like it should.** `corePktEmitTexTris` writes exactly
+three A+D registers per batch, TEX1, TEX0 and CLAMP, all out of the material packet, and takes PRIM
+from `corePktPrimBase`, which is `attrBits & 0x78`. ALPHA and TEST come from neither the material
+nor the mesh: the game links them as their own A+D packets into the draw tag chain, so reading them
+means tracking a running GS state across the links rather than looking them up per draw.
+
+**The light packet stores the direction light travels**, not the surface-to-light vector, so the
+diffuse dot is taken against its negation. Worth 2.5 points, and the tell was the ceiling coming
+out too bright while the walls came out too dark.
+
+**A batch search by bounding box is not a search for a draw.** Looking for the additive light grid
+as 64x32 batches found nothing across 17,839 batches and 138 frames, which read as proof the engine
+never drew it. It is one merged `prim 5` batch of 336 verts with a full-screen box.
+
+**`aDrawBoxF_Direct` is a line, not a box.** It builds a GS LINE prim (`sdf2DMakePrimPacketHeader`
+with PRIM `0x41`) out of four vertices, so the hardware draws the top and bottom edges as two
+segments. Filling it painted a solid rectangle over whatever it framed. A producer's name is not
+enough to know what it draws: read the PRIM it builds.
+
+**The reflection pass is a specular highlight, not a lookup.** Decoding
+`corePktEmitRefMapPass`'s VU0 ops shows one scalar per vertex, the normal dotted against an axis
+built from the world light matrix and the light packet's last row, tinted by `specularColor`.
+
+## What the 2D pass still gets wrong
+
+Every sprite and most meshes go into ordering table 0, and the table sorts by z, so 2D belongs
+*among* the meshes rather than after them. Our sprites carry no z, so a character's shadow quads
+draw on top of him. The z does exist: `fldDrawFrameSprite` writes `0x3FFF` into the sprite's XYZ
+through `sdf2DGetPrimPtr`, so it is readable from the packet a producer links. Submission order is
+not a substitute for it and costs 25 points, because the additive full-screen light tiles are
+submitted early and belong last.
+
+**Only draw a frame the game produced.** The render thread used to redraw whatever it held whenever
+nothing new had been published, which runs the frame feedback again over a frame that never
+existed and compounds the tap.
+
+## Code conventions
+
+These are not style preferences, they are how a fact stays findable a month later.
+
+**Read a producer's arguments against the decompilation, not its parameter names.**
+`sdfPrimLinkFt4`'s argument 2 and `sdfPrimLinkG4`'s argument 1 are `aPrim`, a GS PRIM word, and
+both were being fed to the blend translator as if they were an ALPHA register. It reported
+`ALPHA 0x14C` unsupported and picked a blend at random for every draw those produce.
+
+**Guest memory is reached through `guest_ptr<T>`, never a threaded accessor.** `installGuestRam`
+puts the emulator's RAM base in thread-local storage once, on the CPU thread the hooks and the frame
+callback share, and `guest_ptr<T>` maps its address per access: `->` and `*` to read, `slice(n)` for
+a run, `valueOr()` for a copy of its own. The render thread never installs it, so a pointer that
+reaches it reads as unmapped rather than as a race. `guest_ref<T>` is the same thing already checked,
+for a callee that should not check again.
+
+An accessor object threaded as a parameter spreads without limit: it reached forty-odd signatures
+across five files before this, and none of them wanted it for anything but a base pointer.
+
+**Hold the `guest_ptr`, not a host pointer.** `->`, `*` and the bool conversion are the whole
+interface; there is no `get()`, so nothing can keep a raw pointer past the hook that read it and
+every access re-derives the mapping. `slice(n)` is the exception, for a run whose bounds are checked
+once and then indexed.
+
+**A primitive pointer is a sign the struct is missing.** `f32x4Ptr_t` into a light packet meant the
+packet's own struct was wrong and nobody had noticed; `f32Ptr_t` for a node's bounds meant there was
+no bounds type. Reach for `u8Ptr_t`/`u32Ptr_t` only where the engine really does keep the data
+untyped: a raw quadword span, packed pixels, a stack argument. Everything else gets a struct.
+
+**A guest pointer is named by an alias, not by the template.** `TMX_HEADER_PTR_t`, not
+`guest_ptr<TMX_HEADER_t>`; the alias sits beside the struct it points at and takes that struct's own
+casing, so `sdfMatPtr_t` but `frGsTex_PTR_t`. Plain data has them too (`u32Ptr_t`, `f32x3Ptr_t` for
+a run of vec3s), in `guest_ptr.h`.
+
+**A guest address is a typed pointer, not a `u32`.** A parameter is `sdfModelRootNodePtr_t`, not
+`u32 rootAddr`, so the type says what is there and the callee cannot read the wrong struct off it.
+`u32` is right only where there is no struct to name: a DMA chain, a packed index list, raw pixels.
+**Watch `sizeof` when a local changes from a value to a pointer**: `addr + sizeof(header)` silently
+became 8 instead of 16 and cost the whole world-geometry pass, with every other counter still green.
+
+**Log through a channel, never `printf` and never a hand-written tag.** `src/log.h` gives each
+translation unit a `LogChannel log("model")`; the channel prints its own name and level, and
+`SDF_LOG` sets levels globally (`SDF_LOG=trace`) or per channel (`SDF_LOG=model=trace,render=warn`).
+A literal `"[model] "` in a format string is invisible to that filter and drifts from the file it
+sits in. `std::format` also type-checks, where one inserted `%llu` shifts every later field in a
+summary that carries dozens of counters.
+
+**The run summary is a row of the run's own trace, not only terminal text.** Every counter goes
+into one `{"ev":"summary"}` object at the end of the JSONL, zeros included, so two runs are diffed
+rather than eyeballed and `traversal.agrees` replaces grepping for `MISMATCH`. The text stays: it is
+what a person reads first, and a mismatch has to be visible without `jq`. One pass writes both.
+
+**A trace observes; it never decides.** `ModelTrace::Geom` is a reporting bucket, so it is private to
+the trace and the parser dispatches on the engine's own `sdfCorePacketType_t`. A switch on a
+reporting enum makes the report load-bearing: renaming a bucket then changes what gets drawn.
+
+**Dumps are JSONL, through `src/json.h`.** One object per line, each field named beside its value.
+An invented column format needs a parser written twice, once here and once in whatever reads it, and
+the second one is always slightly wrong.
+
+**Depend on pcsx2-hook's public header only.** `pcsx2hook/pcsx2hook.h` is the whole supported
+surface and says so; everything under `pcsx2-hook/src` is internal and will move. `JsonObject`
+started as an include of theirs and is now our own copy, with no rapidjson behind it.
+
+**No stray `std::getenv`.** Everything the environment can change is a field of `Config`
+(`src/config.h`), read once by `Config::fromEnvironment()` and threaded to whoever needs it. A
+`static const bool x = std::getenv(...)` inside a draw call is invisible to anyone reading the
+code, cannot be reported alongside the run's other settings, and lets the first call decide for
+every later one.
+
+**Blank line around anything with a documentation comment.** A wall of commented declarations with
+no separation is unreadable regardless of how good each comment is.
+
+## Source attribution
+
+This code reimplements a specific binary, so a reader has to be able to check any line of it against
+the disassembly without first working out which function it came from.
+
+- **Use the engine's own name.** A reimplementation of `sdfModelLinkOt` is named for it, or plainly
+  derived from it. Do not invent a name for a function that already has one in the map.
+- **A Doxygen comment on the declaration names the source**: `@fn` for the engine function, `@note`
+  for the disc serial and the address. The serial matters because the addresses are per build. Use
+  these two commands and not invented ones like `@address`, since an editor only colours the tags
+  Doxygen actually defines:
+
+  ```cpp
+  /// Walks the node list the engine walks, so what it files into an ordering table we turn into
+  /// meshes instead.
+  /// @fn sdfModelLinkOt
+  /// @note SLUS-20911 0x002B1DB8
+  ```
+- **Key inline logic carries the hex offset it came from**, so a reader can put the two side by
+  side: `// 0x002B1E44: flags & 0x11 hides the node`. Use it where the constant or the branch is
+  the part that would be hard to re-derive, not on every line.
 
 ## Run and debug reference
 
@@ -356,6 +748,17 @@ See `README.md` for the environment variables. Additionally:
 
 - `SDF_DUMP_PACKETS=<caller substring>` hexdumps packets from a matching linker that yielded no
   geometry, following REF tags to their data. This is how the A+D geometry case was found.
+- `SDF_DUMP_MESH=<count>` prints that many mesh bodies as words and floats at once, narrowed by
+  `SDF_DUMP_MESH_TYPE` and lengthened by `SDF_DUMP_MESH_WORDS`. Reading a stream side by side as
+  both is what settles a layout; guessing a stride produces numbers that look almost right.
+- `SDF_DUMP_CALL=<count>` does the same for DMA call chains, following each REF tag to the data it
+  names, with `SDF_DUMP_CALL_WORDS` for the length.
+- `SDF_MESH_ONLY=<n>`, `SDF_MESH_UPTO=<n>` and `SDF_OT_MAX=<n>` narrow the mesh pass to one mesh, a
+  prefix, or the ordering tables at or below `n`. Bisecting a bad frame costs an emulator run per
+  step, which is why these are run-time rather than a rebuild.
+- `SDF_NO_SPRITES`, `SDF_NO_FOG`, `SDF_NO_SPECULAR`, `SDF_NO_FEEDBACK` and `SDF_NO_DIRECT_BOX` each
+  take one pass out, which is how a contribution gets attributed rather than guessed at.
+- Every setting is a field of `Config` (`src/config.h`) and is listed there, read once at startup.
 - The IDB for SLUS-20911 is open over MCP; `assets/SLUS_209.11.map` is exported from it and is what
   the hooks resolve names against. Record findings back into the IDB, since it outlives a session.
 - States in `states/` are curated per scene and named for it; `scripts/dump_scenes.sh` runs them all

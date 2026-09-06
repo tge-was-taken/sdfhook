@@ -1,15 +1,20 @@
 {
     "version": 3,
-    "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 21,
+        "patch": 0
+    },
     "configurePresets": [
         {
             "name": "default",
             "displayName": "sdfhook (Ninja)",
-            "description": "What the command line uses, so an editor and a terminal share one build tree.",
+            "description": "What the command line uses, so an editor and a terminal share one build tree. CMAKE_PREFIX_PATH names the prefix the vendored emulator's own dependencies were built into; without it a clean configure cannot find plutovg.",
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/build",
             "cacheVariables": {
-                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "CMAKE_PREFIX_PATH": "/home/wsl/projects/p3fes-pc-poc/vendor/deps-prefix"
             }
         }
     ],
@@ -18,7 +23,9 @@
             "name": "sdfhook",
             "displayName": "sdfhook",
             "configurePreset": "default",
-            "targets": [ "sdfhook" ]
+            "targets": [
+                "sdfhook"
+            ]
         },
         {
             "name": "all",

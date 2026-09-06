@@ -1,22 +1,35 @@
 #include <algorithm>
-#include <cstdio>
-#include <utility>
-#include <vector>
+#include <cstdint>
 #include <filesystem>
-#include <cstdlib>
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
+#include "config.h"
+#include "guest_ptr.h"
 #include "hooks.h"
-#include "render/render_thread.h"
+#include "log.h"
 #include "pcsx2hook/pcsx2hook.h"
+#include "render/render_thread.h"
 #include "trace.h"
+#include "json.h"
 #include "unsupported.h"
 
 namespace {
 
+
+using sdfhook::JsonObject;
+
+sdfhook::LogChannel log("run");
+sdfhook::LogChannel texLog("tex");
+sdfhook::LogChannel todoLog("todo");
+sdfhook::LogChannel gsLog("gs");
+
+
 struct App {
     pcsx2hook_ctx* runtime = nullptr;
+    sdfhook::Config config;
     std::unique_ptr<sdfhook::RenderThread> renderer;
     std::unique_ptr<sdfhook::Trace> trace;
     sdfhook::HookContext hooks;
@@ -24,157 +37,236 @@ struct App {
 
 App g_app;
 
-const char* env(const char* name, const char* fallback) {
-    const char* value = std::getenv(name);
-    return value && *value ? value : fallback;
-}
-
 // The state a run came from, kept beside its trace: a dump nobody can reproduce is worth little a
 // week later, and the state is the only part that cannot be recovered from the rest.
-void copyStateBesideTrace(const std::string& tracePath) {
-    const char* state = std::getenv("PCSX2HOOK_STATE");
-    if (!state) return;
+void copyStateBesideTrace(const sdfhook::Config& config) {
+    if (config.statePath.empty()) return;
     std::error_code ec;
     const std::filesystem::path beside =
-        std::filesystem::path(tracePath).parent_path() / "state.p2s";
-    std::filesystem::copy_file(state, beside, std::filesystem::copy_options::overwrite_existing, ec);
-    if (ec) std::fprintf(stderr, "[sdf] could not keep the state beside the trace: %s\n",
-                         ec.message().c_str());
+        std::filesystem::path(config.tracePath).parent_path() / "state.p2s";
+    std::filesystem::copy_file(config.statePath, beside,
+                               std::filesystem::copy_options::overwrite_existing, ec);
+    if (ec) log.info("could not keep the state beside the trace: {}", ec.message());
 }
 
 // Hooked here because the symbol map is only readable once the VM knows its disc.
 void onVmReady(void* user) {
     App& app = *static_cast<App*>(user);
-    const std::string tracePath = env("SDF_TRACE", "dumps/trace.jsonl");
-    app.trace = std::make_unique<sdfhook::Trace>(app.runtime, tracePath);
-    copyStateBesideTrace(tracePath);
+    app.trace = std::make_unique<sdfhook::Trace>(app.runtime, app.config.tracePath);
+    copyStateBesideTrace(app.config);
+    // Hooks and this callback share the emulator's CPU thread, so one install covers both.
+    uint32_t ramSize = 0;
+    void* const ram = pcsx2hook_get_ram_base(app.runtime, &ramSize);
+    sdfhook::installGuestRam(ram, ramSize);
+
     app.hooks.runtime = app.runtime;
-    app.hooks.dumpCaller = std::getenv("SDF_DUMP_PACKETS");
-    if (const char* dir = std::getenv("SDF_DUMP_TEXTURES")) app.hooks.textures.dumpTo(dir);
+    app.hooks.config = &app.config;
+    if (!app.config.dumpTextures.empty()) app.hooks.textures.dumpTo(app.config.dumpTextures);
     sdfhook::installHooks(app.hooks, *app.trace, app.renderer.get());
-    if (std::getenv("PCSX2HOOK_GS_TRACE")) pcsx2hook_set_gs_recording(app.runtime, 1);
+    if (app.config.gsTrace) pcsx2hook_set_gs_recording(app.runtime, 1);
 }
 
 void onFrame(uint32_t frame, void* user) {
     App& app = *static_cast<App*>(user);
     if (app.trace) app.trace->onFrame(frame);
-    if (const char* at = std::getenv("SDF_SHOT_FRAME");
-        at && frame == std::strtoul(at, nullptr, 10)) {
-        pcsx2hook_write_framebuffer(app.runtime, env("SDF_SHOT", "dumps/shot.ppm"));
-        if (app.renderer) app.renderer->requestShot(env("SDF_NATIVE_SHOT", "dumps/native.ppm"));
+    app.hooks.textures.recoverQueued();
+    if (app.config.shotFrame && frame == app.config.shotFrame) {
+        pcsx2hook_write_framebuffer(app.runtime, app.config.shotPath.c_str());
+        if (app.renderer) app.renderer->requestShot(app.config.nativeShotPath);
     }
+}
+
+/// The same totals as one JSON row at the end of the run's own trace. The text below is what a
+/// person reads; this is what two runs are diffed on, which is otherwise a grep for "MISMATCH".
+void writeRunSummary(const sdfhook::HookContext& hooks) {
+    if (!hooks.trace) return;
+
+    JsonObject row;
+    row.addString("ev", "summary")
+        .addUint("framesSubmitted", hooks.frames.getSubmittedFrames())
+        .addUint("framesDiscarded", hooks.frames.getDiscardedFrames())
+        .addUint("apiDraws", hooks.coverage.apiDraws)
+        .addUint("unsupported", sdfhook::getUnsupportedCount());
+
+    row.beginObject("gif");
+    static const char* const kPrimNames[] = {"point",    "line",   "lineStrip", "tri",
+                                             "triStrip", "triFan", "sprite",    "unknown"};
+    for (int i = 0; i < 8; i++) {
+        row.beginObject(kPrimNames[i])
+            .addUint("batches", hooks.coverage.gif.prims[i])
+            .addUint("verts", hooks.coverage.gif.verts[i])
+            .endObject();
+    }
+    row.addUint("notGifLists", hooks.coverage.gif.unparsed)
+        .addUint("untexturedDraws", hooks.coverage.gif.untexturedDraws);
+    row.beginArray("texDraws");
+    for (int i = 0; i < 64; i++) {
+        if (!hooks.coverage.gif.texDraws[i]) continue;
+        row.beginObject().addHexDigits("psm", u32(i), 2)
+            .addUint("draws", hooks.coverage.gif.texDraws[i]).endObject();
+    }
+    row.endArray().endObject();
+
+    row.beginObject("textures")
+        .addUint("decoded", hooks.textures.getDecoded())
+        .addUint("failed", hooks.textures.getFailed())
+        .addUint("recoveredFromGs", hooks.textures.getRecovered())
+        .addUint("recoveryAttempts", hooks.textures.getRecoveryAttempts())
+        .addUint("stillQueued", hooks.textures.getQueued())
+        .addUint("glyphUploads", hooks.textures.getGlyphUploads())
+        .addBool("fontClut", hooks.textures.hasFontClut());
+    row.beginArray("unresolvedByProducer");
+    for (const auto& [producer, count] : hooks.coverage.unresolvedTextures) {
+        row.beginObject().addString("producer", producer.c_str()).addUint("draws", count).endObject();
+    }
+    row.endArray().endObject();
+
+    // Ranked, because the largest gap is the next producer worth hooking and intuition gets it wrong.
+    std::vector<std::pair<std::string, uint64_t>> left(hooks.coverage.unhandledVerts.begin(),
+                                                       hooks.coverage.unhandledVerts.end());
+    std::sort(left.begin(), left.end(),
+              [](const auto& a, const auto& b) { return a.second > b.second; });
+    row.beginArray("todo");
+    for (const auto& [producer, verts] : left) {
+        row.beginObject().addString("producer", producer.c_str()).addUint("verts", verts).endObject();
+    }
+    row.endArray();
+
+    hooks.model.getTrace().addTo(row);
+    hooks.trace->onRunSummary(row.take());
+}
+
+/// What the run covered, printed once at shutdown. Every count here is a claim the next run has to
+/// keep matching, so they are reported together rather than scattered through the frame.
+void reportRun(const sdfhook::HookContext& hooks) {
+    log.info("{} frames submitted, {} discarded by dds3DrawFlag",
+        hooks.frames.getSubmittedFrames(), hooks.frames.getDiscardedFrames());
+
+    static const char* const kPrimNames[] = {"point",    "line",   "lineStrip", "tri",
+                                             "triStrip", "triFan", "sprite",    "?"};
+    std::string decoded = "decoded";
+    for (int i = 0; i < 8; i++) {
+        if (!hooks.coverage.gif.prims[i]) continue;
+        decoded += std::format(" {} {} ({} verts)", hooks.coverage.gif.prims[i], kPrimNames[i],
+                               hooks.coverage.gif.verts[i]);
+    }
+    if (hooks.coverage.gif.unparsed) {
+        decoded += std::format(", {} packets not GIF lists", hooks.coverage.gif.unparsed);
+    }
+    log.info("{}", decoded);
+
+    hooks.model.getTrace().report();
+
+    texLog.info("{} recovered from GS memory, {} attempts, {} still queued",
+                hooks.textures.getRecovered(), hooks.textures.getRecoveryAttempts(),
+                hooks.textures.getQueued());
+    for (const auto& [producer, count] : hooks.coverage.unresolvedTextures) {
+        texLog.info("{:<24} named a texture we never decoded, {} times", producer, count);
+    }
+
+    // The texture module's internals should only ever be reached from inside it, or from the call
+    // the hooks capture. Any other caller is a registration path these hooks never saw.
+    static const char* const kTexInternals[] = {
+        "sdfTexSetEx",    "sdfTexTrans", "sdfTexClutToGs",     "sdfTexAllocClut",
+        "sdfTexCopyClut", "sdfTexDup",   "sdfTexSetClutColor", "sdfTexMakeGIFPacket"};
+
+    std::vector<std::pair<std::string, uint64_t>> left(hooks.coverage.unhandledVerts.begin(),
+                                                       hooks.coverage.unhandledVerts.end());
+    std::sort(left.begin(), left.end(),
+              [](const auto& a, const auto& b) { return a.second > b.second; });
+    sdfhook::printUnsupported();
+    for (const auto& [producer, verts] : left) {
+        todoLog.info("{:<34} {} verts not drawn natively", producer, verts);
+    }
+
+    for (const auto& [callee, seen] : hooks.coverage.graph.getReturns()) {
+        texLog.info("{} returned {} times, {} distinct", callee, seen.count, seen.distinct.size());
+    }
+    for (const auto& [edge, count] : hooks.coverage.graph.getEdges()) {
+        const std::string caller = edge.substr(edge.find("<- ") + 3);
+        bool known = false;
+        for (const char* prefix : kTexInternals) known |= caller.rfind(prefix, 0) == 0;
+        texLog.info("{} x{}{}", edge, count, known ? "" : "   <- UNHOOKED PATH");
+    }
+
+    log.info("{} draws from the engine API, {} textures decoded, {} failed",
+        hooks.coverage.apiDraws, hooks.textures.getDecoded(), hooks.textures.getFailed());
+    log.info("{} glyph uploads, font clut {}", hooks.textures.getGlyphUploads(),
+        hooks.textures.hasFontClut() ? "loaded" : "never seen");
+
+    std::string gs = std::format("{} untextured draws", hooks.coverage.gif.untexturedDraws);
+    for (int i = 0; i < 64; i++) {
+        if (hooks.coverage.gif.texDraws[i]) {
+            gs += std::format(", psm 0x{:02X} x{}", i, hooks.coverage.gif.texDraws[i]);
+        }
+    }
+    gsLog.info("{}", gs);
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
+    g_app.config = sdfhook::Config::fromEnvironment();
+    const sdfhook::Config& cfg = g_app.config;
+    sdfhook::configureLogging(cfg.logSpec);
+
     pcsx2hook_config config{};
-    config.bios = env("SDF_BIOS", "assets/bios.bin");
-    config.symbols = std::getenv("SDF_SYMBOLS");
+    config.bios = cfg.bios.c_str();
+    config.symbols = cfg.symbols.empty() ? nullptr : cfg.symbols.c_str();
     config.surfaceless = 1;
     config.software_gs = 1;
     config.on_vm_ready = &onVmReady;
     config.on_frame = &onFrame;
     config.user = &g_app;
 
-    // Opened before the VM so the render thread owns its context from the start. Without SDF_WINDOW
-    // the run stays headless and the hooks only trace.
-    if (std::getenv("SDF_WINDOW")) {
+    // Opened before the VM so the render thread owns its context from the start. Without a shot to
+    // write or a window to show there is nothing to render for, and the hooks only trace.
+    if (cfg.window || !cfg.nativeShotPath.empty()) {
         g_app.renderer = std::make_unique<sdfhook::RenderThread>();
-        if (!g_app.renderer->open(1024, 896)) {
-            std::fprintf(stderr, "sdfhook: no window; tracing only\n");
+        if (!g_app.renderer->open(cfg, 512 * cfg.scale, 448 * cfg.scale)) {
+            log.warn("no window; tracing only");
             g_app.renderer.reset();
         }
     }
 
     g_app.runtime = pcsx2hook_create(&config);
     if (!g_app.runtime) {
-        std::fprintf(stderr, "sdfhook: cannot create the runtime\n");
+        log.error("cannot create the runtime");
         return 1;
     }
 
     // Every GS primitive batch the rasterizer resolves, which is what a draw has to be attributed
     // to. PCSX2HOOK_GS_TRACE names the file the runner writes them to.
-    if (std::getenv("PCSX2HOOK_GS_TRACE")) {
-        pcsx2hook_enable_trace(g_app.runtime, PCSX2HOOK_TRACE_GS);
-    }
+    if (cfg.gsTrace) pcsx2hook_enable_trace(g_app.runtime, PCSX2HOOK_TRACE_GS);
+
+    // The VU1 microprograms are ground truth for what the hardware does to a vertex: the lighting,
+    // the colour scale and the fog term are all in there rather than in any struct we can read.
+    if (cfg.vuTrace) pcsx2hook_enable_trace(g_app.runtime, PCSX2HOOK_TRACE_VU);
 
     // The runner's own cap, so a capped run still reaches the writes it does at shutdown.
-    if (const char* frames = std::getenv("SDF_FRAMES")) {
-        pcsx2hook_set_config(g_app.runtime, "PCSX2HOOK_FRAMES", frames);
+    if (!cfg.frames.empty()) {
+        pcsx2hook_set_config(g_app.runtime, "PCSX2HOOK_FRAMES", cfg.frames.c_str());
     }
 
     pcsx2hook_early_init(g_app.runtime);
     if (!pcsx2hook_init(g_app.runtime, argc, argv)) {
-        std::fprintf(stderr, "sdfhook: %s\n", pcsx2hook_get_last_error(g_app.runtime));
+        log.error("{}", pcsx2hook_get_last_error(g_app.runtime));
         pcsx2hook_destroy(g_app.runtime);
         return 1;
     }
     pcsx2hook_apply_settings(g_app.runtime);
 
     if (!pcsx2hook_start(g_app.runtime)) {
-        std::fprintf(stderr, "sdfhook: %s\n", pcsx2hook_get_last_error(g_app.runtime));
+        log.error("{}", pcsx2hook_get_last_error(g_app.runtime));
         pcsx2hook_destroy(g_app.runtime);
         return 1;
     }
     pcsx2hook_pump_window(g_app.runtime, 1);
 
     const int code = pcsx2hook_join(g_app.runtime);
-    const sdfhook::HookContext& hooks = g_app.hooks;
-    std::fprintf(stderr, "[sdf] %llu frames submitted, %llu discarded by dds3DrawFlag\n",
-                 (unsigned long long)hooks.frames.getSubmittedFrames(), (unsigned long long)hooks.frames.getDiscardedFrames());
-    static const char* const kPrimNames[] = {"point",    "line",   "lineStrip", "tri",
-                                             "triStrip", "triFan", "sprite",    "?"};
-    std::fprintf(stderr, "[sdf] decoded");
-    for (int i = 0; i < 8; i++) {
-        if (!hooks.coverage.gif.prims[i]) continue;
-        std::fprintf(stderr, " %llu %s (%llu verts)", (unsigned long long)hooks.coverage.gif.prims[i],
-                     kPrimNames[i], (unsigned long long)hooks.coverage.gif.verts[i]);
-    }
-    if (hooks.coverage.gif.unparsed) {
-        std::fprintf(stderr, ", %llu packets not GIF lists",
-                     (unsigned long long)hooks.coverage.gif.unparsed);
-    }
-    std::fputc('\n', stderr);
+    reportRun(g_app.hooks);
+    writeRunSummary(g_app.hooks);
 
-    // The texture module's internals should only ever be reached from inside it, or from the call
-    // the hooks capture. Any other caller is a registration path these hooks never saw.
-    static const char* const kTexInternals[] = {
-        "sdfTexSetEx",  "sdfTexTrans",        "sdfTexClutToGs",     "sdfTexAllocClut",
-        "sdfTexCopyClut", "sdfTexDup",        "sdfTexSetClutColor", "sdfTexMakeGIFPacket"};
-    std::vector<std::pair<std::string, uint64_t>> left(hooks.coverage.unhandledVerts.begin(),
-                                                      hooks.coverage.unhandledVerts.end());
-    std::sort(left.begin(), left.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
-    sdfhook::printUnsupported();
-    for (const auto& [producer, verts] : left) {
-        std::fprintf(stderr, "[todo] %-34s %llu verts not drawn natively\n", producer.c_str(),
-                     (unsigned long long)verts);
-    }
-    for (const auto& [callee, seen] : hooks.coverage.graph.getReturns()) {
-        std::fprintf(stderr, "[tex] %s returned %llu times, %zu distinct\n", callee.c_str(),
-                     (unsigned long long)seen.count, seen.distinct.size());
-    }
-    for (const auto& [edge, count] : hooks.coverage.graph.getEdges()) {
-        const std::string caller = edge.substr(edge.find("<- ") + 3);
-        bool known = false;
-        for (const char* prefix : kTexInternals) known |= caller.rfind(prefix, 0) == 0;
-        std::fprintf(stderr, "[tex] %s x%llu%s\n", edge.c_str(), (unsigned long long)count,
-                     known ? "" : "   <- UNHOOKED PATH");
-    }
-    std::fprintf(stderr, "[sdf] %llu draws from the engine API, %llu textures decoded, %llu failed\n",
-                 (unsigned long long)hooks.coverage.apiDraws, (unsigned long long)hooks.textures.getDecoded(),
-                 (unsigned long long)hooks.textures.getFailed());
-    std::fprintf(stderr, "[sdf] %llu glyph uploads, font clut %s\n",
-                 (unsigned long long)hooks.textures.getGlyphUploads(),
-                 hooks.textures.hasFontClut() ? "loaded" : "never seen");
-    std::fprintf(stderr, "[gs] %llu untextured draws", (unsigned long long)hooks.coverage.gif.untexturedDraws);
-    for (int i = 0; i < 64; i++) {
-        if (hooks.coverage.gif.texDraws[i]) {
-            std::fprintf(stderr, ", psm 0x%02X x%llu", i,
-                         (unsigned long long)hooks.coverage.gif.texDraws[i]);
-        }
-    }
-    std::fputc('\n', stderr);
     // Before the emulator tears down: the render thread holds frames the guest thread wrote, and
     // SDL's own signal handlers sit on top of the ones PCSX2's virtual memory needs.
     if (g_app.renderer) g_app.renderer->close();

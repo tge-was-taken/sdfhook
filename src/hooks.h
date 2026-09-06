@@ -7,7 +7,10 @@
 #include <vector>
 
 #include "pcsx2hook/pcsx2hook.h"
+#include "config.h"
+#include "render_state.h"
 #include "gif.h"
+#include "model.h"
 #include "texture.h"
 #include "render/frame.h"
 #include "types.h"
@@ -21,6 +24,11 @@ class RenderThread;
 struct LinkedPacket {
     u32 addr;
     u32 caller;
+
+    /// sdfDrawTagLinkRef links a node's transform and state packet, sdfDrawTagLink the geometry
+    /// sdfCorePacketGen built. Both come from sdfModelLinkOt, so only this tells them apart, and
+    /// the geometry ones arrive in the traversal order our own walk produced meshes in.
+    bool isRef = false;
 };
 
 // o32: the first four arguments are in registers, the rest on the stack.
@@ -120,7 +128,11 @@ private:
 /// The frame under construction and how it reaches the renderer.
 class FrameBuilder {
 public:
-    void attach(RenderThread* renderer) { mRenderer = renderer; }
+    void attach(RenderThread* renderer, TextureCache* textures, Trace* trace) {
+        mRenderer = renderer;
+        mTextures = textures;
+        mTrace = trace;
+    }
 
     Frame* getFrame();
     void link(const LinkedPacket& packet) { mPending.push_back(packet); }
@@ -135,6 +147,8 @@ public:
 
 private:
     RenderThread* mRenderer = nullptr;
+    TextureCache* mTextures = nullptr;
+    Trace* mTrace = nullptr;
     Frame* mBuilding = nullptr;
     std::vector<LinkedPacket> mPending;
     bool mSubmitted = false;
@@ -149,30 +163,24 @@ struct Coverage {
     u64 apiDraws = 0;
     // Vertices the GS will draw from a render function nothing here submits natively, by producer.
     std::map<std::string, u64> unhandledVerts;
+
+    /// Producers that named a texture the cache had nothing for.
+    std::map<std::string, u64> unresolvedTextures;
 };
 
-/// The GS state the rset* calls put in force, which a draw is submitted under.
-struct RenderState {
-    GsAlpha alpha = GsAlpha::Blend;  // what rsetAlpha defaults to
-    u32 test = 0;
-    /// Bound by sdf2DLinkTexPacket ahead of the draw that uses it, which is how a producer that
-    /// takes no texture argument still names one.
-    u32 texture = 0;
-    /// What dds3InitDrawEnvSub puts in the standard draw env, so the frame clears to it.
-    Rgba background{0, 0, 0, 0};
-};
 
 // Owned by main.
 struct HookContext {
     pcsx2hook_ctx* runtime = nullptr;
+    const Config* config = nullptr;
     Trace* trace = nullptr;
     SymbolCache symbols;
     FrameBuilder frames;
     TextureCache textures;
     CallStack calls;
+    ModelParser model;
     RenderState state;
     Coverage coverage;
-    const char* dumpCaller = nullptr;
 };
 // o32: the first four arguments are in registers, the rest on the stack.
 

@@ -1,6 +1,6 @@
 #include "unsupported.h"
+#include "log.h"
 
-#include <cstdio>
 #include <map>
 #include <mutex>
 #include <set>
@@ -8,6 +8,8 @@
 
 namespace sdfhook {
 namespace {
+
+LogChannel log("unsupported");
 
 std::mutex g_mutex;
 std::map<std::string, std::map<u64, u64>> g_seen;
@@ -20,7 +22,7 @@ void reportUnsupported(const char* what, u64 value) {
     g_total++;
     u64& count = g_seen[what][value];
     if (count++) return;
-    std::fprintf(stderr, "[unsupported] %s 0x%llX\n", what, (unsigned long long)value);
+    log.warn("{} 0x{:X}", what, value);
 }
 
 u64 getUnsupportedCount() {
@@ -32,8 +34,7 @@ void printUnsupported() {
     const std::lock_guard<std::mutex> lock(g_mutex);
     for (const auto& [what, values] : g_seen) {
         for (const auto& [value, count] : values) {
-            std::fprintf(stderr, "[unsupported] %s 0x%llX x%llu\n", what.c_str(),
-                         (unsigned long long)value, (unsigned long long)count);
+            log.warn("{} 0x{:X} x{}", what, value, count);
         }
     }
 }

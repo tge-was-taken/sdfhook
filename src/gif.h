@@ -3,7 +3,7 @@
 #include <memory>
 #include <vector>
 
-#include "guest.h"
+#include "guest_ptr.h"
 #include "libsdf.h"
 #include "types.h"
 
@@ -27,12 +27,12 @@ struct DmaTag {
 };
 
 /// Spans a whole frame rather than one packet, because GS state does.
-class GifWalk {
+class GifParser {
 public:
-    explicit GifWalk(GifCounts* counts);
-    ~GifWalk();
+    explicit GifParser(GifCounts* counts);
+    ~GifParser();
 
-    void packet(const Guest& guest, u32 packetAddr);
+    void parse(u32 packetAddr);
 
 private:
     class State;
@@ -40,6 +40,12 @@ private:
 };
 
 /// Exposed so a trace can say what shape a packet was when it yielded nothing.
-bool readDmaTag(const Guest& guest, u32 packetAddr, DmaTag& out);
+bool readDmaTag(u32 packetAddr, DmaTag& out);
+
+/// Applies a linked packet's A+D register writes to a running GS state.
+/// @todo Nothing calls this yet, which is why every mesh is still stamped from the
+///       sdfGsStateForOt table and AREF is wrong on two thirds of the batches. See TODO.md E1. ALPHA and TEST reach a 3D
+/// draw this way, so the state in force is whatever the packets linked before it left behind.
+void applyGsRegisterWrites(u32 packetAddr, sdfGsState_t& state);
 
 }  // namespace sdfhook

@@ -7,11 +7,7 @@
 namespace sdfhook {
 namespace {
 
-constexpr u32 kQwordBytes = 16;
 
-constexpr u32 kDmaRefe = 0;
-constexpr u32 kDmaRef = 3;
-constexpr u32 kDmaRefs = 4;
 
 // Collects vertices into runs, one per PRIM and texture. A run closes when either changes, since
 // together they are what a single draw call can carry.
@@ -19,8 +15,6 @@ class GeometryWalk {
 public:
     explicit GeometryWalk(GifCounts* counts) : mCounts(counts) {}
     ~GeometryWalk() { close(); }
-
-    void finish() { close(); }
 
     void setPrim(u32 prim) {
         if (mHavePrim && prim == mPrim) return;
@@ -152,8 +146,8 @@ u32 payloadQwords(u32 flg, u32 nloop, u32 nreg) {
 
 }  // namespace
 
-bool readDmaTag(const Guest& guest, u32 packetAddr, DmaTag& out) {
-    const u8* packet = static_cast<const u8*>(guest.map(packetAddr, kQwordBytes));
+bool readDmaTag(u32 packetAddr, DmaTag& out) {
+    const u8* packet = u8Ptr_t{packetAddr}.slice(sdfQwordBytes);
     if (!packet) return false;
     u64 tag = 0;
     std::memcpy(&tag, packet, sizeof(tag));
@@ -163,35 +157,35 @@ bool readDmaTag(const Guest& guest, u32 packetAddr, DmaTag& out) {
     return true;
 }
 
-class GifWalk::State {
+class GifParser::State {
 public:
     explicit State(GifCounts* counts) : walk(counts), counts(counts) {}
     GeometryWalk walk;
     GifCounts* counts;
 };
 
-GifWalk::GifWalk(GifCounts* counts) : mState(std::make_unique<State>(counts)) {}
+GifParser::GifParser(GifCounts* counts) : mState(std::make_unique<State>(counts)) {}
 
-GifWalk::~GifWalk() = default;
+GifParser::~GifParser() = default;
 
-void GifWalk::packet(const Guest& guest, u32 packetAddr) {
+void GifParser::parse(u32 packetAddr) {
     GeometryWalk& walk = mState->walk;
     GifCounts& counts = *mState->counts;
     DmaTag tag{};
-    if (!readDmaTag(guest, packetAddr, tag) || !tag.qwc) return;
+    if (!readDmaTag(packetAddr, tag) || !tag.qwc) return;
 
 
     // REF-family tags leave their quadwords at ADDR; the rest carry them straight after the tag.
-    const bool byRef = tag.id == kDmaRef || tag.id == kDmaRefs || tag.id == kDmaRefe;
-    const u32 dataAddr = byRef ? tag.addr : packetAddr + kQwordBytes;
-    const u8* data = static_cast<const u8*>(guest.map(dataAddr, tag.qwc * kQwordBytes));
+    const bool byRef = tag.id == sdfDmaTagRef || tag.id == sdfDmaTagRefs || tag.id == sdfDmaTagRefe;
+    const u32 dataAddr = byRef ? tag.addr : packetAddr + sdfQwordBytes;
+    const u8* data = u8Ptr_t{dataAddr}.slice(tag.qwc * sdfQwordBytes);
     if (!data) return;
 
     u32 left = tag.qwc;
     while (left) {
         sdfGifTagWords_t gif{};
         std::memcpy(&gif, data, sizeof(gif));
-        data += kQwordBytes;
+        data += sdfQwordBytes;
         left--;
 
         const u32 nloop = sdfGifNloop(gif);
@@ -207,7 +201,7 @@ void GifWalk::packet(const Guest& guest, u32 packetAddr) {
         if (flg == 0) {
             for (u32 i = 0; i < payload; i++) {
                 const u32 reg = sdfGifRegAt(gif.regs, i % nreg);
-                const u8* qword = data + i * kQwordBytes;
+                const u8* qword = data + i * sdfQwordBytes;
                 if (reg == sdfGifRegAD) {
                     feedAd(walk, qword);
                 } else {
@@ -222,8 +216,33 @@ void GifWalk::packet(const Guest& guest, u32 packetAddr) {
             }
         }
 
-        data += payload * kQwordBytes;
+        data += payload * sdfQwordBytes;
         left -= payload;
+    }
+}
+
+void applyGsRegisterWrites(u32 packetAddr, sdfGsState_t& state) {
+    DmaTag tag{};
+    if (!readDmaTag(packetAddr, tag)) return;
+
+    // A REF tag names its data elsewhere; anything else carries it straight after the tag.
+    const u32 at = tag.id == sdfDmaTagRef ? tag.addr : packetAddr + 16;
+    const sdfGifTagWordsPtr_t gif{at};
+    if (!gif) return;
+    if (sdfGifFlg(*gif) != 0 || sdfGifNreg(*gif) != 1) return;
+    if (sdfGifRegAt(gif->regs, 0) != sdfGifRegAD) return;
+
+    const u32 count = sdfGifNloop(*gif);
+    const sdfGifAdWrite_t* writes = sdfGifAdWritePtr_t{at + 16}.slice(count);
+    if (!writes) return;
+    for (u32 i = 0; i < count; i++) {
+        switch (u32(writes[i].reg & 0xFF)) {
+            case sdfGsAddrAlpha1:
+            case sdfGsAddrAlpha2: state.alpha = writes[i].value; break;
+            case sdfGsAddrTest1:
+            case sdfGsAddrTest2: state.test = writes[i].value; break;
+            default: break;
+        }
     }
 }
 

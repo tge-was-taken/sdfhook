@@ -35,6 +35,24 @@ SDF_BIOS=<bios.bin> SDF_TRACE=dumps/sdf_trace.jsonl SDF_FRAMES=400 \
 | `SDF_SHOT_FRAME` | frame to capture at |
 | `SDF_SHOT` | emulator framebuffer, PPM |
 | `SDF_NATIVE_SHOT` | the native render, PPM |
+| `SDF_SCALE` | window size as a multiple of the guest's 512x448; 1 to compare against the reference |
+| `SDF_LOG` | log levels, one for everything (`trace`) or per channel (`model=trace,render=warn`) |
+| `SDF_DUMP_TEXTURES` | directory for decoded textures as PNG; GS-recovered ones are named `gs_*` |
+| `SDF_NO_GS_RECOVER` | stop reading textures back out of GS memory when the game registered none |
+
+The window never takes keyboard focus, which needs the X11 backend: a Wayland toplevel cannot refuse
+focus, so `SDL_WINDOW_NOT_FOCUSABLE` does nothing there. `x11,wayland` is set as a default only, so
+`SDL_VIDEO_DRIVER` in the environment still wins.
+
+`scripts/lint.sh` names every function nothing calls, which is how code written for a purpose and
+never wired up gets found. It should print nothing.
+
+`scripts/gsdiff.py <trace.jsonl> <gs.jsonl>` diffs the GS state we believe each draw runs under
+against the state the hardware ran; run with `SDF_TRACE` and `PCSX2HOOK_GS_TRACE` both set.
+
+Log channels: `run`, `hooks`, `model`, `tex`, `render`, `trace`, `todo`, `gs`, `packet`,
+`unsupported`. Levels are `trace`, `debug`, `info`, `warn`, `error`, `off`, and the default is
+`info`.
 
 Everything the runner itself takes (`PCSX2HOOK_STATE` to boot a savestate, its own tracers) still
 applies.

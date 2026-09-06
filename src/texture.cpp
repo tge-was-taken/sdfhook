@@ -1,18 +1,21 @@
 #include "texture.h"
 
-#include "unsupported.h"
-
-
 #include <png.h>
 
-#include <cstdio>
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <string>
 
+#include "log.h"
+#include "json.h"
+#include "unsupported.h"
+
 namespace sdfhook {
+
 namespace {
+
+LogChannel log("tex");
 
 constexpr u32 kMaxDimension = 1024;
 
@@ -75,23 +78,15 @@ void unswizzleClut(u8 (*clut)[4]) {
     }
 }
 
-u32 swizzledIndex8(u32 x, u32 y, u32 width) {
-    const u32 block = (y & ~0xFu) * width + (x & ~0xFu) * 2;
-    const u32 swap = (((y + 2) >> 2) & 1) * 4;
-    const u32 row = ((((y & ~3u) >> 1) + (y & 1)) & 7);
-    const u32 column = row * width * 2 + ((x + swap) & 7) * 4;
-    return block + column + (((y >> 1) & 1) + ((x >> 2) & 2));
-}
 
 }  // namespace
 
 // Keyed by handle because that is the pointer DrwSprite2D is later handed; texId is not unique.
-void TextureCache::add(const Guest& guest, u32 texFileAddr, u32 handleAddr, Frame* frame) {
-    TMX_HEADER_t tmx{};
-    const TexHandle handle{handleAddr};
-    if (!texFileAddr || !handle || !guest.read(texFileAddr, tmx)) return;
+void TextureCache::add(TMX_HEADER_PTR_t aTex, TexHandle handle, Frame* frame) {
+    if (!handle.addr || !aTex) return;
     if (mUploaded.count(handle)) return;
 
+    const TMX_HEADER_t& tmx = *aTex;
     const u32 width = u32(tmx.width);
     const u32 height = u32(tmx.height);
     if (!width || !height || width > kMaxDimension || height > kMaxDimension) {
@@ -110,13 +105,13 @@ void TextureCache::add(const Guest& guest, u32 texFileAddr, u32 handleAddr, Fram
     const u32 clutEntries = fourBit ? 16 : 256;
     const u32 clutBytes = paletted ? tmx.numOfCLUT * clutEntries * (clut16 ? 2 : 4) : 0;
 
-    const u32 dataStart = texFileAddr + (tmx.compression & 0xF0) + sdfTmxDataGap;
+    const u32 dataStart = aTex.addr + (tmx.compression & 0xF0) + sdfTmxDataGap;
     const usize texels = usize(width) * height;
     const usize pixelBytes = fourBit ? texels / 2 : (paletted ? texels : texels * 4);
 
-    const u8* pixels = static_cast<const u8*>(guest.map(dataStart + clutBytes, u32(pixelBytes)));
+    const u8* pixels = u8Ptr_t{dataStart + clutBytes}.slice(u32(pixelBytes));
     const u8* clutSource =
-        clutBytes ? static_cast<const u8*>(guest.map(dataStart, clutBytes)) : nullptr;
+        clutBytes ? u8Ptr_t{dataStart}.slice(clutBytes) : nullptr;
     if (!pixels || (paletted && !clutSource)) {
         mFailed++;
         return;
@@ -152,19 +147,18 @@ void TextureCache::add(const Guest& guest, u32 texFileAddr, u32 handleAddr, Fram
 
     mDecoded++;
     mUploaded.insert(handle);
-    if (mDumpDir) {
-        char name[80];
-        std::snprintf(name, sizeof(name), "/tex_%08X_%ux%u_psm%02X.png", handle.addr, width, height,
-                      tmx.pixelFormat);
-        writePng((std::string(mDumpDir) + name).c_str(), width, height, upload.rgba.data());
+    if (!mDumpDir.empty()) {
+        const std::string name = std::format("{}/tex_{:08X}_{}x{}_psm{:02X}.png", mDumpDir,
+                                             handle.addr, width, height, tmx.pixelFormat);
+        writePng(name.c_str(), width, height, upload.rgba.data());
     }
     if (frame) frame->textureUploads.push_back(std::move(upload));
 }
 
-void TextureCache::onDuplicate(const Guest& guest, u32 sourceHandle, u32 copyHandle) {
-    if (!sourceHandle || !copyHandle) return;
-    const TexHandle resolved = getHandle(guest, sourceHandle);
-    if (resolved) mAlias[TexHandle{copyHandle}] = resolved;
+void TextureCache::onDuplicate(TexHandle source, TexHandle copy) {
+    if (!source || !copy) return;
+    const TexHandle resolved = getHandle(source, nullptr);
+    if (resolved) mAlias[TexHandle{copy}] = resolved;
 }
 
 
@@ -172,26 +166,26 @@ void TextureCache::onDuplicate(const Guest& guest, u32 sourceHandle, u32 copyHan
 // A bit no EE pointer carries, so the sheet cannot collide with a real texture handle.
 constexpr u32 kSheetHandleBit = 0x80000000;
 
-void TextureCache::onFontClut(const Guest& guest, u32 dataAddr) {
+void TextureCache::onFontClut(u32 dataAddr) {
     if (!mFontClut.empty() || !dataAddr) return;
     for (u32 i = 0; i < 16; i++) {
-        mFontClut.push_back(Rgba::fromPacked(guest.readOr<u32>(dataAddr + i * 4)));
+        mFontClut.push_back(Rgba::fromPacked(u32Ptr_t{dataAddr + i * 4}.valueOr()));
     }
 }
 
 // frSetFontClut builds six palettes of sixteen entries from this table, each a plain RGBA word.
-void TextureCache::loadFontClut(const Guest& guest, u32 tableAddr) {
+void TextureCache::loadFontClut(u32 tableAddr) {
     if (!mFontClut.empty() || !tableAddr) return;
     for (u32 i = 0; i < 16; i++) {
-        mFontClut.push_back(Rgba::fromPacked(guest.readOr<u32>(tableAddr + i * 4)));
+        mFontClut.push_back(Rgba::fromPacked(u32Ptr_t{tableAddr + i * 4}.valueOr()));
     }
 }
 
-void TextureCache::onGlyph(const Guest& guest, u32 dstX, u32 dstY, u32 width, u32 height,
+void TextureCache::onGlyph(u32 dstX, u32 dstY, u32 width, u32 height,
                            u32 dataAddr) {
     if (!width || !height) return;
     const usize bytes = usize(width) * height / 2;
-    const u8* pixels = static_cast<const u8*>(guest.map(dataAddr, u32(bytes)));
+    const u8* pixels = u8Ptr_t{dataAddr}.slice(u32(bytes));
     if (!pixels) {
         mFailed++;
         return;
@@ -269,25 +263,129 @@ TexHandle TextureCache::getFontSheet(u32 sheetWidth, Frame* frame) {
     return handle;
 }
 
-TexHandle TextureCache::getHandle(const Guest& guest, u32 handleAddr) {
-    const TexHandle wanted{handleAddr};
-    if (!wanted) return {};
+TexHandle TextureCache::getHandle(TexHandle wanted, Frame*) {
+    if (!wanted.addr) return {};
     if (mUploaded.count(wanted)) return wanted;
     const auto alias = mAlias.find(wanted);
     if (alias != mAlias.end()) return alias->second;
 
     TexHandle origin = wanted;
     for (int depth = 0; depth < 4; depth++) {
-        sdfTexHandle_t handle{};
-        if (!guest.read(origin.addr, handle) || !handle.origin) break;
-        origin = handle.origin;
+        const TexHandle handle{origin.addr};
+        if (!handle || !handle->origin) break;
+        origin = handle->origin;
         if (mUploaded.count(origin)) {
             mAlias.emplace(wanted, origin);
             return origin;
         }
     }
-    mAlias.emplace(wanted, TexHandle{});
+
+    // Nothing registered it in this window, but the GS still holds the pixels. The read is not safe
+    // from here, so the handle waits for the frame boundary and the draw goes untextured once.
+    mWanted.insert(wanted);
     return {};
+}
+
+void TextureCache::recoverQueued() {
+    if (mWanted.empty() || !mConfig->recoverTexturesFromGs || !mRuntime) return;
+
+    for (auto it = mWanted.begin(); it != mWanted.end();) {
+        const TexHandle handle = *it;
+        if (recoverFromGs(handle)) {
+            mUploaded.insert(handle);
+            mRecovered++;
+        } else {
+            mAlias.emplace(handle, TexHandle{});
+        }
+        mRecoveryAttempts++;
+        it = mWanted.erase(it);
+    }
+}
+
+void TextureCache::drainRecovered(Frame& frame) {
+    for (TextureUpload& upload : mRecoveredUploads) {
+        frame.textureUploads.push_back(std::move(upload));
+    }
+    mRecoveredUploads.clear();
+}
+
+bool TextureCache::recoverFromGs(TexHandle handle) {
+    const auto note = [&](const char* why, u64 tex0) {
+        if (!mConfig->dumpRecover) return;
+        JsonObject row;
+        row.addString("dump", "recover").addHexDigits("handle", handle.addr, 8).addString("why", why);
+        if (tex0) row.addHexDigits("tex0", tex0, 16);
+        log.dump(row.take());
+    };
+
+    const TexHandle entry{handle.addr};
+    if (!entry || !entry->packet) {
+        note("no upload packet", 0);
+        return false;
+    }
+
+    // sdfTexGetTex0Reg reads the register out of the packet the texture was uploaded with.
+    const u64 reg = u64Ptr_t{entry->packet.addr + kTex0InPacket}.valueOr();
+    if (!reg) {
+        note("packet has no TEX0", 0);
+        return false;
+    }
+    const GsTex0 tex0 = GsTex0::fromReg(reg);
+    const u32 width = 1u << tex0.tw;
+    const u32 height = 1u << tex0.th;
+    note("read", reg);
+
+    std::vector<u32> texels(usize(width) * height);
+    if (pcsx2hook_read_gs_pixels(mRuntime, tex0.tbp0, tex0.tbw, tex0.psm, width, height,
+                                 texels.data(), texels.size()) != texels.size()) {
+        note("no pixels", reg);
+        return false;
+    }
+
+    // Paletted formats come back as indices, so the palette is read and unswizzled here rather than
+    // through the renderer's own CLUT cache, which the emulated draws after this still need.
+    u8 clut[256][4] = {};
+    const u32 entries = tex0.isFourBit() ? 16u : 256u;
+    if (tex0.isPaletted()) {
+        std::vector<u32> palette(entries);
+        const u32 clutWidth = tex0.isFourBit() ? 8 : 16;
+        if (pcsx2hook_read_gs_pixels(mRuntime, tex0.cbp, 1, tex0.cpsm, clutWidth,
+                                     entries / clutWidth, palette.data(),
+                                     palette.size()) != palette.size()) {
+            note("no clut", reg);
+            return false;
+        }
+        readClut(reinterpret_cast<const u8*>(palette.data()), entries,
+                 tex0.cpsm == sdfPsmct16 || tex0.cpsm == sdfPsmct16s, clut);
+        if (!tex0.isFourBit()) unswizzleClut(clut);
+    }
+
+    TextureUpload upload;
+    upload.handle = handle;
+    upload.width = width;
+    upload.height = height;
+    upload.rgba.resize(texels.size() * 4);
+    for (usize i = 0; i < texels.size(); i++) {
+        u8* out = &upload.rgba[i * 4];
+        if (tex0.isPaletted()) {
+            std::memcpy(out, clut[texels[i] & (entries - 1)], 4);
+            continue;
+        }
+        const u32 value = texels[i];
+        out[0] = u8(value & 0xFF);
+        out[1] = u8((value >> 8) & 0xFF);
+        out[2] = u8((value >> 16) & 0xFF);
+        out[3] = u8((value >> 24) & 0xFF);
+    }
+
+    note("done", reg);
+    if (!mDumpDir.empty()) {
+        const std::string name = std::format("{}/gs_{:08X}_{}x{}_psm{:02X}.png", mDumpDir,
+                                             handle.addr, width, height, tex0.psm);
+        writePng(name.c_str(), width, height, upload.rgba.data());
+    }
+    mRecoveredUploads.push_back(std::move(upload));
+    return true;
 }
 
 }  // namespace sdfhook

@@ -26,7 +26,6 @@ for scene in "${scenes[@]}"; do
 	out="dumps/$scene"
 	mkdir -p "$out"
 	# The state is kept beside its dump: a run nobody can reproduce is worth little later.
-	SDF_WINDOW=1 \
 	SDF_TRACE="$out/trace.jsonl" \
 	SDF_SHOT="$out/shot.ppm" \
 	SDF_NATIVE_SHOT="$out/native.ppm" \

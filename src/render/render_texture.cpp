@@ -1,10 +1,16 @@
 #include "render_texture.h"
+#include "../log.h"
 
 #include <cstdio>
 
 #include "glad/gl.h"
 
 namespace sdfhook {
+namespace {
+
+LogChannel log("render");
+
+}  // namespace
 
 bool RenderTexture::create(int width, int height) {
     mWidth = width;
@@ -18,13 +24,18 @@ bool RenderTexture::create(int width, int height) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
+    glGenRenderbuffers(1, &mDepth);
+    glBindRenderbuffer(GL_RENDERBUFFER, mDepth);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height);
+
     glGenFramebuffers(1, &mFramebuffer);
     glBindFramebuffer(GL_FRAMEBUFFER, mFramebuffer);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, mTexture, 0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, mDepth);
     const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     if (status != GL_FRAMEBUFFER_COMPLETE) {
-        std::fprintf(stderr, "[render] %dx%d target incomplete: 0x%X\n", width, height, status);
+        log.error("{}x{} target incomplete: 0x{:X}", width, height, status);
         destroy();
         return false;
     }
@@ -33,8 +44,10 @@ bool RenderTexture::create(int width, int height) {
 
 void RenderTexture::destroy() {
     glDeleteFramebuffers(1, &mFramebuffer);
+    glDeleteRenderbuffers(1, &mDepth);
     glDeleteTextures(1, &mTexture);
     mFramebuffer = 0;
+    mDepth = 0;
     mTexture = 0;
 }
 

@@ -5,6 +5,7 @@ states/*.p2s
 experiments/
 *.pyc
 __pycache__/
+assets/
 
 # Symlink into the build tree for the language server.
 compile_commands.json

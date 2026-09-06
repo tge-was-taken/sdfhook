@@ -7,6 +7,7 @@
 
 #include "../types.h"
 #include "frame.h"
+#include "../config.h"
 #include "renderer.h"
 
 namespace sdfhook {
@@ -15,7 +16,7 @@ namespace sdfhook {
 // only ever touches the frame ring, so a hook never blocks on the GPU.
 class RenderThread {
 public:
-    bool open(int width, int height);
+    bool open(const Config& config, int width, int height);
     void close();
     void requestShot(const std::string& path);
 
@@ -23,14 +24,11 @@ public:
     Frame* beginFrame() { return mFrames.acquireBuild(); }
     void submit(Frame* frame) { mFrames.publish(frame); }
 
-    bool isRunning() const { return mRunning.load(std::memory_order_relaxed); }
-    u64 getFramesDrawn() const { return mDrawn.load(std::memory_order_relaxed); }
-    u64 getSpritesDrawn() const { return mSprites.load(std::memory_order_relaxed); }
-
 private:
     void run(int width, int height);
     void writeShot(const std::string& path, int width, int height);
 
+    const Config* mConfig = nullptr;
     Renderer mRenderer;
     FrameRing mFrames;
     std::thread mThread;
