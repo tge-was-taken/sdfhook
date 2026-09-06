@@ -34,6 +34,19 @@ public:
     /// Moves anything recoverQueued read into the frame being built.
     void drainRecovered(Frame& frame);
 
+    /// Records a frame buffer's region in GS memory. A texture uploaded before the capture window
+    /// can have had its slot handed to the display since, and recovering it then returns the screen.
+    /// @fn sdfGsAllocFrameBuff
+    /// @note SLUS-20911 0x002AA8D0
+    void onFrameBuffer(sdfGsMemSlicePtr_t aSlice);
+
+    /// Forgets a handle the engine released, so the address can be registered again. The texture
+    /// itself is replaced at its next upload rather than dropped here: a copy made by sdfTexDup
+    /// outlives its source, and a frame already submitted still draws with it.
+    /// @fn sdfTexFree
+    /// @note SLUS-20911 0x002AB860
+    void onFree(TexHandle handle);
+
     /// Links a copy made by sdfTexDup to its source: the copy never reaches sdfTexSetEx, so
     /// nothing is uploaded for it.
     void onDuplicate(TexHandle source, TexHandle copy);
@@ -45,6 +58,10 @@ public:
     /// assembled here from those same uploads and identified by the address it lives at.
     void onGlyph(u32 dstX, u32 dstY, u32 width, u32 height, u32 dataAddr);
     void onFontClut(u32 dataAddr);
+
+    /// Asks for the glyph sheet to be read out of GS memory. A savestate begins past the uploads
+    /// that built it, so frTranslateUserData never runs and every string draws as a blank bar.
+    void wantFontSheet(u32 addr, u32 bufWidth, u32 width, u32 height);
 
     /// The palettes are static data, so they can be read whether or not frSetFontClut ran inside
     /// the capture window.
@@ -62,6 +79,7 @@ public:
     u64 getDecoded() const { return mDecoded; }
     u64 getFailed() const { return mFailed; }
     u64 getGlyphUploads() const { return mGlyphUploads; }
+    u64 getFreed() const { return mFreed; }
     bool hasFontClut() const { return !mFontClut.empty(); }
 
 private:
@@ -83,6 +101,24 @@ private:
     /// Reads the texture the handle names out of GS memory, through its own TEX0.
     bool recoverFromGs(TexHandle handle);
 
+    bool recoverFontSheet();
+
+    struct FontSheetWanted {
+        u32 addr = 0;
+        u32 bufWidth = 0;
+        u32 width = 0;
+        u32 height = 0;
+    };
+
+    FontSheetWanted mWantedSheet;
+
+    struct GsRegion {
+        u32 addr;
+        u32 size;
+    };
+
+    std::vector<GsRegion> mFrameBuffers;
+
     /// Handles a draw asked for that nothing had registered, waiting for the frame boundary.
     std::unordered_set<TexHandle> mWanted;
     std::vector<TextureUpload> mRecoveredUploads;
@@ -92,6 +128,7 @@ private:
     u64 mRecoveryAttempts = 0;
     u64 mDecoded = 0;
     u64 mFailed = 0;
+    u64 mFreed = 0;
     const Config* mConfig = nullptr;
     std::string mDumpDir;
 

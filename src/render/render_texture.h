@@ -19,6 +19,12 @@ public:
 
     u32 getTexture() const { return mTexture; }
 
+    /// For reading the render back at its own size. The window may be scaled by the display, so
+    /// what it holds is not what the scoring compares.
+    u32 getFramebuffer() const { return mFramebuffer; }
+    int getWidth() const { return mWidth; }
+    int getHeight() const { return mHeight; }
+
 private:
     u32 mFramebuffer = 0;
     u32 mTexture = 0;

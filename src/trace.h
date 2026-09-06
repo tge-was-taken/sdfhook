@@ -39,7 +39,9 @@ public:
     void onPacket(const LinkedPacket& packet, const char* by, const DmaTag& tag, u64 verts);
 
     /// One decoded mesh, with the ranges that say whether the stream was read at the right stride.
-    void onMesh(const DrawMesh& mesh, const Matrix4& screenTm);
+    /// The row is written once the frame's chain exists, so it names the frame the mesh was decoded
+    /// in rather than the one that happened to be current by then.
+    void onMesh(const DrawMesh& mesh, const Matrix4& screenTm, u32 frame);
 
     /// One 2D draw, carrying the same GS state fields a mesh does, so both sides of the frame can
     /// be attributed against the GS trace rather than only the 3D half.

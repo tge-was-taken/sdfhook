@@ -1,5 +1,8 @@
 #include "hooks.h"
 
+#include <cstring>
+#include <unordered_map>
+
 #include "log.h"
 #include "json.h"
 
@@ -57,11 +60,98 @@ bool isHandled(const char* producer) {
                                           "fldDrawFrameSprite",
                                           "aDrawBoxF",
                                           "frCreateDrawFontPacket_20550848", "fldDrawEATexQuad",
-                                          "DispCommCursor",  "DispHelpPanel"};
+                                          "DispCommCursor",  "DispHelpPanel",
+                                          // ModelWalk redraws everything this links.
+                                          "sdfModelLinkOt"};
     for (const char* name : kHandled) {
         if (std::strcmp(producer, name) == 0) return true;
     }
     return false;
+}
+
+
+/// Replays the frame's GS state in the order the hardware sees it, which is the only order that
+/// settles what a draw ran under: the ordering tables sort their tags before transmitting, so the
+/// link order a packet was built in says nothing. sdfGrReqDraw's tag names the chain head at +4.
+/// @disc SLUS-20911
+/// @address 0x002AD980
+/// @function sdfGrDrawFrame
+std::unordered_map<u32, sdfGsState_t> replayTransmitOrder(u32 aTag) {
+    std::unordered_map<u32, sdfGsState_t> settled;
+    sdfGsState_t gs{};
+    u32 stack[16] = {};
+    u32 depth = 0;
+    u32 at = u32Ptr_t{aTag + 4}.valueOr() & 0x0FFFFFFFu;
+
+    // A frame links a few thousand tags. Anything beyond that is a chain that loops back on itself
+    // or a tag read out of data, and walking it costs the guest thread the whole frame.
+    constexpr u32 kMaxChainTags = 65536;
+    u32 steps = 0;
+    for (; at && steps < kMaxChainTags; steps++) {
+        const u32* tag = u32Ptr_t{at}.slice(2);
+        if (!tag) break;
+        const u32 qwc = tag[0] & 0xFFFF;
+        const u32 id = (tag[0] >> 28) & 7;
+        const u32 addr = tag[1] & 0x0FFFFFFFu;
+
+        applyGsRegisterWrites(at, gs);
+        settled[at] = gs;
+
+        switch (id) {
+            case sdfDmaTagRef:
+            case sdfDmaTagRefs: at += sdfQwordBytes; break;
+            case sdfDmaTagCnt: at += sdfQwordBytes * (1 + qwc); break;
+            case sdfDmaTagNext: at = addr; break;
+            case sdfDmaTagCall:
+                if (depth == std::size(stack)) return settled;
+                stack[depth++] = at + sdfQwordBytes * (1 + qwc);
+                at = addr;
+                break;
+            case sdfDmaTagRet: at = depth ? stack[--depth] : 0; break;
+            default: at = 0; break;  // REFE and END both stop the chain
+        }
+    }
+    if (steps == kMaxChainTags) reportUnsupported("transmit chain tags", steps);
+    return settled;
+}
+
+/// Gives every mesh the ALPHA and TEST its packet actually transmitted under. The link order the
+/// meshes were built in and the link order the engine files its geometry in are the same walk, so
+/// the nth geometry link is the nth mesh's, however many meshes that link produced.
+void settleMeshState(HookContext& h, u32 aTag) {
+    Frame* frame = h.frames.getFrame();
+    if (!frame || frame->meshes.empty()) return;
+
+    const std::unordered_map<u32, sdfGsState_t> settled =
+        h.config->noTransmitState ? std::unordered_map<u32, sdfGsState_t>()
+                                  : replayTransmitOrder(aTag);
+    if (settled.empty()) {
+        h.model.traceMeshes(*frame);
+        return;
+    }
+
+    const std::vector<u32>& byLink = h.frames.getGeneratedLinks();
+
+    for (DrawMesh& mesh : frame->meshes) {
+        const sdfGsState_t* state = nullptr;
+        if (mesh.linkAddr) {
+            const auto found = settled.find(mesh.linkAddr);
+            if (found != settled.end()) state = &found->second;
+        } else if (mesh.linkIndex < byLink.size()) {
+            mesh.linked = byLink[mesh.linkIndex] != 0;
+            const auto found = settled.find(byLink[mesh.linkIndex]);
+            if (found != settled.end()) state = &found->second;
+        }
+        if (!state) {
+            h.model.getTrace().countUnsettledMesh();
+            continue;
+        }
+        const u64 mask = mesh.gs.frameMask;
+        mesh.gs = *state;
+        mesh.gs.frameMask = mask;
+        h.model.getTrace().countSettledMesh();
+    }
+    h.model.traceMeshes(*frame);
 }
 
 void collectPackets(HookContext& h) {
@@ -73,13 +163,16 @@ void collectPackets(HookContext& h) {
         // The state a draw runs under is whatever the packets linked before it left behind, so it
         // is tracked across the whole chain rather than looked up per draw.
         const sdfGsState_t was = gs;
-        applyGsRegisterWrites(packet.addr, gs);
-        if (h.config->dumpDrawEnv && (gs.alpha != was.alpha || gs.test != was.test)) {
+        const bool stateOnly = applyGsRegisterWrites(packet.addr, gs);
+        if (h.config->dumpDrawEnv && (gs.alpha != was.alpha || gs.test != was.test ||
+                                      gs.frameMask != was.frameMask)) {
             log.dump(JsonObject()
                          .addString("dump", "gsState")
+                         .addUint("frame", h.trace->getFrame())
                          .addString("by", h.symbols.getFunction(packet.caller))
                          .addHexDigits("alpha", gs.alpha, 2)
                          .addHexDigits("test", gs.test, 6)
+                         .addHexDigits("fbmsk", gs.frameMask, 8)
                          .addUint("aref", sdfTestAref(gs.test))
                          .take());
         }
@@ -91,7 +184,10 @@ void collectPackets(HookContext& h) {
         u64 verts = 0;
         for (int i = 0; i < 8; i++) verts += h.coverage.gif.verts[i] - before.verts[i];
         const char* by = h.symbols.getFunction(packet.caller);
-        if (verts && !isHandled(by)) h.coverage.unhandledVerts[by] += verts;
+        if (!isHandled(by)) {
+            if (verts) h.coverage.unhandledVerts[by] += verts;
+            else if (!stateOnly) h.coverage.unhandledPackets[by]++;
+        }
         h.trace->onPacket(packet, by, tag, verts);
         if (!h.config->dumpPackets.empty() && !verts && std::strstr(by, h.config->dumpPackets.c_str())) {
             dumpPacket(packet, by, tag);
@@ -220,6 +316,20 @@ int rsetOtOfsHook(pcsx2hook_regs* regs, void* user) {
     return PCSX2HOOK_CONTINUE;
 }
 
+/// rsetFrameMaskRgbOn/Off, still ooyTestRGBMaskOn/Off in the map. They bracket the silhouette pass
+/// in call order, which is where our walk runs, so the flag needs no transmit-order settling.
+/// @fn rsetFrameMaskRgbOn
+/// @note SLUS-20911 0x0012A3F0
+int frameMaskOnHook(pcsx2hook_regs*, void* user) {
+    static_cast<HookContext*>(user)->state.frameMask = sdfFrameMaskRgb;
+    return PCSX2HOOK_CONTINUE;
+}
+
+int frameMaskOffHook(pcsx2hook_regs*, void* user) {
+    static_cast<HookContext*>(user)->state.frameMask = 0;
+    return PCSX2HOOK_CONTINUE;
+}
+
 // rsetTest(ate, atst, aref, afail, date, datm, zte, ztst), assembled the way the engine does.
 int rsetTestHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
@@ -231,9 +341,9 @@ int rsetTestHook(pcsx2hook_regs* regs, void* user) {
     const u32 datm = c.getArg(5);
     const u32 ztst = c.getArg(7);
 
-    static_cast<HookContext*>(user)->state.test = ate | (atst << 1) | (aref << 4) | (afail << 12) |
-                                                  (date << 14) | (datm << 15) | 0x10000u |
-                                                  (ztst << 17);
+    const u32 test = ate | (atst << 1) | (aref << 4) | (afail << 12) | (date << 14) |
+                     (datm << 15) | 0x10000u | (ztst << 17);
+    static_cast<HookContext*>(user)->state.test = test;
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -332,7 +442,7 @@ int aDrawBoxF_DirectHook(pcsx2hook_regs* regs, void* user) {
     const f32 left = f32(x0) / 16.0f - kOffsetX;
     const f32 right = f32(x1) / 16.0f - kOffsetX;
     const f32 edge[2] = {f32(y0) / 16.0f - kOffsetY, f32(y1) / 16.0f - kOffsetY};
-    if (h.config->noDirectBox) return PCSX2HOOK_CONTINUE;
+    if (!h.config->drawDirectBox) return PCSX2HOOK_CONTINUE;
     for (f32 y : edge) {
         DrawSprite sprite = DrawSprite::fromRect(left, y, right - left, 1.0f, 0, 0, 0, 0);
         sprite.setColour(Rgba{u8(r), u8(g), u8(b), u8(a)});
@@ -368,6 +478,9 @@ int frCreateDrawFontPacketHook(pcsx2hook_regs* regs, void* user) {
     const auto uv = [&](usize i) { return f32(s32(u32Ptr_t{pUv + u32(i) * 4}.valueOr())) / 16.0f; };
 
     const frGsTex_t sheet = frGsTex_PTR_t{pGsTex}.valueOr();
+    // The palettes are static data, so they read whether or not the glyph uploads ran in the window.
+    h.textures.loadFontClut(pcsx2hook_find_symbol(h.runtime, "frFontClutTable"));
+    h.textures.wantFontSheet(sheet.Addr, sheet.BufWidth, sheet.Width, sheet.Height);
     DrawSprite sprite = DrawSprite::fromRect(f32(X) / 16.0f, f32(Y) / 16.0f, f32(Width),
                                              f32(Height), uv(0), uv(1), uv(2), uv(3));
     sprite.setColour(colour);
@@ -573,6 +686,9 @@ int dds3DrawFadeHook(pcsx2hook_regs*, void* user) {
 
 // cmpDrawBoxG(x, y, Z, w, h, pCol, Ctxt, OtNo): a gouraud quad, submitted as a strip. x and y are
 // 12.4 relative to the draw space, w is pixels and h is the doubled vertical scale.
+/// @todo TODO.md M2: correct and still costs 6.2 points, so the table traces cmpDrawBoxG rather
+/// than installing this.
+// cppcheck-suppress unusedFunction
 int cmpDrawBoxGHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
@@ -716,6 +832,7 @@ int sdfCorePacketGenHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
     h.trace->onSdfCorePacketGen(c.getArg(0), c.getArg(1), c.getArg(2), c.getArg(3));
+    h.frames.beginGenerated();
     h.model.getTrace().countGuestGenerated();
     return PCSX2HOOK_CONTINUE;
 }
@@ -779,7 +896,9 @@ int sdfSortOtAvlRegistHook(pcsx2hook_regs* regs, void* user) {
 int sdfGrReqDrawHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
-    h.trace->onSdfGrReqDraw(c.getArg(0), c.getArg(1));
+    const u32 aTag = c.getArg(0);
+    h.trace->onSdfGrReqDraw(aTag, c.getArg(1));
+    settleMeshState(h, aTag);
     collectPackets(h);
     h.frames.submit();
     return PCSX2HOOK_CONTINUE;
@@ -790,6 +909,7 @@ int dds3DrawProcessHook(pcsx2hook_regs* regs, void* user) {
     HookContext& h = *static_cast<HookContext*>(user);
     h.trace->onDds3DrawProcess(c.getArg(0));
     h.frames.begin();
+    h.model.beginFrame(h.trace->getFrame());
     // The clear colour is a global the game may change between frames, so it is read per frame.
     const u32 backColor = pcsx2hook_find_symbol(h.runtime, "dds3BackColor");
     if (backColor) h.state.background = Rgba::fromColorWord(u32Ptr_t{backColor}.valueOr());
@@ -807,7 +927,7 @@ int sdfDrawTagLinkHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
     if (c.getArg(1)) {
-        h.frames.link(LinkedPacket{c.getArg(1), c.getRa()});
+        h.frames.link(LinkedPacket{.addr = c.getArg(1), .caller = c.getRa()});
     }
     return PCSX2HOOK_CONTINUE;
 }
@@ -818,8 +938,115 @@ int sdfDrawTagLinkRefHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
     if (c.getArg(1)) {
-        h.frames.link(LinkedPacket{c.getArg(1), c.getRa(), true});
+        h.frames.link(LinkedPacket{.addr = c.getArg(1), .caller = c.getRa(),
+                                   .kind = LinkKind::Ref});
     }
+    return PCSX2HOOK_CONTINUE;
+}
+
+// The world geometry is linked as a DMA call chain rather than a packet, so it arrives here and
+// nowhere else: without this the type 1 streams, three quarters of a field scene's triangles, are
+// absent from the frame inventory entirely.
+int sdfDrawTagLinkCallHook(pcsx2hook_regs* regs, void* user) {
+    Context c{regs};
+    HookContext& h = *static_cast<HookContext*>(user);
+    if (c.getArg(1)) {
+        h.frames.link(LinkedPacket{.addr = c.getArg(1), .caller = c.getRa(),
+                                   .kind = LinkKind::Call});
+    }
+    return PCSX2HOOK_CONTINUE;
+}
+
+void sdfGsAllocFrameBuffPost(pcsx2hook_regs* regs, void* user) {
+    Context c{regs};
+    static_cast<HookContext*>(user)->textures.onFrameBuffer(sdfGsMemSlicePtr_t{c.getResult()});
+}
+
+// The one release point for a texture: sdfTexFreeDelayed only queues this through
+// sdfTexDelayedResrcCB, and the 22 game-side callers all land here.
+int sdfTexFreeHook(pcsx2hook_regs* regs, void* user) {
+    Context c{regs};
+    HookContext& h = *static_cast<HookContext*>(user);
+
+    const TexHandle aHandle{c.getArg(0)};
+    h.textures.onFree(aHandle);
+    return PCSX2HOOK_CONTINUE;
+}
+
+// A fourth way in: rsetFrameMaskRgbOn links the FBMSK packet through here, so without this the
+// frame-mask pass is absent from the inventory and its write mask never reaches a draw.
+int sdfDrawTagLinkRefGifHook(pcsx2hook_regs* regs, void* user) {
+    Context c{regs};
+    HookContext& h = *static_cast<HookContext*>(user);
+    if (c.getArg(1)) {
+        h.frames.link(LinkedPacket{.addr = c.getArg(1), .caller = c.getRa(),
+                                   .kind = LinkKind::Ref});
+    }
+    return PCSX2HOOK_CONTINUE;
+}
+
+/// dds3BillboardTagLink(hBillboard, hResource, use_mesh_idx): fills a billboard batch one quad at a
+/// time. Only the resource names the texture, and sdfBillBoardMakeN is handed the geometry alone,
+/// so the handle has to be taken here.
+/// @fn dds3BillboardTagLink
+/// @note SLUS-20911 0x0015B320
+int dds3BillboardTagLinkHook(pcsx2hook_regs* regs, void* user) {
+    Context c{regs};
+    HookContext& h = *static_cast<HookContext*>(user);
+
+    const dds3BillResourcePtr_t hResource{c.getArg(1)};
+    if (hResource) h.model.setBillboardTexture(hResource->hTex);
+    return PCSX2HOOK_CONTINUE;
+}
+
+/// dds3BillboardLinkOt(): links every pending billboard batch into the ordering table its own node
+/// names. Read at entry, since the engine's loop rewrites the list as it consumes it.
+/// @fn dds3BillboardLinkOt
+/// @note SLUS-20911 0x0022E2E8
+int dds3BillboardLinkOtHook(pcsx2hook_regs* regs, void* user) {
+    (void)regs;
+    static_cast<HookContext*>(user)->model.readBillboardTables();
+    return PCSX2HOOK_CONTINUE;
+}
+
+/// sdfBillBoardMakeN(aCenter, aColor, aUVList, aXYOffsetList, aNum, aAllocator): one batch of
+/// camera-facing quads, which is what the battle specters are drawn as. The four pointers are one
+/// allocation, so the batch is taken as the struct it is.
+/// @fn sdfBillBoardMakeN
+/// @note SLUS-20911 0x002BB0F0
+int sdfBillBoardMakeNHook(pcsx2hook_regs* regs, void* user) {
+    Context c{regs};
+    HookContext& h = *static_cast<HookContext*>(user);
+
+    const sdfBillBoardBatchPtr_t aCenter{c.getArg(0)};
+    const u32 aNum = c.getArg(4);
+
+    h.coverage.apiDraws++;
+    if (h.config->noBillboards) return PCSX2HOOK_CONTINUE;
+    h.model.sdfBillBoardMakeN(aCenter, aNum, h.frames.getFrame());
+    return PCSX2HOOK_CONTINUE;
+}
+
+/// fldDrawPoly3(x0, y0, z0, x1, y1, z1, x2, y2, z2, col0, col1, col2): one gouraud triangle. The
+/// largest unhandled producer in the game by packets, and invisible to a ranking by vertices because
+/// its geometry only exists after VU1 runs.
+/// @fn fldDrawPoly3
+/// @note SLUS-20911 0x0012A5E0
+int fldDrawPoly3Hook(pcsx2hook_regs* regs, void* user) {
+    Context c{regs};
+    HookContext& h = *static_cast<HookContext*>(user);
+
+    // Eight floats reach the FPRs and the ninth the stack, while the colours take a0 to a2.
+    const sdfVector3_t point[3] = {
+        {c.getFloatArg(0), c.getFloatArg(1), c.getFloatArg(2)},
+        {c.getFloatArg(3), c.getFloatArg(4), c.getFloatArg(5)},
+        {c.getFloatArg(6), c.getFloatArg(7), f32Ptr_t{c.getStackArgAddr(8)}.valueOr()},
+    };
+    const u32 colour[3] = {c.getArg(0), c.getArg(1), c.getArg(2)};
+
+    h.coverage.apiDraws++;
+    if (!h.config->poly) return PCSX2HOOK_CONTINUE;
+    h.model.fldDrawPoly3(point, colour, h.frames.getFrame());
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -884,11 +1111,18 @@ constexpr Entry kEngineEntries[] = {
     {"sdfPrimLinkGt4", &observeHook, nullptr},
     {"sdfPrimLinkLine", &observeHook, nullptr},
     {"sdfPrimLinkSimplePacket", &observeHook, nullptr},
+    // The whole family, so the caller list below is closed: nothing reaches a draw tag any other
+    // way, and a producer missing from it is a producer that cannot draw.
     {"sdfDrawTagLink", &sdfDrawTagLinkHook, nullptr},
+    {"sdfDrawTagLink2", &sdfDrawTagLinkHook, nullptr},
     {"sdfDrawTagLinkRef", &sdfDrawTagLinkRefHook, nullptr},
+    {"sdfDrawTagLinkCall", &sdfDrawTagLinkCallHook, nullptr},
+    {"sdfDrawTagLinkRefGif", &sdfDrawTagLinkRefGifHook, nullptr},
     {"sdfMatSet", &sdfMatSetHook, nullptr},
     {"sdfTexSetEx", &sdfTexSetExHook, &sdfTexSetExPost},
     {"sdfTexDup", &sdfTexDupHook, &sdfTexDupPost},
+    {"sdfTexFree", &sdfTexFreeHook, nullptr},
+    {"sdfGsAllocFrameBuff", &observeHook, &sdfGsAllocFrameBuffPost},
     {"sdfTexTransData", &observeHook, nullptr},
     {"sdfTexTransCLUT", &observeHook, nullptr},
     {"sdfTexAllocClutBuff", &observeHook, nullptr},
@@ -899,7 +1133,6 @@ constexpr Entry kEngineEntries[] = {
     {"sdfTexAlloc", &observeHook, nullptr},
     {"sdfTexMakeGIFPacket", &observeHook, &observePost},
     {"sdfTexNew", &observeHook, nullptr},
-    {"sdfGsAllocFrameBuff", &observeHook, nullptr},
     {"sdfGrSetClearPacket", &sdfGrSetClearPacketHook, nullptr},
     {"sdf2DAllocSprite", &observeHook, nullptr},
     {"sdf2DMakeStdPacket", &traceEntryHook, nullptr},
@@ -913,7 +1146,9 @@ constexpr Entry kEngineEntries[] = {
     {"sdfPrimLinkBoxLine", &observeHook, nullptr},
     {"sdfPrimLinkBitBltPacket", &observeHook, nullptr},
     {"sdfBillBoardMake1", &traceEntryHook, nullptr},
-    {"sdfBillBoardMakeN", &traceEntryHook, nullptr},
+    {"sdfBillBoardMakeN", &sdfBillBoardMakeNHook, nullptr},
+    {"dds3BillboardTagLink", &dds3BillboardTagLinkHook, nullptr},
+    {"dds3BillboardLinkOt", &dds3BillboardLinkOtHook, nullptr},
     {"sdfGrLinkDispFrameTex", &traceEntryHook, nullptr},
     {"dds3DrawProcess", &dds3DrawProcessHook, &dds3DrawProcessPost},
 };
@@ -926,14 +1161,18 @@ constexpr Entry kGameEntries[] = {
     {"DrwSprite2D", &spriteHook, nullptr},
     {"rsetAlpha", &rsetAlphaHook, nullptr},
     {"rsetTest", &rsetTestHook, nullptr},
+    {"ooyTestPoly3", &fldDrawPoly3Hook, nullptr},
+    {"ooyTestRGBMaskOn", &frameMaskOnHook, nullptr},
+    {"ooyTestRGBMaskOff", &frameMaskOffHook, nullptr},
     {"rsetOtOfs", &rsetOtOfsHook, nullptr},
     {"rsetTexa", &traceEntryHook, nullptr},
-    {"rsetOtOfs", &traceEntryHook, nullptr},
     {"frCreateDrawFontPacket_20550848", &frCreateDrawFontPacketHook, nullptr},
     {"aDrawBoxG", &aDrawBoxGHook, nullptr},
     {"fclDrawSpriteCore", &fclDrawSpriteCoreHook, nullptr},
     {"cmpDrawTriG", &cmpDrawTriGHook, nullptr},
-    {"cmpDrawBoxG", &cmpDrawBoxGHook, nullptr},
+    // Traced, not drawn: its full-screen gouraud wash and row boxes are real draws, but drawing
+    // them costs 6.2 points on the menu. See TODO M2.
+    {"cmpDrawBoxG", &traceEntryHook, nullptr},
     {"dds3DrawFade", &dds3DrawFadeHook, nullptr},
     {"dds3LinkZClearDrawTag", &dds3LinkZClearDrawTagHook, nullptr},
     {"aDrawBoxF", &aDrawBoxFHook, nullptr},
@@ -944,9 +1183,6 @@ constexpr Entry kGameEntries[] = {
     {"cmpDrawSprite", &traceEntryHook, nullptr},
     {"fldDrawFrameSprite", &fldDrawFrameSpriteHook, nullptr},
     {"fldDrawFrameSpriteAlpha", &fldDrawFrameSpriteAlphaHook, nullptr},
-    {"cmpDrawBoxG", &traceEntryHook, nullptr},
-    {"cmpDrawSprite", &traceEntryHook, nullptr},
-    {"fclDrawSpriteCore", &traceEntryHook, nullptr},
     {"fclDrawSpriteAngleCore", &traceEntryHook, nullptr},
     {"itfMiscDrawSpritePrim", &traceEntryHook, nullptr},
     {"itfMiscDrawSpritePrim2", &traceEntryHook, nullptr},
@@ -962,9 +1198,11 @@ constexpr Entry kGameEntries[] = {
 // The frame a draw call lands in, opened by whichever call arrives first: the engine builds its
 // content across several tasks before dds3DrawProcess submits it, so no call reliably precedes all.
 Frame* FrameBuilder::getFrame() {
-    if (!mBuilding && mRenderer) {
+    if (!mBuilding && mRenderer && !mAcquireFailed) {
         mBuilding = mRenderer->beginFrame();
         if (mBuilding && mTextures) mTextures->drainRecovered(*mBuilding);
+        // Every producer asks for the frame, so retrying here is hundreds of waits for one frame.
+        mAcquireFailed = mBuilding == nullptr;
     }
     return mBuilding;
 }
@@ -983,7 +1221,11 @@ void FrameBuilder::submit() {
 
 void FrameBuilder::end() {
     if (!mSubmitted && (mBuilding || !mPending.empty())) mDiscardedFrames++;
+    if (mBuilding && mRenderer) mRenderer->abandon(mBuilding);
     mPending.clear();
+    mAcquireFailed = false;
+    mGeneratedLinks.clear();
+    mGenerating = false;
     mBuilding = nullptr;
 }
 
@@ -1008,6 +1250,7 @@ void installHooks(HookContext& context, Trace& trace, RenderThread* render) {
 
     usize installed = 0;
     usize unnamed = 0;
+    std::unordered_map<u32, const char*> seen;
     const auto install = [&](const Entry& entry) {
         const u32 address = pcsx2hook_find_symbol(runtime, entry.name);
         if (!address) {
@@ -1019,6 +1262,12 @@ void installHooks(HookContext& context, Trace& trace, RenderThread* render) {
             log.error("{} at 0x{:08X}: {}", entry.name, address,
                 pcsx2hook_get_last_error(runtime));
             return;
+        }
+        // A second entry for an address the table already covers replaces the first, which is how
+        // a producer quietly became a bare trace hook and its draws stopped reaching the frame.
+        if (!seen.emplace(address, entry.name).second) {
+            log.error("{} and {} are the same address {:08X}: the later hook wins",
+                seen[address], entry.name, address);
         }
         installed++;
     };

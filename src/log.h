@@ -5,6 +5,8 @@
 #include <string_view>
 #include <utility>
 
+#include "types.h"
+
 namespace sdfhook {
 
 enum class LogLevel { Trace, Debug, Info, Warn, Error, Off };
@@ -50,7 +52,7 @@ public:
     /// A finished JSONL row, written without a level prefix so the stream stays machine readable.
     void dump(std::string_view row) const;
 
-    bool isEnabled(LogLevel level) const { return level >= mLevel; }
+    bool isEnabled(LogLevel level) const { return level >= getLevel(); }
 
 private:
     template <typename... Args>
@@ -61,12 +63,18 @@ private:
 
     void emit(LogLevel level, const std::string& message) const;
 
+    /// Resolved on use rather than at construction: every channel is a file-scope static, so it is
+    /// built before main can read SDF_LOG, and a level taken in the constructor is always the
+    /// default. That silently discarded every trace and debug call in the codebase.
+    LogLevel getLevel() const;
+
     std::string mName;
-    LogLevel mLevel = LogLevel::Info;
+    mutable LogLevel mLevel = LogLevel::Info;
+    mutable u32 mGeneration = 0;
 };
 
-/// One level for everything ("trace"), or per channel ("model=trace,render=warn"). Call before any
-/// channel is constructed: a channel takes its level at construction.
+/// One level for everything ("trace"), or per channel ("model=trace,render=warn"). Takes effect on
+/// channels already constructed, which is all of them.
 void configureLogging(std::string_view spec);
 
 }  // namespace sdfhook

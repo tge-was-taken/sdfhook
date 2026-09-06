@@ -45,6 +45,9 @@ struct Config {
     bool describeFrame = false;
     bool debugDepth = false;
 
+    /// Paints each mesh with its shaded normal, so a flat character can be told from a flat light.
+    bool debugNormal = false;
+
     // Which parts of a frame to draw, for isolating one against the reference.
     usize meshFirst = 0;
     usize meshLast = ~usize(0);
@@ -54,7 +57,36 @@ struct Config {
     bool noFeedback = false;
     bool noFog = false;
     bool noSpecular = false;
-    bool noDirectBox = false;
+    /// Draws aDrawBoxF_Direct's line pairs. Off because the GS rasterizes no line primitive in any
+    /// sample scene, so whatever it files is never transmitted.
+    bool drawDirectBox = false;
+
+    /// Leaves every mesh on its ordering table's default GS state instead of the one its packet
+    /// transmitted under.
+    bool noTransmitState = false;
+
+    /// The ordering table below which a 2D draw is behind the 3D. The engine files its 2D tables
+    /// either side of the model ones and transmits them in index order.
+    s32 spriteOtCut = 0;
+
+    /// Captures a scene at this frame without a keypress, for scripting and for checking that the
+    /// savestate a capture writes can actually be resumed.
+    u32 captureFrame = 0;
+
+    /// Where F9 writes a captured scene: a savestate beside the two shots it should reproduce.
+    std::string captureDir = "captures";
+
+    /// Draws the camera-facing quads dds3BillboardLinkOt batches, which is what the battle specters
+    /// are.
+    bool noBillboards = false;
+
+    /// Draws fldDrawPoly3's gouraud triangles. Off: they decode and land on screen but do not
+    /// rasterise, and an inert pass should not look enabled.
+    bool poly = false;
+
+    /// Draws meshes whose packet the engine generated and then linked nothing for. The hardware
+    /// never drew them.
+    bool drawUnlinkedMeshes = true;
     bool recoverTexturesFromGs = true;
 
     /// 'b' keeps back faces out, 'f' flips which side that is, 'n' draws both.

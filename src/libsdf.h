@@ -391,6 +391,22 @@ SDF_STATIC_ASSERT_OFFSETOF(sdfShape_t, packetPtr, 0x94);
 
 using sdfMatPtr_t = guest_ptr<struct sdfMat_t>;
 using sdfTexHandlePtr_t = guest_ptr<struct sdfTexHandle_t>;
+using sdfGsMemSlicePtr_t = guest_ptr<struct sdfGsMemSlice_t>;
+
+/// One allocation in GS memory, in the linked list sdfGsMemAllocFromHead keeps. A frame buffer and
+/// a texture are the same kind of slice, which is why a texture's region can end up under one.
+struct sdfGsMemSlice_t {
+    sdfGsMemSlicePtr_t prev;
+    sdfGsMemSlicePtr_t next;
+    s32 type;
+    u32 addr;
+    s32 size;
+    s16 w;
+    s16 h;
+    u32 pixelFormat;
+};
+
+static_assert(sizeof(sdfGsMemSlice_t) == 28);
 
 struct sdfMat_t {
     u32 id;
@@ -470,6 +486,69 @@ constexpr u16 sdfCoreMorphIndex(const sdfCorePacket_t& p) { return u16(p.header.
 
 // attrBits is the GS PRIM word in its low bits, with the engine's own flags above it. The three
 // pass bits are what corePktEmitAllPasses and corePktOpenAndEmit branch on.
+using sdfBillBoardBatchPtr_t = guest_ptr<struct sdfBillBoardBatch_t>;
+using dds3BillResourcePtr_t = guest_ptr<struct dds3BillResource_t>;
+
+/// The resource a billboard batch draws from: its texture, its quad size and the ordering tag the
+/// batch is linked into.
+struct dds3BillResource_t {
+    sdfTexHandlePtr_t hTex;
+    u16 type;
+    u16 pad;
+    u32 count;
+    sdfVector2_t uv[2];
+    f32 cx;
+    f32 cy;
+    f32 width;
+    f32 height;
+};
+
+using dds3BillboardNodePtr_t = guest_ptr<struct dds3BillboardNode_t>;
+
+/// One entry of the list dds3BillboardLinkOt walks. Only the four fields it reads are modelled:
+/// the tag it links into is `tag[otIndex]`, and the batch is what sdfBillBoardMakeN is handed.
+struct dds3BillboardNode_t {
+    u8 unknown[44];
+    u32 tag[4];
+    u16 otIndex;
+    u16 pad;
+    u32 pad2;
+    sdfBillBoardBatchPtr_t batch;
+    dds3BillboardNodePtr_t next;
+};
+SDF_STATIC_ASSERT_OFFSETOF(dds3BillboardNode_t, tag, 44);
+SDF_STATIC_ASSERT_OFFSETOF(dds3BillboardNode_t, otIndex, 60);
+SDF_STATIC_ASSERT_OFFSETOF(dds3BillboardNode_t, batch, 68);
+SDF_STATIC_ASSERT_OFFSETOF(dds3BillboardNode_t, next, 72);
+
+/// A quad's texture coordinates, one pair per corner in 12.4 fixed point.
+struct sdfBillBoardUv_t {
+    struct {
+        s16 u;
+        s16 v;
+    } corner[4];
+};
+
+/// A quad's corner offsets from its centre, which dds3BillboardTagLink builds from the resource's
+/// width, height and centre and then rotates: the pair is a rotated basis rather than a box.
+struct sdfBillBoardQuad_t {
+    sdfVector2_t corner[4];
+};
+
+/// One batch of camera-facing quads, filled a quad at a time by dds3BillboardTagLink and handed to
+/// sdfBillBoardMakeN when it is full. The arrays are one allocation, which is why that call takes
+/// four pointers 240, 300 and 540 bytes apart.
+/// @note SLUS-20911, filled at 0x0015B320
+struct sdfBillBoardBatch_t {
+    sdfVector4_t centre[15];
+    u32 colour[15];
+    sdfBillBoardUv_t uv[15];
+    sdfBillBoardQuad_t offset[15];
+    s32 count;
+};
+
+SDF_STATIC_ASSERT_SIZE(sdfBillBoardBatch_t, 1024);
+
 enum sdfCoreAttrBit_t : u16 {
     sdfCoreAttrRefMapPass = 0x0001,
     sdfCoreAttrGouraud = 0x0008,
@@ -512,7 +591,16 @@ enum sdfCorePacketType_t : u8 {
 struct sdfGsState_t {
     u64 alpha = 0x44;
     u64 test = 0x717FB;
+
+    /// FRAME's write mask, one bit per masked bit of the pixel. The frame-mask pair sets it to
+    /// 0x00FFFFFF so a pass writes alpha and no colour, which is how the game builds its bloom mask.
+    u64 frameMask = 0;
 };
+
+constexpr u64 sdfFrameMask(u64 frame) { return (frame >> 32) & 0xFFFFFFFF; }
+
+/// What sdfGrSetFrameMaskRGB writes: colour masked, alpha writable.
+constexpr u64 sdfFrameMaskRgb = 0x00FFFFFF;
 
 /// sdfModelDrawEnvLinkOt links one env set per ordering table, 96 bytes apart, and puts the
 /// terminator at aEnv[19].set[1], which is 96 * 4.
@@ -531,6 +619,8 @@ constexpr sdfGsState_t sdfGsStateForOt(u32 otIndex) {
 enum sdfGsRegisterAddr_t : u32 {
     sdfGsAddrAlpha1 = 0x42,
     sdfGsAddrAlpha2 = 0x43,
+    sdfGsAddrFrame1 = 0x4C,
+    sdfGsAddrFrame2 = 0x4D,
     sdfGsAddrTest1 = 0x47,
     sdfGsAddrTest2 = 0x48,
 };
@@ -549,6 +639,10 @@ constexpr u32 sdfTestAte(u64 r) { return u32(r & 1); }
 constexpr u32 sdfTestAtst(u64 r) { return u32((r >> 1) & 7); }
 constexpr u32 sdfTestAref(u64 r) { return u32((r >> 4) & 0xFF); }
 constexpr u32 sdfTestAfail(u64 r) { return u32((r >> 12) & 3); }
+constexpr u32 sdfTestZte(u64 r) { return u32((r >> 16) & 1); }
+constexpr u32 sdfTestZtst(u64 r) { return u32((r >> 17) & 3); }
+
+enum sdfZtst_t : u32 { sdfZtstNever = 0, sdfZtstAlways = 1, sdfZtstGequal = 2, sdfZtstGreater = 3 };
 enum sdfAfail_t : u32 { sdfAfailKeep = 0, sdfAfailFbOnly = 1, sdfAfailZbOnly = 2, sdfAfailRgbOnly = 3 };
 
 // The GS registers the material packet carries, which sdfMatUpdatePacketBasic copies out of the
@@ -876,8 +970,8 @@ struct sdfTexHandle_t {
     sdfTexHandlePtr_t origin;
     s16 width;
     s16 height;
-    sdfVoidPtr_t pixelGsHandle;
-    sdfVoidPtr_t clutGsHandle;
+    sdfGsMemSlicePtr_t pixelGsHandle;
+    sdfGsMemSlicePtr_t clutGsHandle;
     u8 numOfCLUT;
     u8 CLUTFormat;
     u8 pixelFormat;

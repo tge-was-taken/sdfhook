@@ -35,7 +35,8 @@ public:
     /// feedback a second time over a frame the game never produced, compounding the tap.
     void represent();
     // Top-down RGB, which is the order an image file wants and the reverse of GL's.
-    std::vector<u8> readPixels(int width, int height) const;
+    /// The frame just presented, at the size it was rendered, whatever the window is showing.
+    std::vector<u8> readPixels(int* width, int* height) const;
 
     const Bounds& getBounds() const { return mBounds; }
 
@@ -55,7 +56,9 @@ private:
 
     /// 2D and 3D share one ordering table, so sprites submitted before a mesh are drawn before it:
     /// a character's shadow quads go down first and he covers them.
-    void drawSprites(const Frame& frame, u32 fromSequence, u32 toSequence);
+    /// Sprites whose ordering table falls in [fromOt, toOt). The 2D tables transmit in index
+    /// order, so the ones the engine files before the model tables belong behind the meshes.
+    void drawSprites(const Frame& frame, s32 fromOt, s32 toOt);
 
     /// Null when nothing was uploaded for the handle.
     const Texture* findTexture(TexHandle handle) const;

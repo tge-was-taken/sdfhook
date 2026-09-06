@@ -14,6 +14,7 @@ add_executable(sdfhook
 	log.cpp
 	gif.cpp
 	model.cpp
+	image.cpp
 	texture.cpp
 	unsupported.cpp
 	hooks.cpp

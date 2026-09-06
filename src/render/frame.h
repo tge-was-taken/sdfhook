@@ -1,5 +1,6 @@
 #pragma once
 
+#include <condition_variable>
 #include <mutex>
 #include <vector>
 
@@ -56,6 +57,16 @@ struct DrawSprite {
     /// Where this draw sat in submission order. 2D and 3D share one ordering table, so a shadow
     /// quad submitted before a character has to be drawn before him rather than after every mesh.
     u32 sequence = 0;
+
+    /// How the mesh is found in the frame's transmit chain, so the GS state it ran under can be
+    /// settled. A world-geometry stream knows the chain address the engine links; a generated
+    /// packet does not, since the engine links its own output, so it is found by position among the
+    /// generated links instead. One link can produce several meshes.
+    /// False when the engine generated this mesh's packet and linked nothing, so the hardware never
+    /// drew it.
+    bool linked = true;
+    u32 linkAddr = 0;
+    u32 linkIndex = 0xFFFFFFFF;
     TexHandle texHandle;
     GsAlpha alpha;
 
@@ -119,6 +130,14 @@ struct MeshLighting {
     f32 colour[kParallelLights][3];
     f32 base[3];
 
+    /// The light packet's colour 3, which VU1 pairs with the material's ambient to form the sum's
+    /// base while colorBase is what light 0 reaches.
+    f32 ambientColour[3];
+
+    /// Its colour 4, which the packet stores as colorBase plus colour 3. A mesh with no normals
+    /// takes this outright rather than running the sum.
+    f32 fullColour[3];
+
     /// The axis corePktEmitRefMapPass dots the normal against, from the light packet's own matrix.
     f32 specularAxis[3];
 };
@@ -146,6 +165,16 @@ struct DrawMesh {
     /// The root's own depth bias, which sdfModelLinkOt sends to VU1 alongside the transform.
     f32 zBias = 0.0f;
     u32 sequence = 0;
+
+    /// How the mesh is found in the frame's transmit chain, so the GS state it ran under can be
+    /// settled. A world-geometry stream knows the chain address the engine links; a generated
+    /// packet does not, since the engine links its own output, so it is found by position among the
+    /// generated links instead. One link can produce several meshes.
+    /// False when the engine generated this mesh's packet and linked nothing, so the hardware never
+    /// drew it.
+    bool linked = true;
+    u32 linkAddr = 0;
+    u32 linkIndex = 0xFFFFFFFF;
     u16 attrBits = 0;
     u16 matFlags = 0;
     u8 matDuty = 0;
@@ -219,6 +248,7 @@ struct Frame {
     std::vector<DrawMesh> meshes;
     std::vector<TextureUpload> textureUploads;
 
+
     /// Adding through these is what keeps the two lists mergeable: the sequence is never the
     /// caller's to remember.
     void addSprite(DrawSprite sprite) {
@@ -240,11 +270,25 @@ struct Frame {
     }
 };
 
-// The guest never waits: blocking the thread that dispatches guest calls would stall the emulator.
+/// Every frame the game produces is drawn, in order. Skipping to the newest loses the frame
+/// feedback tap, which samples the frame before it, so the same savestate scored differently
+/// depending on how many frames the render thread happened to keep up with.
 class FrameRing {
 public:
+    /// Whether a guest that has outrun the renderer drops its oldest frame or waits for it. Playing
+    /// wants liveness and a dropped frame costs a slightly stale feedback tap; scoring wants every
+    /// frame and can afford to stall, since nothing is watching.
+    void setDropWhenBehind(bool drop) { mDropWhenBehind = drop; }
+
+    /// Null when the ring is full and dropping is off, which the caller must treat as a frame it
+    /// does not build rather than as a reason to ask again.
     Frame* acquireBuild();
     void publish(Frame* frame);
+
+    /// Returns a frame that was acquired and never published. Without it a discarded frame keeps
+    /// its slot for the life of the run, and three of them exhaust the ring: nothing can be built
+    /// after that, so the picture stops while the guest carries on.
+    void abandon(Frame* frame);
     Frame* takePending();
 
 private:
@@ -254,6 +298,8 @@ private:
     Frame mFrames[kSlots];
     Slot mState[kSlots] = {Slot::Free, Slot::Free, Slot::Free};
     std::mutex mMutex;
+    std::condition_variable mFreed;
+    bool mDropWhenBehind = false;
     u64 mNextIndex = 1;
 };
 

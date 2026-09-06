@@ -21,14 +21,14 @@ class Trace;
 class RenderThread;
 
 // Read only once the frame stops growing: a packet is linked before its contents are written.
-struct LinkedPacket {
-    u32 addr;
-    u32 caller;
+/// Which entry point linked a packet. sdfModelLinkOt uses all three, so nothing else tells a node's
+/// transform packet from the geometry beside it, and the world geometry arrives only as a Call.
+enum class LinkKind : u8 { Packet, Ref, Call };
 
-    /// sdfDrawTagLinkRef links a node's transform and state packet, sdfDrawTagLink the geometry
-    /// sdfCorePacketGen built. Both come from sdfModelLinkOt, so only this tells them apart, and
-    /// the geometry ones arrive in the traversal order our own walk produced meshes in.
-    bool isRef = false;
+struct LinkedPacket {
+    u32 addr = 0;
+    u32 caller = 0;
+    LinkKind kind = LinkKind::Packet;
 };
 
 // o32: the first four arguments are in registers, the rest on the stack.
@@ -135,8 +135,26 @@ public:
     }
 
     Frame* getFrame();
-    void link(const LinkedPacket& packet) { mPending.push_back(packet); }
+
+    void link(const LinkedPacket& packet) {
+        // The engine links a generated packet immediately after generating it, and that is the only
+        // thing tying our nth generated packet to the address the engine linked: it builds its own
+        // output buffer, so nothing about the source packet names it.
+        if (mGenerating && packet.kind == LinkKind::Packet) {
+            mGeneratedLinks.back() = packet.addr;
+            mGenerating = false;
+        }
+        mPending.push_back(packet);
+    }
+
+    /// Closes any generated packet that linked nothing, so the nth entry stays the nth generation.
+    void beginGenerated() {
+        mGeneratedLinks.push_back(0);
+        mGenerating = true;
+    }
+
     std::vector<LinkedPacket>& getPackets() { return mPending; }
+    const std::vector<u32>& getGeneratedLinks() const { return mGeneratedLinks; }
 
     void begin() { mSubmitted = false; }
     void submit();
@@ -146,6 +164,9 @@ public:
     u64 getDiscardedFrames() const { return mDiscardedFrames; }
 
 private:
+    bool mAcquireFailed = false;
+    std::vector<u32> mGeneratedLinks;
+    bool mGenerating = false;
     RenderThread* mRenderer = nullptr;
     TextureCache* mTextures = nullptr;
     Trace* mTrace = nullptr;
@@ -163,6 +184,11 @@ struct Coverage {
     u64 apiDraws = 0;
     // Vertices the GS will draw from a render function nothing here submits natively, by producer.
     std::map<std::string, u64> unhandledVerts;
+
+    /// Packets from an unhandled producer that carry no GIF geometry, which is what a billboard or
+    /// anything else VU1 builds looks like from here. Counting only vertices hides them completely:
+    /// the specters' producer linked 998 packets a run and ranked nowhere.
+    std::map<std::string, u64> unhandledPackets;
 
     /// Producers that named a texture the cache had nothing for.
     std::map<std::string, u64> unresolvedTextures;

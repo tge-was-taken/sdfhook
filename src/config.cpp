@@ -25,13 +25,13 @@ Config Config::fromEnvironment() {
     config.symbols = text("SDF_SYMBOLS");
     config.logSpec = text("SDF_LOG");
     config.tracePath = text("SDF_TRACE", "dumps/trace.jsonl");
-    config.shotPath = text("SDF_SHOT", "dumps/shot.ppm");
+    config.shotPath = text("SDF_SHOT", "dumps/shot.png");
     config.nativeShotPath = text("SDF_NATIVE_SHOT");
     config.dumpTextures = text("SDF_DUMP_TEXTURES");
     config.statePath = text("PCSX2HOOK_STATE");
     config.frames = text("SDF_FRAMES");
     config.shotFrame = number("SDF_SHOT_FRAME", 0);
-    config.scale = int(number("SDF_SCALE", 2));
+    config.scale = int(number("SDF_SCALE", 1));
     config.window = flag("SDF_WINDOW");
     config.gsTrace = flag("PCSX2HOOK_GS_TRACE");
     config.vuTrace = flag("PCSX2HOOK_VU_TRACE");
@@ -49,6 +49,7 @@ Config Config::fromEnvironment() {
     config.dumpRecover = flag("SDF_DUMP_RECOVER");
     config.describeFrame = flag("SDF_DESCRIBE");
     config.debugDepth = flag("SDF_DEBUG_DEPTH");
+    config.debugNormal = flag("SDF_DEBUG_NORMAL");
 
     // SDF_MESH_ONLY names one mesh; SDF_MESH_UPTO names a prefix.
     if (const char* only = std::getenv("SDF_MESH_ONLY")) {
@@ -63,7 +64,14 @@ Config Config::fromEnvironment() {
     config.noFeedback = flag("SDF_NO_FEEDBACK");
     config.noFog = flag("SDF_NO_FOG");
     config.noSpecular = flag("SDF_NO_SPECULAR");
-    config.noDirectBox = flag("SDF_NO_DIRECT_BOX");
+    config.drawDirectBox = flag("SDF_DRAW_DIRECT_BOX");
+    config.noBillboards = flag("SDF_NO_BILLBOARDS");
+    config.poly = flag("SDF_POLY");
+    config.noTransmitState = flag("SDF_NO_TRANSMIT_STATE");
+    config.drawUnlinkedMeshes = !flag("SDF_NO_UNLINKED_MESHES");
+    config.captureDir = text("SDF_CAPTURE_DIR", "captures");
+    config.captureFrame = u32(number("SDF_CAPTURE_FRAME", 0));
+    config.spriteOtCut = s32(number("SDF_SPRITE_OT_CUT", 0));
     config.recoverTexturesFromGs = !flag("SDF_NO_GS_RECOVER");
 
     config.cull = text("SDF_CULL", "b")[0];

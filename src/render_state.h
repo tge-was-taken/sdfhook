@@ -10,6 +10,10 @@ struct RenderState {
     GsAlpha alpha = GsAlpha::Blend;  // what rsetAlpha defaults to
     u32 test = 0;
 
+    /// FRAME's write mask while the frame-mask pair is open: the silhouette pass draws the model
+    /// again with RGB masked, to lay its shape into the alpha the bloom reads.
+    u64 frameMask = 0;
+
     /// What rsetOtOfs last set: which ordering table a 2D draw goes into, and so its draw order.
     s32 otOffset = 0;
 

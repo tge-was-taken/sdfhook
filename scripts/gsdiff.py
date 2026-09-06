@@ -69,8 +69,11 @@ def main():
         return 1
     ours, gs = load(args)
 
-    matchedState = matchedBox = unmatched = 0
-    mismatch = collections.Counter()
+    matched = collections.Counter()
+    agreed = collections.Counter()
+    unmatched = 0
+    mismatch = collections.defaultdict(collections.Counter)
+    fields = collections.defaultdict(collections.Counter)
     missing = collections.Counter()
     for frame in sorted(set(ours) & set(gs)):
         pool = ours[frame]
@@ -92,26 +95,43 @@ def main():
                 missing[show(batch)] += 1
                 unmatched += 1
                 continue
-            matchedBox += 1
+
+            # Bounds alone pair plenty of world geometry with a neighbour that merely covers the
+            # same pixels. A pair that also agrees on the texture is the source draw; the rest are
+            # reported apart, because counting them as state diffs invents modelling bugs. Measured:
+            # every psm, tcc and ate difference on the field scene is in the untrusted half.
+            trust = 'texture' if best['tbp'] and best['tbp'] == batch['tbp'] else 'bounds'
+            matched[trust] += 1
             if state(best) == state(batch):
-                matchedState += 1
-            else:
-                diff = tuple(f"{k}: gs={b} ours={o}" for k, b, o
-                             in zip(STATE, state(batch), state(best)) if b != o)
-                mismatch[diff] += 1
+                agreed[trust] += 1
+                continue
+            diff = tuple(f"{k}: gs={b} ours={o}" for k, b, o
+                         in zip(STATE, state(batch), state(best)) if b != o)
+            mismatch[trust][diff] += 1
+            for k, b, o in zip(STATE, state(batch), state(best)):
+                if b != o:
+                    fields[k][trust] += 1
 
-    total = matchedBox + unmatched
-    print(f"GS batches {total}: {matchedBox} matched to a draw, {unmatched} matched nothing")
-    print(f"of the matched, {matchedState} agree on every register, "
-          f"{matchedBox - matchedState} differ\n")
+    total = sum(matched.values()) + unmatched
+    print(f"GS batches {total}: {sum(matched.values())} matched to a draw, "
+          f"{unmatched} matched nothing")
+    for trust in ('texture', 'bounds'):
+        print(f"  paired by {trust:8} {matched[trust]:5}, of which {agreed[trust]} "
+              f"agree on every register")
 
-    print("STATE DIFFS on matched draws, by field set:")
-    for diff, n in mismatch.most_common(15):
+    print("\nFIELDS, on pairs that agree on the texture (the ones worth fixing):")
+    print(f"  {'field':6} {'texture':>8} {'bounds':>8}")
+    for k in sorted(fields, key=lambda k: -fields[k]['texture']):
+        print(f"  {k:6} {fields[k]['texture']:8} {fields[k]['bounds']:8}")
+
+    print("\nSTATE DIFFS on texture-agreeing pairs, by field set:")
+    for diff, n in mismatch['texture'].most_common(12):
         print(f"  x{n:<6} " + ' | '.join(diff))
 
-    print("\nUNMATCHED GS batches (we draw nothing there):")
-    for st, n in missing.most_common(15):
-        print(f"  x{n:<6} {st}")
+    if missing:
+        print("\nUNMATCHED GS batches (we draw nothing there):")
+        for st, n in missing.most_common(10):
+            print(f"  x{n:<6} {st}")
     return 0
 
 

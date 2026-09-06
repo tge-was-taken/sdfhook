@@ -127,7 +127,8 @@ namespace {
 
 /// The GS state a draw should run under, under the same field names pcsx2-hook's GS trace uses, so
 /// the two join and diff field by field rather than through a translation nobody maintains.
-void addGsState(JsonObject& row, u64 tex0, u64 tex1, u64 clamp, u64 alpha, u64 test, u16 attrBits) {
+void addGsState(JsonObject& row, u64 tex0, u64 tex1, u64 clamp, u64 alpha, u64 test, u16 attrBits,
+                u64 frameMask = 0) {
     row.addUint("prim", attrBits & 7)
         .addUint("iip", (attrBits >> 3) & 1)
         .addUint("tme", sdfPrimTme(attrBits))
@@ -163,12 +164,13 @@ void addGsState(JsonObject& row, u64 tex0, u64 tex1, u64 clamp, u64 alpha, u64 t
         .addUint("ate", sdfTestAte(test))
         .addUint("atst", sdfTestAtst(test))
         .addUint("aref", sdfTestAref(test))
-        .addUint("afail", sdfTestAfail(test));
+        .addUint("afail", sdfTestAfail(test))
+        .addHexDigits("fbmsk", frameMask, 8);
 }
 
 }  // namespace
 
-void Trace::onMesh(const DrawMesh& mesh, const Matrix4& screenTm) {
+void Trace::onMesh(const DrawMesh& mesh, const Matrix4& screenTm, u32 frame) {
     const MeshInfluence& first = mesh.vertices[0].influence[0];
     f32 lo[3] = {first.x, first.y, first.z};
     f32 hi[3] = {lo[0], lo[1], lo[2]};
@@ -226,11 +228,11 @@ void Trace::onMesh(const DrawMesh& mesh, const Matrix4& screenTm) {
 
     JsonObject row;
     addGsState(row, mesh.tex0, mesh.tex1, mesh.clamp, mesh.gs.alpha, mesh.gs.test,
-               u16((mesh.attrBits & ~7u) | sdfPrimTriangle));
+               u16((mesh.attrBits & ~7u) | sdfPrimTriangle), mesh.gs.frameMask);
     write(row
               .addString("ev", "mesh")
               .addUint("seq", mSeq++)
-              .addUint("frame", u64(mFrame))
+              .addUint("frame", u64(frame))
               .addUint("type", u64(mesh.packetType))
               .addHexDigits("attrBits", mesh.attrBits, 4)
               .addHexDigits("packetBits", mesh.packetBits, 4)
@@ -238,6 +240,10 @@ void Trace::onMesh(const DrawMesh& mesh, const Matrix4& screenTm) {
               .addUint("tris", u64(mesh.indices.size() / 3))
               .addUint("bones", u64(mesh.bones.size()))
               .addHexDigits("tex", mesh.texHandle.addr, 8)
+              // The second pass samples its own texture, so a coverage check that reads only the
+              // first reports it as never sampled.
+              .addUint("mtex", mesh.multi.on ? 1u : 0u)
+              .addUint("mtbp", u64(sdfDecodeTex0(mesh.multi.tex0).tbp))
               .addReal("x0", lo[0]).addReal("y0", lo[1]).addReal("z0", lo[2])
               .addReal("x1", hi[0]).addReal("y1", hi[1]).addReal("z1", hi[2])
               .addReal("u0", uvLo[0]).addReal("v0", uvLo[1])
@@ -248,6 +254,11 @@ void Trace::onMesh(const DrawMesh& mesh, const Matrix4& screenTm) {
                             u64(mesh.diffuse.r) | (u64(mesh.diffuse.g) << 8) |
                                 (u64(mesh.diffuse.b) << 16) | (u64(mesh.diffuse.a) << 24),
                             8)
+              .addHexDigits("ambient",
+                            u64(mesh.ambient.r) | (u64(mesh.ambient.g) << 8) |
+                                (u64(mesh.ambient.b) << 16) | (u64(mesh.ambient.a) << 24),
+                            8)
+              .addUint("ot", mesh.otIndex)
               .addReal("sortZ", mesh.sortZ)
               .addReal("w0", clipLo)
               .addReal("w1", clipHi)

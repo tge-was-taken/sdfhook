@@ -7,6 +7,9 @@ cd "$(dirname "$0")/.."
 : "${SDF_BIOS:=$HOME/projects/p3fes-pc-poc/assets/bios.bin}"
 : "${SDF_ISO:=/mnt/e/Projects/PS2/Games/Shin Megami Tensei - Nocturne (USA).iso}"
 : "${SDF_FRAMES:=240}"
+# A savestate that cannot resume spins forever, and a sweep that waits on one never reaches the
+# scenes after it. 240 frames takes well under a minute.
+: "${SDF_TIMEOUT:=180}"
 : "${SDF_SHOT_FRAME:=230}"
 : "${OUT:=dumps/refdiff}"
 export SDF_BIOS SDF_FRAMES SDF_SHOT_FRAME SDF_SYMBOLS=assets SDF_SCALE=1
@@ -23,11 +26,11 @@ if [ ${#scenes[@]} -eq 0 ]; then
 fi
 
 for scene in "${scenes[@]}"; do
-	SDF_SHOT="$OUT/$scene-emu.ppm" \
-	SDF_NATIVE_SHOT="$OUT/$scene-native.ppm" \
+	SDF_SHOT="$OUT/$scene-emu.png" \
+	SDF_NATIVE_SHOT="$OUT/$scene-native.png" \
 	SDF_TRACE="$OUT/$scene.jsonl" \
 	PCSX2HOOK_STATE="states/$scene.p2s" \
-		./build/bin/sdfhook "$SDF_ISO" > "$OUT/$scene.log" 2>&1
+		timeout "$SDF_TIMEOUT" ./build/bin/sdfhook "$SDF_ISO" > "$OUT/$scene.log" 2>&1
 	printf '%-34s ' "$scene"
-	python3 "$REFDIFF" "$OUT/$scene-emu.ppm" "$OUT/$scene-native.ppm" 2>&1 | grep "mean abs" || echo "no 3D"
+	python3 "$REFDIFF" "$OUT/$scene-emu.png" "$OUT/$scene-native.png" 2>&1 | grep "mean abs" || echo "no 3D"
 done

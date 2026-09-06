@@ -35,7 +35,7 @@ SDF_BIOS=<bios.bin> SDF_TRACE=dumps/sdf_trace.jsonl SDF_FRAMES=400 \
 | `SDF_SHOT_FRAME` | frame to capture at |
 | `SDF_SHOT` | emulator framebuffer, PPM |
 | `SDF_NATIVE_SHOT` | the native render, PPM |
-| `SDF_SCALE` | window size as a multiple of the guest's 512x448; 1 to compare against the reference |
+| `SDF_SCALE` | render size as a multiple of the guest's 512x448, default 1. Anything above it is for looking at: a capture is only comparable against the emulated frame at 1 |
 | `SDF_LOG` | log levels, one for everything (`trace`) or per channel (`model=trace,render=warn`) |
 | `SDF_DUMP_TEXTURES` | directory for decoded textures as PNG; GS-recovered ones are named `gs_*` |
 | `SDF_NO_GS_RECOVER` | stop reading textures back out of GS memory when the game registered none |

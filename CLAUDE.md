@@ -331,6 +331,18 @@ outright, so the projection can be done natively instead of read back. Both need
 their own engine-level entry points (`sdfCorePacketGen`, `sdfBillBoardMakeN` and the layers above),
 which is where the semantics still exist. That is the next boundary to hook, not a VU1 interpreter.
 
+## Reimplementing a function: `.claude/skills/reimplement`
+
+Enumerate every branch, field, global, call and cast **before** writing code, and mark each as
+modelled, deliberately not modelled, or not yet. Read the disassembly wherever the decompilation
+shows `cop2` or `__asm`, since COP2 bodies vanish entirely: `corePktApplyFaceDivColor` reads as an
+empty loop and is a two-colour ramp.
+
+**"Inert", "zero" and "unused" are measurements, never adjectives.** The face-division check read
+`faceDivBias`, found 0, and a comment then claimed face division was inert; `sdfModelTempPacketLinkOt`
+reads `faceDivSoften`, whose global default is 7. Report at the site that reads the field, or the
+check never fires.
+
 ## Correct the database when you prove it wrong
 
 Much of the IDB is inferred rather than known, and an inferred fact that contradicts the code is
@@ -388,6 +400,22 @@ missing batches on a scene where every one of the 1848 matches.
 
 Never compare our triangle count against the GS's. Ours is what we submit, the GS's is what survived
 VU1; the GPU culls ours after the fact, so the two are not the same quantity.
+
+### The producer set is closed, and the draw-tag family defines it
+
+Nothing reaches the GS without linking a draw tag, and there are exactly five entry points:
+`sdfDrawTagLink`, `sdfDrawTagLink2`, `sdfDrawTagLinkRef`, `sdfDrawTagLinkRefGif` and
+`sdfDrawTagLinkCall`. Hook all five, resolve `$ra`, and **the set of callers is the complete set of
+producers**: a function missing from that list cannot draw. That is the worklist, and it is finite.
+
+Rank it by packets, not by vertices. A producer whose geometry VU1 builds carries none, so a ranking
+by vertices reports an empty list while thousands of packets go undrawn: `ooyTestPoly3` at 25596
+packets, `fldSdwDraw` at 14962 and the billboard path at 2010 all read as nothing. Pure A+D register
+writes are excluded, since a state setter legitimately draws nothing and `applyGsRegisterWrites`
+already tells them apart.
+
+This is also why the packet level is not an option for these: their geometry only exists after VU1
+runs, so there is nothing to read at link time. The caller is the only place the draw is stated.
 
 ### What is left, ranked
 
@@ -550,6 +578,111 @@ buffer with `refdiff.py` from pcsx2-hook. **1:1 is the point**: `SDF_SCALE=1` ma
 comparable, and anything larger is for looking at. Judging a render by eye is what let a
 transparent panel writing depth pass for a depth-formula bug through a dozen runs.
 
+**One entry per address in the hook table.** `installHooks` installs in order and a second entry for
+the same address replaces the first, so a producer listed once with its real handler and again with a
+bare `traceEntryHook` ends up traced and never drawn. `fclDrawSpriteCore` and `cmpDrawBoxG` were both
+in that state; restoring the first took menu main from 30.02 to 13.56. A collision is now reported as
+an error, and a producer that also needs tracing takes the post slot rather than a second row.
+
+**The material's alpha is the vertex alpha.** VU1 writes it, and the GS trace confirms it exactly: a
+scene's additive batches carry the alphas its materials hold. `gsRgb()` takes r, g and b, so passing
+a material colour through it silently drops the one channel that decides how much of an additive draw
+lands. That was worth 48 points on the battle scene.
+
+**Draw every frame the game produces, in order.** Skipping to the newest pending frame is a
+correctness bug rather than a latency tradeoff, because `fldDrawFrameSprite` samples the frame
+before it: the same savestate scored 10.37 or 11.00 depending on whether the render thread had kept
+up, and two scenes sat permanently in their bad mode (battle 174 against 67, menu loading 30 against
+5). The shot is taken the same way: the emulator requests the native one and waits for it before
+writing the emulated one, or the two are of different frames. Two full sweeps are now byte
+identical, and a score that moves on its own means this broke again.
+
+**A producer whose geometry VU1 builds contributes no GIF vertices, so a ranking by vertices cannot
+see it.** The `[todo]` list attributes vertices at `sdfDrawTagLink` and ranks by them, which made the
+battle scene report **nothing at all missing** while the specters' producer linked 19116 packets a run
+and the billboard path another 992. Packets that yield no geometry are now ranked separately, minus
+the ones that are pure A+D register writes, since a state setter legitimately draws nothing and
+`applyGsRegisterWrites` already knows the difference. An empty vertex ranking means "no GIF producer
+is missing", never "nothing is missing".
+
+**Do the alpha test in the GS's own integer units.** AREF 128 against an alpha normalised to exactly
+1.0 is a knife-edge: `(128/255) * (255/128)` lands either side of 1.0 per texel in float32, so the
+fragments that write depth are chosen at random and everything drawn over them afterwards comes out
+speckled. The protagonist rendered as a dithered ghost with only his tattoo showing. Quantise the way
+the hardware does, `floor(min(a * 128, 255) + 0.5)` against the raw AREF, and it is solid. Worth 0.9
+on the field scene, and it is why "missing meshes" looked like a geometry problem.
+
+**ZTST is not decoration.** The GS compares a z where larger is nearer, so its GEQUAL is GL's LEQUAL,
+and every 3D batch in the trace runs GEQUAL. Forcing GL_LESS throws away a decal that sits exactly on
+the surface it decorates.
+
+**A debug switch that changes two things at once tests nothing.** `SDF_CULL=f` flipped `glCullFace`
+*and* `glFrontFace`, which cancel out, so it scored identically to the default and looked like
+evidence that the winding was right. It is right, but only the fixed switch says so: inverting the
+winding alone scores 38.4 against 11.1.
+
+**Transmit order is the DMA chain, not the link order and not the ordering tables.** `sdfGrDrawFrame`
+sends `*(u32*)(tag + 4) & 0x0FFFFFFF` down channel 1, and `sdfGrReqDraw` is handed that tag before we
+submit, so walking it as a source chain and replaying the A+D writes gives the GS state every packet
+actually ran under. It finds 654 of 654 linked packets a frame, where walking each ordering table's
+own `tagHead` reached two thirds. A mesh is joined to it by address for world geometry
+(`sdfDrawTagLinkCall`'s argument) and, for a generated packet, by the `sdfDrawTagLink` that follows
+its `sdfCorePacketGen`, since the engine links its own output buffer and the source packet names
+nothing. **The engine generates and links before `dds3DrawProcess` opens the frame**, so a per-frame
+inventory has to reset at frame end or it is cleared between the two.
+
+**A frame acquired is a frame that must be returned.** `FrameBuilder::end()` dropped its pointer
+without telling the `FrameRing`, so every frame built and not submitted kept its slot for the life of
+the run. Three of those exhaust the ring: `acquireBuild` then fails forever, nothing is published, and
+the render thread re-presents its last frame while the guest runs on at full speed. It reads as a
+renderer freeze and is a leak. It also cost `menu_loading_file_1` 2.2 points without ever showing as
+a discarded frame.
+
+**Never free a GPU resource at the engine's free.** `sdfTexFree` says the guest is done with a
+handle, not that nothing is drawing it: a `sdfTexDup` copy outlives its source, and a frame already
+submitted still references it. Forget the cache entry so the address can be registered again, and
+replace the GL object at its next upload, where the replacement is in hand and no draw is in flight.
+Deleting at the free pulled textures out from under live draws.
+
+**A run with a window is a different instrument from a scored run, and needs the opposite defaults.**
+Scoring wants every frame and can stall the guest to get one, and runs unthrottled because nothing is
+watching. Playing wants liveness, so it drops the oldest frame instead of waiting, and runs at 1x
+(`pcsx2hook_set_speed_limit`) or the guest outruns a vsync-locked render thread every pass. `Config::window`
+picks between them. Related: `getFrame()` must not be called from a hook that only wants the frame if
+one exists (`getBuilding()`), or recording a texture free becomes a two second stall.
+
+**The savestates cannot see a bug that takes minutes of play to appear.** Every scored scene runs 120
+frames from a mid-scene state and discards nothing, so a leak per frame, a handle reused after a scene
+change, and a resource freed while in use are all invisible to the whole sweep. Play a window run and
+watch for a freeze; the guest heartbeat (`SDF_LOG=run=debug`) is what says whether the emulator or the
+renderer stopped, and that one line separated a ring leak from every other theory.
+
+**Split matched pairs by an independent key before reading a field diff.** `gsdiff.py` pairs a GS
+batch to a draw on screen bounds, and world geometry has plenty of meshes that merely cover the same
+pixels, so about half the pairs are not a batch beside its own source. Reporting the pairs that also
+agree on the **texture** apart from the rest deleted 1426 phantom state diffs at once, `psm`, `tcc`
+and `ate` entirely: all three were "wrong" only where the pair was. The fix is not to filter the
+match on a state field, which turns a state difference into a phantom missing draw; it is to keep
+every batch matched and say which pairs can be trusted.
+
+**A counter placed before the value it reads is no counter at all.** `countMultiTexture` sat in the
+generated-packet path, and `finishMesh` is what reads the material and sets `multi.on` two lines
+later, so the run summary said **0 meshes on, 12138 off** for months while the second pass was in
+fact running on 12,036 of them. The same class as the log level below, and the same cost: two rounds
+of work were spent on the multi-texture pass "never running", and a texture with 7778 GS batches was
+ranked the largest gap in the project on the strength of it. **Read a counter's line against the
+line that assigns the field**, and prefer counting where the value is set.
+
+**A coverage check that reads one texture per draw cannot see a second pass.** The mesh trace row
+carried `tex` and `tbp` from the first pass alone, so every multi-texture second pass looked like a
+texture the hardware samples and we never do: three of battle's seven "unsampled" bases, including
+the largest, were passes already being drawn. The row now carries `mtex` and `mtbp` too.
+
+**A log level taken at construction is no level at all.** Every `LogChannel` is a file-scope static,
+so it is built before `main` reads `SDF_LOG`; caching the level in the constructor silently
+discarded every `log.trace` and `log.debug` in the codebase, and a finding was recorded off an
+instrument that printed nothing. Levels resolve on use.
+
 Only `smt3_field_underground_facility` scores meaningfully today: the other five savestates start
 after the game loaded its textures, so `sdfTexSetEx` never fires and they render untextured.
 
@@ -569,6 +702,15 @@ What the image gave, at 0x0150-0x0194, which no struct in the game states:
 - The per-draw colour multiplies the light colours *before* the sum and the clamp.
 - The vertex-colour variant scales that draw colour by **1/128** first, which is the same 128-is-one
   convention the GS modulate uses.
+- **Light 0's colour is a difference and the base is `color[3]`**, both written per material at
+  0x01C5 over the packet's own fields. A vertex facing light 0 reaches `colorBase`, one facing away
+  falls to `color[3]`, and a mesh with **no normals takes `color[4]`** outright, which the packet
+  stores as the two summed. Taking the struct's names at face value gives `colorBase` to
+  `2 * colorBase` instead, which is twice the real range and is what made the character flat.
+
+`dumps/vu1/` keeps the image, the disassembly and hand-annotated copies of these routines with the
+fixed addresses named. Regenerate the raw listing with `scripts/vu2c.py` and re-check the
+annotations against it after a capture from a different build.
 
 Neither the light nor the fog packet matches the HD build's struct, because both open with a
 16-byte DMA and VIF header the struct does not have. Measured offsets: light directions at +16 as a
@@ -598,6 +740,12 @@ depth and the failing half not. Getting this right, rather than guessing at opaq
 the field scene from 32.43 to 15.46 mean abs and its signed mean from -24.59 to -0.90; the
 brightness was never a lighting or a fog problem.
 
+**The GS trace carries each batch's post-VU vertex colour** (`rgbaq`, `r`/`g`/`b_`), which is the
+same quantity the mesh vertex shader computes. Comparing the two settled the lighting sum in one
+pass after a dozen measurements against the picture had not: the packet's ambient times 128 appears
+as a literal batch colour, and the old model's whole range appears in no batch of any scene. Diff
+that column before arguing about a lighting term from a screenshot.
+
 **Fog is an offset plus a reciprocal**, `F = minimum + scale / w`, not a clamped reciprocal. The GS
 trace settles it: the per-batch fog values are 255 on 128 of the 148 fogged batches and 118-190 on
 the rest, which only the offset form fits. It was worth 0.54 once the blend was right and cost 1.3
@@ -617,13 +765,48 @@ from `corePktPrimBase`, which is `attrBits & 0x78`. ALPHA and TEST come from nei
 nor the mesh: the game links them as their own A+D packets into the draw tag chain, so reading them
 means tracking a running GS state across the links rather than looking them up per draw.
 
-**The light packet stores the direction light travels**, not the surface-to-light vector, so the
-diffuse dot is taken against its negation. Worth 2.5 points, and the tell was the ceiling coming
-out too bright while the walls came out too dark.
+**The diffuse dot is taken against the packet's matrix as stored, with no negation.** The microcode
+is plain about it (`vf05 = max(M * normal, 0)` at 0x0150..0x0156) and it was negated here for a
+while on the strength of a 2.5 point measurement, which was real but was compensating for a lighting
+sum that was wrong in a second way. Once the base and light 0 were right, the negation cost 1.0,
+3.0 and 0.4 points on the three 3D scenes.
+
+**Measure a gradient, not a mean, when a sign is in question.** Both readings of the dot can give a
+plausible mean brightness, and the score alone kept the wrong one for a dozen measurements. Taking
+the character's own box and comparing left half against right settled it in one run: the reference
+has L/R 1.163 and the negated version gave 0.972, flat and slightly the wrong way, where the
+unnegated one gives 1.185.
+
+**Match the shader's matrix convention when hand-checking a transform.** The screen matrix is
+uploaded with `glUniformMatrix4fv(..., GL_FALSE, ...)`, so GLSL reads it column-major and computes
+`sum_k m[k][r] * v[k]`. A CPU probe written row-major gives the transpose: for `fldDrawPoly3` it
+reported `w = -261568`, which reads as geometry behind the eye, where the shader's own value is
+`w = +1074` on screen. A probe in the wrong convention invents a defect and sends the next reader
+after it.
+
+**Rank producers by the area they cover, not by packets.** `ooyTestPoly3` heads the `[todo]` list at
+38,556 packets and is worth 0.010 of a point: they are 4x5 pixel triangles. Packets count calls, and
+a call is not a draw's worth of pixels. The same caution as ranking by vertices, in the other
+direction.
 
 **A batch search by bounding box is not a search for a draw.** Looking for the additive light grid
 as 64x32 batches found nothing across 17,839 batches and 138 frames, which read as proof the engine
 never drew it. It is one merged `prim 5` batch of 336 verts with a full-screen box.
+
+**`aDrawBoxF_Direct` belongs to the bloom mask, and is not drawn because FBMSK is not modelled.**
+It builds a LINE prim (`0x41`) **with ABE set**, gives every vertex z `0xFFFFFFFF`, and files into
+`aOt2D + rsetFrameMaskOtOffset` — the table bracketed by `rsetFrameMaskRgbOn`/`Off`, which set FBMSK
+to `0x00FFFFFF` so a pass writes alpha and no colour. The GS trace shows that pass running: **195
+batches a field frame at `fbmsk 0x00FFFFFF`**, untextured blended triangles bounded exactly on the
+character (x 218..302, y 108..224). It is the character's own silhouette re-drawn into the alpha
+channel, which is a local bloom mask. Drawing any of it as visible colour paints the character twice,
+so the producer stays off (`SDF_DRAW_DIRECT_BOX` turns it back on) until FBMSK is modelled. Do not
+read "no line batch appears in the trace" as "the hardware skips it": the pass is real, and what it
+writes is invisible only because of the mask.
+
+**`sdfDrawTagLinkRefGif` is a fourth link entry point.** `sdfDrawTagLink`, `Ref` and `Call` are not
+all of them: the frame-mask packet goes through this one, so without it the FBMSK pass is missing
+from the frame inventory entirely. Check for others before believing an inventory is complete.
 
 **`aDrawBoxF_Direct` is a line, not a box.** It builds a GS LINE prim (`sdf2DMakePrimPacketHeader`
 with PRIM `0x41`) out of four vertices, so the hardware draws the top and bottom edges as two
@@ -680,6 +863,13 @@ untyped: a raw quadword span, packed pixels, a stack argument. Everything else g
 `guest_ptr<TMX_HEADER_t>`; the alias sits beside the struct it points at and takes that struct's own
 casing, so `sdfMatPtr_t` but `frGsTex_PTR_t`. Plain data has them too (`u32Ptr_t`, `f32x3Ptr_t` for
 a run of vec3s), in `guest_ptr.h`.
+
+**A guest address is a typed pointer, not a `u32`, and that applies to a hook's own arguments.** A
+new handler is where this slips: `c.getArg(0)` returns a `u32`, and passing it on as one spreads an
+untyped address through every function it reaches. Name the type at the boundary, in the handler,
+and let everything below take the pointer. If several arguments turn out to be offsets into one
+allocation, they are one struct and the callee should take it as such: `sdfBillBoardMakeN`'s four
+pointers are `sdfBillBoardBatch_t` at +0, +240, +300 and +540, and taking them separately hid that.
 
 **A guest address is a typed pointer, not a `u32`.** A parameter is `sdfModelRootNodePtr_t`, not
 `u32 rootAddr`, so the type says what is there and the callee cannot read the wrong struct off it.
@@ -756,11 +946,14 @@ See `README.md` for the environment variables. Additionally:
 - `SDF_MESH_ONLY=<n>`, `SDF_MESH_UPTO=<n>` and `SDF_OT_MAX=<n>` narrow the mesh pass to one mesh, a
   prefix, or the ordering tables at or below `n`. Bisecting a bad frame costs an emulator run per
   step, which is why these are run-time rather than a rebuild.
-- `SDF_NO_SPRITES`, `SDF_NO_FOG`, `SDF_NO_SPECULAR`, `SDF_NO_FEEDBACK` and `SDF_NO_DIRECT_BOX` each
+- `SDF_NO_SPRITES`, `SDF_NO_FOG`, `SDF_NO_SPECULAR`, `SDF_NO_FEEDBACK` and `SDF_DRAW_DIRECT_BOX` each
   take one pass out, which is how a contribution gets attributed rather than guessed at.
 - Every setting is a field of `Config` (`src/config.h`) and is listed there, read once at startup.
 - The IDB for SLUS-20911 is open over MCP; `assets/SLUS_209.11.map` is exported from it and is what
   the hooks resolve names against. Record findings back into the IDB, since it outlives a session.
+- **One-off runs go in `dumps/scratch/`.** The top level of `dumps/` is for output with a name worth
+  keeping: `dumps/<scene>/` per curated state, `dumps/refdiff/` for the sweep, `dumps/vu1/` for the
+  microcode. A dozen directories called `a`, `c3` and `cull2` make the ones that matter unfindable.
 - States in `states/` are curated per scene and named for it; `scripts/dump_scenes.sh` runs them all
   into `dumps/<scene>/` (trace, GS trace, both screenshots, texture dumps, run log). See
   `states/README.md` for what each scene is and which one answers what.

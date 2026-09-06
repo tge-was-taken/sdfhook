@@ -46,6 +46,9 @@ bool readDmaTag(u32 packetAddr, DmaTag& out);
 /// @todo Nothing calls this yet, which is why every mesh is still stamped from the
 ///       sdfGsStateForOt table and AREF is wrong on two thirds of the batches. See TODO.md E1. ALPHA and TEST reach a 3D
 /// draw this way, so the state in force is whatever the packets linked before it left behind.
-void applyGsRegisterWrites(u32 packetAddr, sdfGsState_t& state);
+/// Applies a packet's A+D register writes to the running state.
+/// @return Whether the packet was one: a packet of pure register writes draws nothing, which is what
+///         separates a state setter from a producer whose geometry VU1 builds.
+bool applyGsRegisterWrites(u32 packetAddr, sdfGsState_t& state);
 
 }  // namespace sdfhook

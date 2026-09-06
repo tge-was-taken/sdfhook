@@ -21,6 +21,9 @@ namespace {
 
 using sdfhook::JsonObject;
 
+// A frame is submitted once per sdfGrReqDraw, which can be several emulated frames apart.
+constexpr int kShotWaitMs = 5000;
+
 sdfhook::LogChannel log("run");
 sdfhook::LogChannel texLog("tex");
 sdfhook::LogChannel todoLog("todo");
@@ -66,13 +69,45 @@ void onVmReady(void* user) {
     if (app.config.gsTrace) pcsx2hook_set_gs_recording(app.runtime, 1);
 }
 
+/// A scene as the sweep needs it: the state that reproduces it and the pair of shots to score. The
+/// native shot is taken first and waited for, so both are of this frame rather than of two.
+void captureScene(App& app, uint32_t frame) {
+    std::error_code failed;
+    std::filesystem::create_directories(app.config.captureDir, failed);
+
+    static u32 index = 0;
+    const std::string base = std::format("{}/capture_{:03}", app.config.captureDir, index++);
+    app.renderer->requestShot(base + "-native.png");
+    if (!app.renderer->waitForShot(kShotWaitMs)) {
+        log.warn("no native shot within {}ms: the capture is of two frames", kShotWaitMs);
+    }
+    pcsx2hook_write_framebuffer(app.runtime, (base + "-emu.png").c_str());
+    // The state is written once the VM reaches a safe point, which is after this frame rather than
+    // during it, so the two shots land first and the file appears a moment later.
+    pcsx2hook_save_state(app.runtime, (base + ".p2s").c_str());
+    log.info("captured frame {}: {}-emu.png, {}-native.png, and {}.p2s to follow", frame, base,
+             base, base);
+}
+
 void onFrame(uint32_t frame, void* user) {
     App& app = *static_cast<App*>(user);
     if (app.trace) app.trace->onFrame(frame);
     app.hooks.textures.recoverQueued();
+    if (frame % 600 == 0) log.debug("frame {}", frame);
+
+    const bool wanted = app.config.captureFrame && frame == app.config.captureFrame;
+    if (app.renderer && (wanted || app.renderer->takeCaptureRequest())) captureScene(app, frame);
+
     if (app.config.shotFrame && frame == app.config.shotFrame) {
+        // The native shot goes first and is waited for, so both are of the same emulated frame.
+        // Taking them independently is what made a run's score move without the render changing.
+        if (app.renderer) {
+            app.renderer->requestShot(app.config.nativeShotPath);
+            if (!app.renderer->waitForShot(kShotWaitMs)) {
+                log.warn("no native shot within {}ms: the two are of different frames", kShotWaitMs);
+            }
+        }
         pcsx2hook_write_framebuffer(app.runtime, app.config.shotPath.c_str());
-        if (app.renderer) app.renderer->requestShot(app.config.nativeShotPath);
     }
 }
 
@@ -109,6 +144,7 @@ void writeRunSummary(const sdfhook::HookContext& hooks) {
 
     row.beginObject("textures")
         .addUint("decoded", hooks.textures.getDecoded())
+        .addUint("freed", hooks.textures.getFreed())
         .addUint("failed", hooks.textures.getFailed())
         .addUint("recoveredFromGs", hooks.textures.getRecovered())
         .addUint("recoveryAttempts", hooks.textures.getRecoveryAttempts())
@@ -179,6 +215,17 @@ void reportRun(const sdfhook::HookContext& hooks) {
         todoLog.info("{:<34} {} verts not drawn natively", producer, verts);
     }
 
+    // A producer whose geometry VU1 builds carries no GIF vertices, so it never reaches the ranking
+    // above however much it draws. Ranked apart rather than merged: these are packet counts.
+    std::vector<std::pair<std::string, uint64_t>> silent(hooks.coverage.unhandledPackets.begin(),
+                                                         hooks.coverage.unhandledPackets.end());
+    std::sort(silent.begin(), silent.end(),
+              [](const auto& a, const auto& b) { return a.second > b.second; });
+    for (const auto& [producer, packets] : silent) {
+        todoLog.info("{:<34} {} packets with no GIF geometry, not drawn natively", producer,
+                     packets);
+    }
+
     for (const auto& [callee, seen] : hooks.coverage.graph.getReturns()) {
         texLog.info("{} returned {} times, {} distinct", callee, seen.count, seen.distinct.size());
     }
@@ -189,8 +236,9 @@ void reportRun(const sdfhook::HookContext& hooks) {
         texLog.info("{} x{}{}", edge, count, known ? "" : "   <- UNHOOKED PATH");
     }
 
-    log.info("{} draws from the engine API, {} textures decoded, {} failed",
-        hooks.coverage.apiDraws, hooks.textures.getDecoded(), hooks.textures.getFailed());
+    log.info("{} draws from the engine API, {} textures decoded, {} failed, {} freed",
+        hooks.coverage.apiDraws, hooks.textures.getDecoded(), hooks.textures.getFailed(),
+        hooks.textures.getFreed());
     log.info("{} glyph uploads, font clut {}", hooks.textures.getGlyphUploads(),
         hooks.textures.hasFontClut() ? "loaded" : "never seen");
 
@@ -234,6 +282,12 @@ int main(int argc, char** argv) {
         log.error("cannot create the runtime");
         return 1;
     }
+
+    if (g_app.renderer) g_app.renderer->attachPad(g_app.runtime);
+
+    // A window is there to be watched, so it runs at 1x. Unthrottled the guest outruns a
+    // vsync-locked render thread by several frames each pass and spends the run inside the ring.
+    pcsx2hook_set_speed_limit(g_app.runtime, cfg.window ? 1 : 0);
 
     // Every GS primitive batch the rasterizer resolves, which is what a draw has to be attributed
     // to. PCSX2HOOK_GS_TRACE names the file the runner writes them to.

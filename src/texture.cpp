@@ -1,6 +1,7 @@
 #include "texture.h"
 
-#include <png.h>
+#include "image.h"
+
 
 #include <algorithm>
 #include <cstddef>
@@ -19,35 +20,6 @@ LogChannel log("tex");
 
 constexpr u32 kMaxDimension = 1024;
 
-void writePng(const char* path, u32 width, u32 height, const u8* rgba) {
-    if (!width || !height) return;
-    std::FILE* file = std::fopen(path, "wb");
-    if (!file) return;
-
-    png_structp png = png_create_write_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
-    png_infop info = png ? png_create_info_struct(png) : nullptr;
-    if (!info || setjmp(png_jmpbuf(png))) {
-        png_destroy_write_struct(png ? &png : nullptr, info ? &info : nullptr);
-        std::fclose(file);
-        return;
-    }
-
-    png_init_io(png, file);
-    png_set_compression_level(png, 0);
-    png_set_filter(png, 0, PNG_FILTER_NONE);
-    png_set_IHDR(png, info, width, height, 8, PNG_COLOR_TYPE_RGBA, PNG_INTERLACE_NONE,
-                 PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
-    png_write_info(png, info);
-
-    std::vector<png_bytep> rows(height);
-    for (u32 y = 0; y < height; y++) {
-        rows[y] = const_cast<png_bytep>(rgba + usize(y) * width * 4);
-    }
-    png_write_image(png, rows.data());
-    png_write_end(png, nullptr);
-    png_destroy_write_struct(&png, &info);
-    std::fclose(file);
-}
 
 
 // Alpha stays in PS2 range (0..0x80); the shader scales it.
@@ -117,6 +89,9 @@ void TextureCache::add(TMX_HEADER_PTR_t aTex, TexHandle handle, Frame* frame) {
         return;
     }
 
+    log.debug("tex {:08X} psm {:#x} clutFormat {:#x} numOfCLUT {} {}x{}", handle.addr,
+              tmx.pixelFormat, tmx.CLUTFormat, tmx.numOfCLUT, width, height);
+
     // Rows, not tiles: the GS swizzles as the transfer lands.
     u8 clut[256][4] = {};
     if (paletted) {
@@ -150,7 +125,7 @@ void TextureCache::add(TMX_HEADER_PTR_t aTex, TexHandle handle, Frame* frame) {
     if (!mDumpDir.empty()) {
         const std::string name = std::format("{}/tex_{:08X}_{}x{}_psm{:02X}.png", mDumpDir,
                                              handle.addr, width, height, tmx.pixelFormat);
-        writePng(name.c_str(), width, height, upload.rgba.data());
+        writePng(name.c_str(), width, height, upload.rgba.data(), true);
     }
     if (frame) frame->textureUploads.push_back(std::move(upload));
 }
@@ -263,6 +238,29 @@ TexHandle TextureCache::getFontSheet(u32 sheetWidth, Frame* frame) {
     return handle;
 }
 
+void TextureCache::onFrameBuffer(sdfGsMemSlicePtr_t aSlice) {
+    if (!aSlice) return;
+    const GsRegion region{aSlice->addr, u32(aSlice->size)};
+    for (const GsRegion& known : mFrameBuffers) {
+        if (known.addr == region.addr && known.size == region.size) return;
+    }
+    log.debug("frame buffer at {:#x} size {:#x} ({}x{} psm {:#x})", region.addr, region.size,
+              aSlice->w, aSlice->h, aSlice->pixelFormat);
+    mFrameBuffers.push_back(region);
+}
+
+void TextureCache::onFree(TexHandle handle) {
+    if (!handle.addr) return;
+
+    const bool known = mUploaded.erase(handle) != 0;
+    mWanted.erase(handle);
+    // A copy outlives nothing: both the aliases of this handle and the ones pointing at it go.
+    for (auto it = mAlias.begin(); it != mAlias.end();) {
+        it = (it->first == handle || it->second == handle) ? mAlias.erase(it) : std::next(it);
+    }
+    if (known) mFreed++;
+}
+
 TexHandle TextureCache::getHandle(TexHandle wanted, Frame*) {
     if (!wanted.addr) return {};
     if (mUploaded.count(wanted)) return wanted;
@@ -286,8 +284,36 @@ TexHandle TextureCache::getHandle(TexHandle wanted, Frame*) {
     return {};
 }
 
+void TextureCache::wantFontSheet(u32 addr, u32 bufWidth, u32 width, u32 height) {
+    if (!mFontSheet.index.empty() || !addr || !width || !height) return;
+    mWantedSheet = {addr, bufWidth, width, height};
+}
+
+bool TextureCache::recoverFontSheet() {
+    const FontSheetWanted want = mWantedSheet;
+    mWantedSheet = {};
+    mRecoveryAttempts++;
+
+    std::vector<u32> texels(usize(want.width) * want.height);
+    if (pcsx2hook_read_gs_pixels(mRuntime, want.addr, want.bufWidth, sdfPsmt4, want.width,
+                                 want.height, texels.data(), texels.size()) != texels.size()) {
+        return false;
+    }
+
+    mFontSheet.width = want.width;
+    mFontSheet.height = want.height;
+    mFontSheet.index.resize(texels.size());
+    for (usize i = 0; i < texels.size(); i++) mFontSheet.index[i] = u8(texels[i] & 0xF);
+    mFontSheet.dirty = true;
+    mRecovered++;
+    log.info("glyph sheet recovered from GS memory, {}x{}", want.width, want.height);
+    return true;
+}
+
 void TextureCache::recoverQueued() {
-    if (mWanted.empty() || !mConfig->recoverTexturesFromGs || !mRuntime) return;
+    if (!mConfig->recoverTexturesFromGs || !mRuntime) return;
+    if (mWantedSheet.addr && mFontSheet.index.empty()) recoverFontSheet();
+    if (mWanted.empty()) return;
 
     for (auto it = mWanted.begin(); it != mWanted.end();) {
         const TexHandle handle = *it;
@@ -331,6 +357,8 @@ bool TextureCache::recoverFromGs(TexHandle handle) {
         return false;
     }
     const GsTex0 tex0 = GsTex0::fromReg(reg);
+    log.debug("recover {:08X} tbp0 {:#x} psm {:#x} cbp {:#x} cpsm {:#x} csa {}", handle.addr,
+              tex0.tbp0, tex0.psm, tex0.cbp, tex0.cpsm, tex0.csa);
     const u32 width = 1u << tex0.tw;
     const u32 height = 1u << tex0.th;
     note("read", reg);
@@ -382,7 +410,7 @@ bool TextureCache::recoverFromGs(TexHandle handle) {
     if (!mDumpDir.empty()) {
         const std::string name = std::format("{}/gs_{:08X}_{}x{}_psm{:02X}.png", mDumpDir,
                                              handle.addr, width, height, tex0.psm);
-        writePng(name.c_str(), width, height, upload.rgba.data());
+        writePng(name.c_str(), width, height, upload.rgba.data(), true);
     }
     mRecoveredUploads.push_back(std::move(upload));
     return true;

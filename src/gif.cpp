@@ -221,29 +221,32 @@ void GifParser::parse(u32 packetAddr) {
     }
 }
 
-void applyGsRegisterWrites(u32 packetAddr, sdfGsState_t& state) {
+bool applyGsRegisterWrites(u32 packetAddr, sdfGsState_t& state) {
     DmaTag tag{};
-    if (!readDmaTag(packetAddr, tag)) return;
+    if (!readDmaTag(packetAddr, tag)) return false;
 
     // A REF tag names its data elsewhere; anything else carries it straight after the tag.
     const u32 at = tag.id == sdfDmaTagRef ? tag.addr : packetAddr + 16;
     const sdfGifTagWordsPtr_t gif{at};
-    if (!gif) return;
-    if (sdfGifFlg(*gif) != 0 || sdfGifNreg(*gif) != 1) return;
-    if (sdfGifRegAt(gif->regs, 0) != sdfGifRegAD) return;
+    if (!gif) return false;
+    if (sdfGifFlg(*gif) != 0 || sdfGifNreg(*gif) != 1) return false;
+    if (sdfGifRegAt(gif->regs, 0) != sdfGifRegAD) return false;
 
     const u32 count = sdfGifNloop(*gif);
     const sdfGifAdWrite_t* writes = sdfGifAdWritePtr_t{at + 16}.slice(count);
-    if (!writes) return;
+    if (!writes) return false;
     for (u32 i = 0; i < count; i++) {
         switch (u32(writes[i].reg & 0xFF)) {
             case sdfGsAddrAlpha1:
             case sdfGsAddrAlpha2: state.alpha = writes[i].value; break;
             case sdfGsAddrTest1:
             case sdfGsAddrTest2: state.test = writes[i].value; break;
+            case sdfGsAddrFrame1:
+            case sdfGsAddrFrame2: state.frameMask = sdfFrameMask(writes[i].value); break;
             default: break;
         }
     }
+    return true;
 }
 
 }  // namespace sdfhook

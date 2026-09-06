@@ -12,6 +12,7 @@ constexpr LogLevel kDefaultLevel = LogLevel::Info;
 struct Configured {
     LogLevel fallback = kDefaultLevel;
     std::vector<std::pair<std::string, LogLevel>> channels;
+    u32 generation = 1;
 };
 
 Configured& configured() {
@@ -43,11 +44,17 @@ const char* tagFor(LogLevel level) {
 
 }  // namespace
 
-LogChannel::LogChannel(std::string name) : mName(std::move(name)) {
-    mLevel = configured().fallback;
-    for (const auto& [channel, level] : configured().channels) {
+LogChannel::LogChannel(std::string name) : mName(std::move(name)) {}
+
+LogLevel LogChannel::getLevel() const {
+    const Configured& levels = configured();
+    if (mGeneration == levels.generation) return mLevel;
+    mLevel = levels.fallback;
+    for (const auto& [channel, level] : levels.channels) {
         if (channel == mName) mLevel = level;
     }
+    mGeneration = levels.generation;
+    return mLevel;
 }
 
 void LogChannel::emit(LogLevel level, const std::string& message) const {
@@ -61,6 +68,7 @@ void LogChannel::dump(std::string_view row) const {
 
 void configureLogging(std::string_view spec) {
     if (spec.empty()) return;
+    configured().generation++;
 
     std::string_view text = spec;
     while (!text.empty()) {

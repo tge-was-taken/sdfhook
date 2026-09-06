@@ -1,5 +1,7 @@
 #include "model.h"
 
+#include <cmath>
+
 #include <cstddef>
 #include <cstring>
 #include <vector>
@@ -323,7 +325,9 @@ void ModelTrace::addTo(JsonObject& row) const {
         .addUint("staleMatPackets", mStaleMatPackets)
         .addUint("freshMatPackets", mFreshMatPackets)
         .addUint("setupRefs", mSetupRefs)
-        .addUint("strayRefs", mStrayRefs);
+        .addUint("strayRefs", mStrayRefs)
+        .addUint("settledMeshes", mSettledMeshes)
+        .addUint("unsettledMeshes", mUnsettledMeshes);
 
     // sdfCorePacketGen and sdfModelLinkShapedDrawPacket have no other caller, so a difference here
     // is our traversal reaching a different set of packets, not a different way of drawing them.
@@ -409,6 +413,10 @@ void ModelTrace::report() const {
         log.info("triangle coverage {} of {} ({:.1f}%)", drawnElems, seenElems,
             100.0 * double(drawnElems) / double(seenElems));
     }
+    if (mSettledMeshes || mUnsettledMeshes) {
+        log.info("mesh state: {} settled from the transmit chain, {} left on the table default",
+            mSettledMeshes, mUnsettledMeshes);
+    }
     if (mSetupRefs || mStrayRefs) {
         log.info("chain refs: {} setup, {} looked like a mesh and failed", mSetupRefs,
             mStrayRefs);
@@ -435,6 +443,7 @@ void ModelParser::attach(pcsx2hook_ctx* runtime, const Config& config, TextureCa
     mSdf3DLightDefault = {pcsx2hook_find_symbol(runtime, "sdf3DLightDefault")};
     mSdf3DFogDefault = {pcsx2hook_find_symbol(runtime, "sdf3DFogDefault")};
     mSdfFrameId = {pcsx2hook_find_symbol(runtime, "sdfFrameId")};
+    mDds3BillboardTag = {pcsx2hook_find_symbol(runtime, "dds3BillboardTag")};
     mSdfFaceDivBias = {pcsx2hook_find_symbol(runtime, "sdfFaceDivBias")};
     mSdfFaceDivSoften = {pcsx2hook_find_symbol(runtime, "sdfFaceDivSoften")};
     mCorePktSoftenBias = {pcsx2hook_find_symbol(runtime, "corePktSoftenBias")};
@@ -454,13 +463,20 @@ void ModelParser::readLighting(sdf3DLightParallelPacketPtr_t aLight) {
             mLighting.colour[i][axis] = light->color[i][axis];
         }
         mLighting.base[i] = light->colorBase[i];
+        mLighting.ambientColour[i] = light->color[3][i];
+        mLighting.fullColour[i] = light->color[4][i];
     }
 
-    static u32 shown = 0;
-    if (mConfig->dumpLight && shown++ < 1) {
+    static std::set<u32> shown;
+    if (mConfig->dumpLight && shown.insert(light.addr).second) {
         JsonObject row;
         row.addString("dump", "light").addHexDigits("at", light.addr, 8);
         row.addReals("base", {mLighting.base[0], mLighting.base[1], mLighting.base[2]}, 4);
+        for (u32 c = 0; c < 5; c++) {
+            const std::string name = std::format("color{}", c);
+            row.addReals(name.c_str(),
+                         {light->color[c][0], light->color[c][1], light->color[c][2]}, 4);
+        }
         row.beginArray("lights");
         for (u32 i = 0; i < kParallelLights; i++) {
             row.beginObject();
@@ -499,7 +515,11 @@ void ModelParser::readMaterialPacket(const sdfMat_t& material, DrawMesh& mesh,
     mesh.diffuse = Rgba::fromPacked(material.diffuse);
     mesh.ambient = Rgba::fromPacked(material.ambient);
 
-    const u32 frameId = mSdfFrameId ? *mSdfFrameId & 1 : 0;
+    // The finished buffer, not the one about to be rewritten: our walk runs at sdfModelLinkOt's
+    // entry and the engine's next call is sdfMatListUpdatePacket, so the index the frame id names is
+    // the one it is about to fill. Reading the other one is what brings in the arena floor's blood
+    // decals (tbp 12397), which the GS samples and we otherwise never did.
+    const u32 frameId = mSdfFrameId ? (*mSdfFrameId & 1) ^ 1 : 0;
     const sdfMatPacketPtr_t packet{material.packet[frameId].addr};
     if (!packet) return;
     mesh.specular = Rgba::fromPacked(packet->specularColor);
@@ -520,6 +540,9 @@ void ModelParser::readMaterialPacket(const sdfMat_t& material, DrawMesh& mesh,
     mesh.multi.clamp = packet->mtexClampData;
     mesh.multi.diffuse = Rgba::fromPacked(packet->mtexDiffuse);
     mesh.multi.on = mesh.multi.texHandle.addr != 0;
+    // corePktEmitMultiTexPass recolours every vertex before the second pass draws: mtexAlgo < 3
+    // runs the face-division ramp, 3 sets a constant colour. Neither is modelled, so it is reported.
+    reportUnsupported("corePktEmitMultiTexPass mtexAlgo", packet->mtexAlgo);
 }
 
 bool ModelParser::readScreenTm() {
@@ -556,6 +579,11 @@ bool ModelParser::sdfModelCheckBounds(sdfModelBoundsPtr_t aBounds, const Matrix4
 
 /// @fn sdfModelLinkOt
 /// @note SLUS-20911 0x002B1DB8
+void ModelParser::traceMeshes(const Frame& frame) {
+    if (!mEvents) return;
+    for (const DrawMesh& mesh : frame.meshes) mEvents->onMesh(mesh, mScreenTm, mDecodeFrame);
+}
+
 void ModelParser::sdfModelLinkOt(sdfModelRootNodePtr_t aRoot, Frame* frame) {
     if (!aRoot || !readScreenTm()) return;
     const guest_ref<sdfModelRootNode_t> root{aRoot};
@@ -578,11 +606,7 @@ void ModelParser::sdfModelLinkOt(sdfModelRootNodePtr_t aRoot, Frame* frame) {
     const f32 faceDivBias = (root->flags & sdfModelRootOwnFaceDivBias)
                                 ? root->faceDivBias
                                 : mSdfFaceDivBias.valueOr();
-    if (faceDivBias != 0.0f) {
-        u32 bits = 0;
-        std::memcpy(&bits, &faceDivBias, sizeof(bits));
-        reportUnsupported("sdfModelLinkOt faceDivBias", bits);
-    }
+    reportFaceDiv("sdfModelLinkOt faceDivBias", faceDivBias);
     if (const u8 soften = mCorePktSoftenBias.valueOr()) {
         reportUnsupported("corePktSoftenBias", soften);
     }
@@ -637,7 +661,9 @@ void ModelParser::sdfModelLinkOt(sdfModelRootNodePtr_t aRoot, Frame* frame) {
         draw.sortZ = draw.clip.m[3][3];
         draw.zBias = root->zBias;
         draw.colour = (node->flags & sdfModelNodeOwnColour) ? node->color : root->color;  // 0x2B1F48
-        draw.attrMask = u16(root->drawAttr) & node->drawAttr;                     // 0x2B1F6C
+        // 0x2B1F6C: the cast is signed, so a drawAttr of 0xFFFF sign-extends and the node's high
+        // bits survive. Truncating to 16 dropped everything above them, the soften bias included.
+        draw.attrMask = u32(s32(s16(root->drawAttr))) & node->drawAttr;
         // 0x2B1FC0: a packet's otIndex of zero means table 0 or 1 by the sign of the colour.
         draw.otIndex = s32(draw.colour) < 0 ? 0 : 1;
         // sdfCorePacketGen turns the same flag into corePktBuildFaceList's backfaceSign.
@@ -682,6 +708,7 @@ void ModelParser::walkChain(guest_ref<sdfModelRootNode_t> root, const NodeDraw& 
                 break;
             case sdfPacketGenerated:
                 mTrace.countPacket(ModelTrace::Packet::Generated);
+                mCurrentLink = mLinkIndex++;
                 sdfCorePacketGen(root, packetDraw, sdfCorePacketPtr_t{header->dataPtr.addr}, frame);
                 break;
             default:
@@ -837,7 +864,6 @@ void ModelParser::sdfCorePacketGen(guest_ref<sdfModelRootNode_t> root, const Nod
     }
 
     mTrace.countSampler(mesh.tex0, mesh.tex1, mesh.clamp);
-    mTrace.countMultiTexture(mesh.multi.on);
     mTrace.countDeterminant(mesh.bones[0]);
     mTrace.countAttr(mesh.attrBits);
     mTrace.countGs(mesh.gs);
@@ -850,7 +876,19 @@ void ModelParser::sdfCorePacketGen(guest_ref<sdfModelRootNode_t> root, const Nod
 // names a known material sets the material for the meshes after it.
 /// @fn sdfModelTempPacketLinkOt
 /// @note SLUS-20911 0x002B1950
+void ModelParser::reportFaceDiv(const char* what, f32 value) {
+    if (value == 0.0f) return;
+    u32 bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    reportUnsupported(what, bits);
+}
+
 void ModelParser::sdfModelTempPacketLinkOt(guest_ref<sdfModelRootNode_t> root, Frame* frame) {
+    // 0x2B198C: this walk takes faceDivSoften where sdfModelLinkOt takes faceDivBias, and falls
+    // back to its own global. Neither is modelled, so both are reported where they are read.
+    reportFaceDiv("sdfModelTempPacketLinkOt faceDivSoften",
+                  (root->flags & sdfModelRootOwnFaceDivBias) ? root->faceDivSoften
+                                                             : mSdfFaceDivSoften.valueOr());
     mTrace.countTempPacketWalk();
 
     const sdfModelNodeListPtr_t list = root->nodeList;
@@ -955,7 +993,117 @@ void ModelParser::sdfModelLinkShapedDrawPacket(guest_ref<sdfModelRootNode_t> roo
     }
 }
 
+void ModelParser::fldDrawPoly3(const sdfVector3_t point[3], const u32 colour[3], Frame* frame) {
+    if (!frame) return;
+
+    DrawMesh mesh;
+    Matrix4 identity{};
+    for (int axis = 0; axis < 4; axis++) identity.m[axis][axis] = 1.0f;
+    mesh.bones.push_back(identity);
+    mesh.lighting = mLighting;
+    mesh.fog = mFog;
+    mesh.gs = sdfGsStateForOt(0);
+    // Gouraud and blended, with no texture: the call carries no UVs, so there is nothing to sample.
+    mesh.attrBits = sdfCoreAttrGouraud | sdfCoreAttrBlend | sdfPrimTriangle;
+    mesh.lit = false;
+    mesh.packetType = sdfPacketGenerated;
+    mesh.vertices.resize(3);
+    for (u32 i = 0; i < 3; i++) {
+        setRigidInfluence(mesh.vertices[i], point[i], nullptr);
+        mesh.vertices[i].colour = Rgba::fromPacked(colour[i]);
+    }
+    static constexpr u16 kTriangle[3] = {0, 1, 2};
+    mesh.indices.assign(std::begin(kTriangle), std::end(kTriangle));
+    mTrace.countBones(1);
+    frame->addMesh(std::move(mesh));
+}
+
+/// @fn dds3BillboardLinkOt
+/// @note SLUS-20911 0x0022E2E8
+constexpr u32 kMaxBillboardNodes = 4096;
+
+void ModelParser::readBillboardTables() {
+    mBillboardOt.clear();
+    if (!mDds3BillboardTag) return;
+    // The engine's own loop rewrites `next` as it consumes each node, so this runs at its entry.
+    dds3BillboardNodePtr_t node{u32Ptr_t{mDds3BillboardTag.addr}.valueOr()};
+    for (u32 steps = 0; node && steps < kMaxBillboardNodes; steps++) {
+        mBillboardOt[node->batch.addr] = node->otIndex;
+        node = node->next;
+    }
+}
+
+void ModelParser::sdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Frame* frame) {
+    if (!frame || !aBatch || !aNum || aNum > std::size(aBatch->centre)) return;
+    const sdfBillBoardBatch_t& batch = *aBatch;
+
+    // The camera's own axes, so a quad's offsets land back in the world the screen matrix expects.
+    // A billboard faces the camera by construction, which is what makes taking them from the
+    // matrix's columns exact rather than an approximation.
+    const Matrix4& tm = mScreenTm;
+    const auto axis = [](f32 x, f32 y, f32 z, f32 out[3]) {
+        const f32 length = std::sqrt(x * x + y * y + z * z);
+        const f32 scale = length > 1e-6f ? 1.0f / length : 0.0f;
+        out[0] = x * scale;
+        out[1] = y * scale;
+        out[2] = z * scale;
+    };
+    f32 right[3];
+    f32 up[3];
+    axis(tm.m[0][0], tm.m[1][0], tm.m[2][0], right);
+    axis(tm.m[0][1], tm.m[1][1], tm.m[2][1], up);
+
+    // The node above the batch names its table; the GS trace puts the specters' additive batches at
+    // ALPHA 0x48 with TEST 0x71801, which is what table 2 decodes to, so a miss says so rather than
+    // silently picking one.
+    const auto found = mBillboardOt.find(aBatch.addr);
+    if (found == mBillboardOt.end()) reportUnsupported("billboard batch with no ordering table", 0);
+    const u32 otIndex = found != mBillboardOt.end() ? found->second : 2;
+
+    for (u32 i = 0; i < aNum; i++) {
+        const sdfVector4_t& centre = batch.centre[i];
+        const sdfBillBoardQuad_t& offset = batch.offset[i];
+        const sdfBillBoardUv_t& uv = batch.uv[i];
+
+        DrawMesh mesh;
+        Matrix4 identity{};
+        for (int axisIndex = 0; axisIndex < 4; axisIndex++) identity.m[axisIndex][axisIndex] = 1.0f;
+        mesh.bones.push_back(identity);
+        mesh.colour = Rgba::fromPacked(batch.colour[i]);
+        mesh.lighting = mLighting;
+        mesh.fog = mFog;
+        mesh.gs = sdfGsStateForOt(otIndex);
+        mesh.gs.frameMask = mState ? mState->frameMask : 0;
+        mesh.attrBits = sdfCoreAttrTextured | sdfCoreAttrBlend | sdfPrimTriangle;
+        mesh.lit = false;
+        mesh.packetType = sdfPacketGenerated;
+        mesh.texHandle = mTextures->getHandle(mBillboardTexture, frame);
+        // The batch stores texel coordinates in 12.4; the sampler wants them over the texture.
+        const f32 width = mBillboardTexture ? f32(mBillboardTexture->width) : 0.0f;
+        const f32 height = mBillboardTexture ? f32(mBillboardTexture->height) : 0.0f;
+        const f32 uScale = width > 0.0f ? 1.0f / (16.0f * width) : 0.0f;
+        const f32 vScale = height > 0.0f ? 1.0f / (16.0f * height) : 0.0f;
+        mesh.vertices.resize(4);
+        for (u32 c = 0; c < 4; c++) {
+            MeshVertex& out = mesh.vertices[c];
+            const sdfVector2_t& at = offset.corner[c];
+            const sdfVector3_t world{centre.x + right[0] * at.x + up[0] * at.y,
+                                     centre.y + right[1] * at.x + up[1] * at.y,
+                                     centre.z + right[2] * at.x + up[2] * at.y};
+            setRigidInfluence(out, world, nullptr);
+            out.u = f32(uv.corner[c].u) * uScale;
+            out.v = f32(uv.corner[c].v) * vScale;
+        }
+        // Wound the way the engine lists the corners, which is the reverse of a GL front face.
+        static constexpr u16 kQuad[6] = {0, 2, 1, 0, 3, 2};
+        mesh.indices.assign(std::begin(kQuad), std::end(kQuad));
+        mTrace.countBones(1);
+        frame->addMesh(std::move(mesh));
+    }
+}
+
 void ModelParser::sdfModelSetNormalDrawPacket(const NodeDraw& draw, u32 chainAddr, Frame* frame) {
+    mCurrentChain = chainAddr;
     sdfMatPtr_t mat;
     for (u32 at = chainAddr; ; at += 16) {
         const u32* tag = u32Ptr_t{at}.slice(2);
@@ -988,6 +1136,7 @@ void ModelParser::sdfModelSetNormalDrawPacket(const NodeDraw& draw, u32 chainAdd
 bool ModelParser::readVifStreamMesh(u32 at, u32 end, const NodeDraw& draw, sdfMatPtr_t aMat,
                                     Frame* frame) {
     DrawMesh mesh;
+    mesh.linkAddr = mCurrentChain;
     mesh.sortZ = draw.sortZ;
     mesh.zBias = draw.zBias;
     mesh.otIndex = draw.otIndex;
@@ -996,6 +1145,7 @@ bool ModelParser::readVifStreamMesh(u32 at, u32 end, const NodeDraw& draw, sdfMa
     mesh.lighting = mLighting;
     mesh.fog = mFog;
     mesh.gs = sdfGsStateForOt(mesh.otIndex);
+    mesh.gs.frameMask = mState ? mState->frameMask : 0;
     mesh.reverseFacing = draw.reverse;
     mesh.worldGeometry = true;
     mesh.packetType = sdfPacketDmaCall;
@@ -1100,7 +1250,6 @@ bool ModelParser::readVifStreamMesh(u32 at, u32 end, const NodeDraw& draw, sdfMa
     mTrace.countStreamGeom(u32(mesh.indices.size() / 3));
     mTrace.countStreamMesh(u32(mesh.indices.size() / 3));
     mTrace.countBones(1);
-    if (mEvents) mEvents->onMesh(mesh, mScreenTm);
     if (frame) frame->addMesh(std::move(mesh));
     return true;
 }
@@ -1336,6 +1485,8 @@ bool ModelParser::finishMesh(guest_ref<sdfModelRootNode_t> root,
     mesh.lighting = mLighting;
     mesh.fog = mFog;
     mesh.gs = sdfGsStateForOt(mesh.otIndex);
+    mesh.gs.frameMask = mState ? mState->frameMask : 0;
+    mesh.linkIndex = mCurrentLink;
     mesh.lit = (packet.prim.packetBits & sdfCorePacketNormals) != 0;
     mesh.matFlags = material->flags;
     mesh.matDuty = material->duty;
@@ -1345,8 +1496,8 @@ bool ModelParser::finishMesh(guest_ref<sdfModelRootNode_t> root,
     mesh.diffuse = Rgba::fromPacked(material->diffuse);
     mesh.ambient = Rgba::fromPacked(material->ambient);
 
+    mTrace.countMultiTexture(mesh.multi.on);
     mTrace.countMesh(type, packet.prim.faceCount);
-    if (mEvents) mEvents->onMesh(mesh, mScreenTm);
     if (frame) frame->addMesh(std::move(mesh));
     return true;
 }

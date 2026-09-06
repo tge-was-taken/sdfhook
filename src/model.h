@@ -28,6 +28,9 @@ public:
     /// A chain address that carried neither a material nor a mesh, and one that opened like a
     /// mesh and then would not decode.
     void countSetupRef() { mSetupRefs++; }
+
+    void countSettledMesh() { mSettledMeshes++; }
+    void countUnsettledMesh() { mUnsettledMeshes++; }
     void countStrayRef() { mStrayRefs++; }
 
     void countRoot(bool tempPackets);
@@ -159,6 +162,8 @@ private:
     std::map<u32, u64> mInfluences;
     u64 mSetupRefs = 0;
     u64 mStrayRefs = 0;
+    u64 mSettledMeshes = 0;
+    u64 mUnsettledMeshes = 0;
     u64 mGuestGenerated = 0;
     u64 mGuestShaped = 0;
 };
@@ -174,8 +179,37 @@ public:
 
     void sdfModelLinkOt(sdfModelRootNodePtr_t aRoot, Frame* frame);
 
+    /// The link counter spans the frame, not one root: the engine links every root into the same
+    /// chain, and that chain's order is what a mesh is matched against.
+    void beginFrame(u32 frame) {
+        mLinkIndex = 0;
+        mDecodeFrame = frame;
+    }
+
+    /// Written once the frame's chain exists, since that is what says which GS state each mesh ran
+    /// under, and a row recorded at decode carries the ordering table's default instead.
+    void traceMeshes(const Frame& frame);
+
     ModelTrace& getTrace() { return mTrace; }
     const ModelTrace& getTrace() const { return mTrace; }
+
+    /// One batch of camera-facing quads, as dds3BillboardLinkOt hands them over. The offsets are a
+    /// rotated pair of view-space axes per corner, so the quad carries its own size and spin.
+    /// @fn sdfBillBoardMakeN
+    /// @note SLUS-20911 0x002BB0F0
+    void sdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Frame* frame);
+
+    void setBillboardTexture(sdfTexHandlePtr_t aTex) { mBillboardTexture = aTex; }
+
+    /// Records which ordering table each pending billboard batch links into, since
+    /// sdfBillBoardMakeN is handed the batch alone and the index lives on the node above it.
+    void readBillboardTables();
+
+    /// One gouraud triangle in world space, which is all fldDrawPoly3 is handed: three positions and
+    /// three colours, no texture and no UVs.
+    /// @fn fldDrawPoly3
+    /// @note SLUS-20911 0x0012A5E0
+    void fldDrawPoly3(const sdfVector3_t point[3], const u32 colour[3], Frame* frame);
 
     /// The GS state the linked packets have left in force, tracked across a frame's whole chain.
     sdfGsState_t& getGsState() { return mGsState; }
@@ -236,6 +270,9 @@ private:
     /// scene, which is a fact about the savestates, not about the engine.
     /// @fn sdfModelTempPacketLinkOt
     /// @note SLUS-20911 0x002B1950
+    /// Neither face-division term is modelled, so a scene that sets one says so in the summary.
+    void reportFaceDiv(const char* what, f32 value);
+
     void sdfModelTempPacketLinkOt(guest_ref<sdfModelRootNode_t> root, Frame* frame);
 
     /// The type 2 path: the morph list picks up to two blend targets and their streams are chained
@@ -281,6 +318,15 @@ private:
     MeshLighting mLighting{};
     MeshFog mFog{};
     sdfGsState_t mGsState{};
+    /// The texture dds3BillboardTagLink last bound to a billboard batch: sdfBillBoardMakeN is handed
+    /// the geometry alone, so the handle has to come from the call that fills the batch.
+    sdfTexHandlePtr_t mBillboardTexture;
+    dds3BillboardNodePtr_t mDds3BillboardTag;
+    std::unordered_map<u32, u32> mBillboardOt;
+    u32 mLinkIndex = 0;
+    u32 mCurrentChain = 0;
+    u32 mDecodeFrame = 0;
+    u32 mCurrentLink = 0;
 
     /// Every material's own DMA packet this frame, so a chain address names the material that
     /// built it rather than being guessed at from its size.
