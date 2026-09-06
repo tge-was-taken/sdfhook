@@ -85,7 +85,8 @@ Into `dumps/vu1/annotated/<routine>.c`, and it must satisfy all of:
 - **Fixed memory addresses use the names from `annotated/memory-map.md`**, and any new name is
   added there with what proves it.
 
-Header block, every time:
+Header block, every time, and the ranges go under a line saying `Ranges covered here` so
+`scripts/vucheck.py` can read them:
 
 ```c
 /* <routine>, 0x0132..0x0172 of dumps/vu1/vu1_image.c (SLUS-20911).
@@ -111,9 +112,20 @@ skill, read from `mcp__ida__disasm`. `corePktApplyFaceDivColor` is the case that
 decompiler renders it as an empty loop, the disassembly shows a two-colour ramp, and no amount of
 VU1 reading would ever have found it.
 
+## The gap check is mechanical
+
+```bash
+scripts/vucheck.py dumps/vu1/annotated/lighting.c
+```
+
+reads the ranges the header declares, expands every span the body cites, and prints any address in
+between that the transcription never mentions. It ignores a span that merely restates a declared
+range, because a routine's own header comment is not a transcription of it. Run it before calling a
+transcription done; it found four unaccounted addresses in `lighting.c` the moment it existed.
+
 ## Done means
 
-- The transcription covers its stated range with no unaccounted address.
+- `scripts/vucheck.py` reports every declared range complete.
 - `--check` was run and is quoted.
 - Every claim about a value is backed by a watch or GS-trace number, in the file or in TODO.md.
 - `dumps/vu1/README.md` points at the new file and says how to regenerate the raw listing.

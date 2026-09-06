@@ -331,6 +331,19 @@ outright, so the projection can be done natively instead of read back. Both need
 their own engine-level entry points (`sdfCorePacketGen`, `sdfBillBoardMakeN` and the layers above),
 which is where the semantics still exist. That is the next boundary to hook, not a VU1 interpreter.
 
+## Translating VU1: `.claude/skills/vu-translate`
+
+The output is a **transcription**, not a summary, and `scripts/vucheck.py` enforces it: every
+address in the range the header declares has to appear in the file. A prose description of
+microcode has no address column, which is how `annotated/lighting.c` described the sum at
+0x0158..0x015B and the clamp at 0x0172 with the twenty-two instructions between them, the second
+half of a two-vertices-at-a-time unroll, simply absent.
+
+`vu2c.py --exec vu1_exec.jsonl --mem vu1_watch.jsonl` is the form worth using: `--mem` substitutes
+the quadwords a `PCSX2HOOK_VU_WATCH` run recorded into the loads that read them, so a value is read
+rather than inferred, and `--exec` (needs `PCSX2HOOK_VU1_INTERP`, and a **hash prefix** as the
+filter) says which branches ran and how often.
+
 ## Reimplementing a function: `.claude/skills/reimplement`
 
 Enumerate every branch, field, global, call and cast **before** writing code, and mark each as
