@@ -26,6 +26,11 @@ AUTONAME = ("unk_", "asc_", "off_", "flt_", "dbl_", "qword_", "dword_", "word_",
 CLASSES = ("vu1",)
 
 FACT = re.compile(r"^\s+(read|write|addr|glob|call)\s+0x([0-9A-Fa-f]+)\s+(\S+)(?:\s+addrs=(\S+))?")
+SIG = re.compile(r"^\s+sig\s+\((.*)\)\s*$")
+SHAPE = re.compile(r"^\s+shape\s+loops=(\d+)\s+calls=(\d+)\s*$")
+# {function: (guest parameter types, loops, calls)}
+SHAPES = {}
+
 BLK  = re.compile(r"^\s+(blk)\s+0x([0-9A-Fa-f]+)\.\.0x([0-9A-Fa-f]+)(?:\s+depth=(\d+))?(?:\s+cond=(\d+))?\s*$")
 BRCH = re.compile(r"^\s+(brch)\s+0x([0-9A-Fa-f]+)\s+(\S.*?)\s*$")
 FIELD = re.compile(r"SDF_STATIC_ASSERT_OFFSETOF\((\w+),\s*(\w+),\s*(0x[0-9A-Fa-f]+)\)")
@@ -43,6 +48,15 @@ def facts(path):
             lo, _, hi = where.partition("..")
             span[fn] = (int(lo, 16), int(hi or lo, 16))
             out[fn] = []
+            continue
+        g = SIG.match(line)
+        if g and fn:
+            SHAPES[fn] = ([a.strip() for a in g.group(1).split(",") if a.strip()], 0, 0)
+            continue
+        h = SHAPE.match(line)
+        if h and fn:
+            args = SHAPES.get(fn, ([], 0, 0))[0]
+            SHAPES[fn] = (args, int(h.group(1)), int(h.group(2)))
             continue
         b = BLK.match(line)
         if b and fn:
@@ -79,6 +93,10 @@ def citation_lines(text, lo, hi):
         if inside:
             out.append((i, inside))
     return out
+
+
+def strip_comments(text):
+    return re.sub(r"//[^\n]*", "", text)
 
 
 def nesting(text, opener):
@@ -475,6 +493,18 @@ def main(argv):
 
         done = {"blk": 0, "data": 0}
         need = {"blk": len(table[fn]) - len(data), "data": len(data)}
+        args, loops, calls = SHAPES.get(fn, (None, 0, 0))
+        if args is not None:
+            head = text.split("{", 1)[0]
+            mine = len([a for a in head[head.find("(") + 1:head.rfind(")")].split(",") if a.strip()])
+            if mine < len(args):
+                print("  %s takes %d parameters, the guest takes %d (%s)"
+                      % (fn, mine, len(args), ", ".join(args)))
+                bad += 1
+            body_loops = len(re.findall(r"^\s*(?:for|while|do)\b", strip_comments(text), re.M))
+            if body_loops < loops:
+                print("  %s has %d loops, the guest has %d" % (fn, body_loops, loops))
+                bad += 1
         nest = nesting(text, LOOP)
         ifs = nesting(text, COND)
         seq = sequence(text, *span[fn])

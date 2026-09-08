@@ -652,12 +652,28 @@ SDF_STATIC_ASSERT_OFFSETOF(sdfPrimG4Elem_t, rgbaq3, 0x40);
 SDF_STATIC_ASSERT_OFFSETOF(sdfPrimG4Elem_t, xy3, 0x48);
 SDF_STATIC_ASSERT_OFFSETOF(sdfPrimG4Elem_t, nop, 0x50);
 
+/// The engine's accessor over a packet's GIF tag: one name a width, so a field is reached without
+/// a cast wherever the tag is being built.
+struct sdfPrm {
+    u64 l;
+    u8 b1, b2, b3, b4, b5, b6, b7, b8;
+    u16 s1, s2, s3, s4;
+    u32 i1, i2;
+    f32 f1, f2;
+};
+SDF_STATIC_ASSERT_SIZE(sdfPrm, 0x28);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrm, l, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrm, b1, 0x08);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrm, s1, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrm, i1, 0x18);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrm, f1, 0x20);
+
 /// A packet's own two tags and the primitive that follows them. sdfDrawTagLink reads the pair to
 /// splice the packet into a tag's chain.
 struct sdfGrPacketHeader_t {
     u32 dmatag;
     u32 giftag;
-    u8 primitive[0x28];
+    sdfPrm primitive;
 };
 SDF_STATIC_ASSERT_SIZE(sdfGrPacketHeader_t, 0x30);
 SDF_STATIC_ASSERT_OFFSETOF(sdfGrPacketHeader_t, dmatag, 0x00);

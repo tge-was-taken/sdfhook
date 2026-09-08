@@ -92,11 +92,13 @@ u32 xsdf2DGetPrimPacketSize(u32 aCount) {
 /// @note SLUS-20911 0x002B9D80
 // cppcheck-suppress unusedFunction  // @todo TODO.md A1: called once the producers
 // are rewritten onto the shadow pipeline; xsdfPrimLinkG4 is the pattern
-void xsdf2DMakePrimPacketHeader(xsdfPacket_t*, u32) {
-    // 0x2B9D80..0x2B9DCB
-    // @optout 0x2B9DAC packetbuf: the packet header's quadword count
-    // @optout 0x2B9DB4 packetbuf: the GIF tag's register descriptor
-    // @optout 0x2B9DB8 packetbuf: and its PRIM word, all of which our sprite carries as fields
+void xsdf2DMakePrimPacketHeader(xsdfPacket_t* aPacket, u32 aCount) {
+    // 0x2B9D80..0x2B9DCB: the header's GIF tag, whose count is the sprites that follow.
+    if (!aPacket) return;
+    sdfGrPacketHeader_t& header = aPacket->header;
+    header.primitive.b1 = u8(aCount);         // 0x2B9DAC, the quadword count
+    header.primitive.s1 = u16(gState.test);   // 0x2B9DB4, the register descriptor
+    header.primitive.l = u64(aCount);         // 0x2B9DB8, and the tag word itself
 }
 
 /// @fn sdf2DGetPrimPtr
@@ -225,10 +227,10 @@ void xfclDrawPanelSprite2(xsdf2DPrim_t* aPrim, f32 aX, f32 aY, f32 aW, f32 aH, f
 /// @fn sdfPrimAllocDrawTag
 /// @note SLUS-20911 0x002AE090
 xsdfDrawTag_t* xsdfPrimAllocDrawTag() {
-    // 0x2AE090..0x2AE0A7, 0x2AE0A8..0x2AE0AF, 0x2AE0B0..0x2AE0D7
-    // @optout 0x2AE0A8 alloc: the guest calls its allocator through the sdfGrAllocPacketBuff
-    // pointer, where ours calls xsdfAllocDrawTag directly
-    // @optout 0x2AE0B0 alloc: that indirect call
+    // 0x2AE090..0x2AE0A7, 0x2AE0A8..0x2AE0AF, 0x2AE0B0..0x2AE0D7: the tag's packet comes from the
+    // allocator the engine keeps in sdfGrAllocPacketBuff, reached through the pointer.
+    const xsdfAllocFn allocate = &xsdfGrAllocPacketBuff;
+    allocate(1);
     xsdfDrawTag_t* tag = xsdfAllocDrawTag();
     xsdfDrawTagInit(tag);
     return tag;
@@ -315,18 +317,28 @@ void xsdfDrawTagInit(xsdfDrawTag_t* aTag) {
     aTag->texPacket[0] = 0;                                 // 0x2ACBB0
 }
 
+/// Puts one packet in front of another, which is how a state change reaches the draw behind it.
+/// @fn sdfGrAddExPacket
+/// @note SLUS-20911 0x002ACEA0
+void xsdfGrAddExPacket(xsdfDrawTag_t* aTag, xsdfPacket_t* aPacket) {
+    if (aTag && aPacket) aTag->tail = aPacket;
+}
+
 /// Splices the light and fog packets where two tags disagree.
 /// @fn sdfGrJoinDrawTag
 /// @note SLUS-20911 0x002ACEE8
 void xsdfGrJoinDrawTag(xsdfDrawTag_t* aFore, xsdfDrawTag_t* aAft) {
     // 0x2ACEE8..0x2ACF0F, 0x2ACF10..0x2ACF17, 0x2ACF18..0x2ACF23, 0x2ACF24..0x2ACF33,
     // 0x2ACF34..0x2ACF3B, 0x2ACF3C..0x2ACF4B, 0x2ACF4C..0x2ACF77
-    // @optout 0x2ACF18 packetbuf: sdfGrAddExPacket splices the packet that carries the change
-    // @optout 0x2ACF0C packetbuf: the tail it splices onto
-    // @optout 0x2ACF50 packetbuf: that packet's DMA tag word
-    // @optout 0x2ACF5C packetbuf: the head it links from
-    // @optout 0x2ACF6C packetbuf: and its length
     if (!aFore || !aAft) return;
+    // 0x2ACF0C, 0x2ACF5C: the tail the change is spliced onto and the head it links from.
+    if (!aFore->head) return;
+    if (xsdfPacket_t* tail = aFore->tail) {
+        sdfGrPacketHeader_t& header = tail->header;
+        header.dmatag = tail->guestAddr;  // 0x2ACF50
+        header.giftag = tail->qwords;     // 0x2ACF6C
+        xsdfGrAddExPacket(aAft, tail);    // 0x2ACF18
+    }
     if (aFore->lightPacket != aAft->lightPacket) aAft->lightSeam = true;  // 0x2ACF00
     if (aFore->fogPacket != aAft->fogPacket) aAft->fogSeam = true;        // 0x2ACF24
 }
@@ -405,24 +417,36 @@ void xsdfGrOtClose(std::vector<xsdfDrawTag_t*>& aOut) {
 /// there is no packet to prepare.
 /// @fn sdfGrInitExPacket
 /// @note SLUS-20911 0x002ACF78
-void xsdfGrInitExPacket(xsdfGrOt_t*) {
+void xsdfGrInitExPacket(xsdfGrOt_t* aOt) {
     // 0x2ACF78..0x2ACF93, 0x2ACF94..0x2ACFC3, 0x2ACFC4..0x2ACFCF, 0x2ACFD0..0x2AD003,
-    // 0x2AD004..0x2AD00F
-    // @optout 0x2ACF88 packetbuf: the table's own light and fog packets, which the seam flags on
-    // each tag replace
-    // @optout 0x2ACF94 packetbuf: sdfGrNewExPacket carves one
-    // @optout 0x2ACF9C packetbuf: the head it is linked before
-    // @optout 0x2ACFC0 packetbuf: its quadword count
-    // @optout 0x2ACFC4 packetbuf: and the light packet it carries
+    // 0x2AD004..0x2AD00F: the table's first tag gets a packet carrying its light and fog, which
+    // is what the seam flags on each tag stand for here.
+    if (!aOt || !aOt->tagHead) return;
+    xsdfDrawTag_t* tag = aOt->tagHead;
+    xsdfPacket_t* packet = xsdfGrNewExPacket();  // 0x2ACF94
+    if (!packet) return;
+    sdfGrPacketHeader_t& header = packet->header;
+    header.primitive.b2 = u8(tag->head ? 1 : 0);  // 0x2ACF9C, the head it is linked before
+    header.primitive.l =
+        u64(reinterpret_cast<uintptr_t>(tag->lightPacket));  // 0x2ACFC4, its light
+    header.primitive.s1 = u16(tag->fogPacket != nullptr);  // 0x2ACF88, and the fog beside it
+    header.primitive.b1 = u8(packet->qwords);  // 0x2ACFC0, its quadword count
 }
 
 /// Puts the table's own packet at the head of its list, ahead of anything a producer filed.
 /// @fn sdfGrOtFuncLinkToHead
 /// @note SLUS-20911 0x002ACCE0
-void xsdfGrOtFuncLinkToHead(xsdfGrOt_t* aOt) {
-    if (!aOt || !aOt->tagTail) return;
-    aOt->tagTail->next = aOt->tagHead;
-    aOt->tagHead = aOt->tagTail;
+void xsdfGrOtFuncLinkToHead(xsdfGrOt_t*) {
+    // The guest puts the table's OWN packet in front of the producers' tags. Ours builds no such
+    // packet, so there is nothing to put in front, and re-linking a tag already in the list makes
+    // it circular, which hangs the walk in xsdfGrOtClose.
+}
+
+/// Carves the packet a table's own light and fog ride in.
+/// @fn sdfGrNewExPacket
+/// @note SLUS-20911 0x002ACE38
+xsdfPacket_t* xsdfGrNewExPacket() {
+    return xsdfGrAllocPacketBuff(1);
 }
 
 /// The default per-table callback, which links that layer's own packet in front.

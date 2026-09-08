@@ -111,6 +111,8 @@ void xsdfGrOtReset();
 /// @fn sdfGrOtClose
 /// @note SLUS-20911 0x002AD010
 void xsdfGrOtClose(std::vector<xsdfDrawTag_t*>& aOut);
+void xsdfGrAddExPacket(xsdfDrawTag_t* aTag, xsdfPacket_t* aPacket);
+xsdfPacket_t* xsdfGrNewExPacket();
 void xsdfGrJoinDrawTag(xsdfDrawTag_t* aFore, xsdfDrawTag_t* aAft);
 void xsdfGrOtNormalReg(xsdfGrOt_t* aOt, xsdfDrawTag_t* aTag);
 void xsdfGrSortOtReg(xsdfGrOt_t* aOt, xsdfDrawTag_t* aTag);
