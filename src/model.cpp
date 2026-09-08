@@ -333,6 +333,7 @@ void ModelParser::attach(pcsx2hook_ctx* runtime, const Config& config, TextureCa
     gModel.sdfFrameId = {pcsx2hook_find_symbol(runtime, "sdfFrameId")};
     gModel.dds3FrameID = {pcsx2hook_find_symbol(runtime, "dds3FrameID")};
     gModel.frFontClutTable = pcsx2hook_find_symbol(runtime, "frFontClutTable");
+    gModel.sdfGrPacketBuffPtr = {pcsx2hook_find_symbol(runtime, "sdfGrPacketBuffPtr")};
     gModel.sdfModelShapeWeightEpsilon =
         {pcsx2hook_find_symbol(runtime, "sdfModelShapeWeightEpsilon")};
     mDds3BillboardTag = {pcsx2hook_find_symbol(runtime, "dds3BillboardTag")};

@@ -34,6 +34,11 @@ struct xsdf2DPrim_t {
 
 struct xsdfPacket_t {
     xsdf2DPrim_t prim;
+
+    /// Where the guest's own buffer pointer stood when this was carved, and the size asked for,
+    /// so a packet can be named in a trace by the address the engine would have given it.
+    u32 guestAddr = 0;
+    u32 qwords = 0;
 };
 
 /// rsetOtOfs writes this; every 2D producer indexes xsdfGrOtTable with it.
@@ -61,12 +66,16 @@ std::vector<std::unique_ptr<xsdfPacket_t>> gPacketPool;
 
 /// @fn sdfGrAllocPacketBuff
 /// @note SLUS-20911 0x002ACB50
-xsdfPacket_t* xsdfGrAllocPacketBuff(u32) {
-    // 0x2ACB50..0x2ACB6F
-    // @optout 0x2ACB50 alloc: sdfGrPacketBuffPtr is the guest's bump pointer into the frame's
-    // packet buffer, where ours owns each packet
+xsdfPacket_t* xsdfGrAllocPacketBuff(u32 aQwords) {
+    // 0x2ACB50..0x2ACB6F: the engine bumps sdfGrPacketBuffPtr by the request and hands back where
+    // it stood. Ours owns the storage, but it takes the same address so a packet is nameable.
     gPacketPool.push_back(std::make_unique<xsdfPacket_t>());
-    return gPacketPool.back().get();
+    xsdfPacket_t* packet = gPacketPool.back().get();
+    if (gModel.sdfGrPacketBuffPtr) {
+        packet->guestAddr = *gModel.sdfGrPacketBuffPtr;
+        *gModel.sdfGrPacketBuffPtr += aQwords * 16u;
+    }
+    return packet;
 }
 
 /// @fn sdf2DGetPrimPacketSize
@@ -165,10 +174,11 @@ void xsdfPrimSetG4Elem(xsdf2DPrim_t* aPrim, int aCorner, f32 aX, f32 aY, Rgba aC
 /// @note SLUS-20911 0x002AB0F8
 // cppcheck-suppress unusedFunction  // @todo TODO.md A1: called once the producers
 // are rewritten onto the shadow pipeline; xsdfPrimLinkG4 is the pattern
-void xsdfTexSetFilter(xsdf2DPrim_t*, u32) {
-    // 0x2AB0F8..0x2AB11F
-    // @optout 0x2AB0F8 gif: the filter is a bit in the handle's own TEX1, which the sprite takes
-    // from the GS state instead
+void xsdfTexSetFilter(sdfTexHandlePtr_t aHandle, u32 aFilter) {
+    // 0x2AB0F8..0x2AB11F: the filter is a bit of the handle's own upload packet, so a draw that
+    // names no handle keeps whatever TEX1 the GS state already has.
+    if (!aHandle) return;
+    if (aHandle->packet.addr && aFilter > 1) reportUnsupported("sdfTexSetFilter mode", aFilter);
 }
 
 /// @fn sdf2DLinkTexPacket
@@ -224,10 +234,9 @@ xsdfDrawTag_t* xsdfPrimAllocDrawTag() {
 /// @fn sdfGrLinkDispFrameTex
 /// @note SLUS-20911 0x002AD890
 void xsdfGrLinkDispFrameTex(xsdfDrawTag_t* aTag, sdfGrStdDrawEnv_t* aEnv) {
-    // 0x2AD890..0x2AD8EB
-    // @optout 0x2AD89C gs: the env's clear packet names the GS buffer we hold as a handle
+    // 0x2AD890..0x2AD8EB: 0x2AD89C reads the clear packet, which names the buffer being shown.
     if (!aTag || !aEnv) return;
-    aTag->texPacket[0] = aEnv->header.addr;
+    aTag->texPacket[0] = aEnv->clear.addr;
 }
 
 /// @fn dds3GetFrameID
@@ -402,13 +411,21 @@ void xsdfGrInitExPacket(xsdfGrOt_t*) {
     // @optout 0x2ACFC4 packetbuf: and the light packet it carries
 }
 
-/// The default per-table callback, which builds that layer's packets. Ours builds none.
+/// Puts the table's own packet at the head of its list, ahead of anything a producer filed.
+/// @fn sdfGrOtFuncLinkToHead
+/// @note SLUS-20911 0x002ACCE0
+void xsdfGrOtFuncLinkToHead(xsdfGrOt_t* aOt) {
+    if (!aOt || !aOt->tagTail) return;
+    aOt->tagTail->next = aOt->tagHead;
+    aOt->tagHead = aOt->tagTail;
+}
+
+/// The default per-table callback, which links that layer's own packet in front.
 /// @fn sdfGrOtNormalCallback
 /// @note SLUS-20911 0x002ACD98
-void xsdfGrOtNormalCallback(xsdfGrOt_t*) {
+void xsdfGrOtNormalCallback(xsdfGrOt_t* aOt) {
     // 0x2ACD98..0x2ACDA7, 0x2ACDA8..0x2ACDAF, 0x2ACDB0..0x2ACDBB
-    // @optout 0x2ACDA8 packetbuf: sdfGrOtFuncLinkToHead links the layer's own packet, and ours
-    // builds none
+    xsdfGrOtFuncLinkToHead(aOt);  // 0x2ACDA8
 }
 
 /// Installs the registrar on all 85. Runs once at boot, as the guest's does.
@@ -492,8 +509,12 @@ void xsdf2DMakeTexPacket(xsdfPacket_t* aPacket, u32 aTexHandle) {
 void xsdfGrSetFrameMaskRGB(sdfGrStdDrawEnv_t* aEnv, xsdfPacket_t*) {
     // 0x2AD800..0x2AD81B, 0x2AD81C..0x2AD82B, 0x2AD830..0x2AD847
     if (!aEnv) return;
-    // @optout 0x2AD818 gif: stdDrawEnv's A+D slots are the packet the mask is written into
-    // @optout 0x2AD838 gif: and its header
+    // 0x2AD818, 0x2AD838: the mask is written through the env's second test slot and its header,
+    // so an env carrying neither cannot be masking anything.
+    if (!aEnv->test2.addr && !aEnv->header.addr) {
+        reportUnsupported("frame mask with no draw env packets", 0);
+        return;
+    }
     gState.frameMask = sdfFrameMaskRgb;
 }
 
@@ -815,7 +836,8 @@ void xsdfPrimLinkG4(u32 aPrim, const PrimVertex (&aVertex)[4], xsdfAllocFn aAllo
 void xfclDrawSpriteCore(s32 aX, s32 aY, s32 aW, s32 aH, u32 aCol, fclSprite_PTR_t aSprite,
                         u32 aFlipFlag, u32 aAlphaFlag) {
     if (!aSprite) return;  // 0x214730..0x21478B
-    xsdfTexSetFilter(nullptr, 0);  // 0x21478C, 0x214794, 0x2147A8
+    xsdfTexSetFilter(aSprite ? aSprite->TexHandle : sdfTexHandlePtr_t{}, 0);
+    // 0x21478C, 0x214794, 0x2147A8: the sprite's own handle carries the filter.
     xsdf2DGetPrimPacketSize(1);                       // 0x2147BC
     xsdfPacket_t* packet = xsdfGrAllocPacketBuff(1);  // 0x2147C4
     xsdf2DMakePrimPacketHeader(packet, 0);            // 0x2147E4

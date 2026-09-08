@@ -95,6 +95,7 @@ void xrsetAlpha(u32 aAlpha);
 void xrsetTest(u32 aAte, u32 aAtst, u32 aAref, u32 aAfail, u32 aDate, u32 aDatm,
                u32 aZtst);
 void xsdfGrInitExPacket(xsdfGrOt_t* aOt);
+void xsdfGrOtFuncLinkToHead(xsdfGrOt_t* aOt);
 void xsdfGrOtNormalCallback(xsdfGrOt_t* aOt);
 void xsdfGrOtInit();
 void xsdfGrOtReset();
@@ -126,7 +127,7 @@ void xsdf2DMakePrimPacketHeader(xsdfPacket_t* aPacket, u32 aPrim);
 void xsdfPrimSetFt4Elem(xsdf2DPrim_t* aPrim, int aCorner, f32 aX, f32 aY, f32 aU, f32 aV,
                         Rgba aColor);
 void xsdfPrimSetG4Elem(xsdf2DPrim_t* aPrim, int aCorner, f32 aX, f32 aY, Rgba aColor);
-void xsdfTexSetFilter(xsdf2DPrim_t* aPrim, u32 aFilter);
+void xsdfTexSetFilter(sdfTexHandlePtr_t aHandle, u32 aFilter);
 void xsdf2DLinkTexPacket(xsdfDrawTag_t* aTag, u32 aTexHandle);
 void xsdfDrawTagLink(xsdfDrawTag_t* aTag, xsdfPacket_t* aPacket);
 void xfclDrawPanelSprite2(xsdf2DPrim_t* aPrim, f32 aX, f32 aY, f32 aW, f32 aH, f32 aU0, f32 aV0,
@@ -230,6 +231,7 @@ struct XsdfModel {
     u32Ptr_t dds3FrameID;
     f32Ptr_t sdfModelShapeWeightEpsilon;
     u32 frFontClutTable = 0;
+    u32Ptr_t sdfGrPacketBuffPtr;
     f32Ptr_t sdfFaceDivBias;
     f32Ptr_t sdfFaceDivSoften;
     u8Ptr_t corePktSoftenBias;
