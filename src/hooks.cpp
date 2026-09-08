@@ -187,7 +187,7 @@ void collectPackets(HookContext& h) {
         // Shadows arrive as an inline VIF stream, not a REF chain, so the type 1 path misses them.
         if (h.config->drawShadows && !verts && !stateOnly && std::strstr(by, "fldSdwDraw")) {
             const u32 qwc = tag.qwc;
-            if (h.model.fldSdwDraw(packet.addr + 16, packet.addr + 16 + 16 * qwc, gs,
+            if (h.modelHooks.fldSdwDraw(packet.addr + 16, packet.addr + 16 + 16 * qwc, gs,
                                    h.frames.getFrame())) {
                 h.coverage.shadowMeshes++;
             } else {
@@ -830,7 +830,7 @@ int sdfModelLinkOtHook(pcsx2hook_regs* regs, void* user) {
     const sdfModelRootNodePtr_t aRoot{c.getArg(1)};
 
     h.trace->onSdfModelLinkOt(aOt, aRoot.addr);
-    h.model.sdfModelLinkOt(aRoot, h.frames.getFrame());
+    h.modelHooks.sdfModelLinkOt(aRoot, h.frames.getFrame());
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -839,7 +839,7 @@ int sdfCorePacketGenHook(pcsx2hook_regs* regs, void* user) {
     HookContext& h = *static_cast<HookContext*>(user);
     h.trace->onSdfCorePacketGen(c.getArg(0), c.getArg(1), c.getArg(2), c.getArg(3));
     // 0x2B91A8/0x2B91B0: the face-division terms arrive here as $f12 and $f13.
-    h.model.setFaceDivTerms(regs->fpr[12], regs->fpr[13]);
+    h.modelHooks.setFaceDivTerms(regs->fpr[12], regs->fpr[13]);
     h.frames.beginGenerated();
     h.model.getTrace().countGuestGenerated();
     return PCSX2HOOK_CONTINUE;
@@ -894,7 +894,7 @@ int corePktApplyFaceDivColorHook(pcsx2hook_regs* regs, void* user) {
     HookContext& h = *static_cast<HookContext*>(user);
     const sdfCorePacketCbPtr_t cb{c.getArg(0)};
     const sdfVector4Ptr_t aParm{c.getArg(1)};
-    h.model.readFaceDivParm(cb, aParm);
+    h.modelHooks.readFaceDivParm(cb, aParm);
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -1019,7 +1019,7 @@ int dds3BillboardTagLinkHook(pcsx2hook_regs* regs, void* user) {
 /// @note SLUS-20911 0x0022E2E8
 int dds3BillboardLinkOtHook(pcsx2hook_regs* regs, void* user) {
     (void)regs;
-    static_cast<HookContext*>(user)->model.readBillboardTables();
+    static_cast<HookContext*>(user)->modelHooks.readBillboardTables();
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -1036,7 +1036,7 @@ int sdfBillBoardMakeNHook(pcsx2hook_regs* regs, void* user) {
 
     h.coverage.apiDraws++;
     if (h.config->noBillboards) return PCSX2HOOK_CONTINUE;
-    h.model.sdfBillBoardMakeN(aCenter, aNum, h.frames.getFrame());
+    h.modelHooks.sdfBillBoardMakeN(aCenter, aNum, h.frames.getFrame());
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -1053,7 +1053,7 @@ int drawSprite3DHook(pcsx2hook_regs* regs, void* user) {
 
     h.coverage.apiDraws++;
     if (h.config->noBillboards) return PCSX2HOOK_CONTINUE;
-    h.model.drawSprite3D(aTexHandle, aSprite, h.frames.getFrame());
+    h.modelHooks.drawSprite3D(aTexHandle, aSprite, h.frames.getFrame());
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -1069,7 +1069,7 @@ int sdf3DPrimMakePolyHook(pcsx2hook_regs* regs, void* user) {
     if (!aPoly) return PCSX2HOOK_CONTINUE;
 
     if (!h.config->drawPrimPoly) return PCSX2HOOK_CONTINUE;
-    h.model.sdf3DPrimMakePoly(aPoly, h.frames.getFrame());
+    h.modelHooks.sdf3DPrimMakePoly(aPoly, h.frames.getFrame());
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -1091,7 +1091,7 @@ int fldDrawPoly3Hook(pcsx2hook_regs* regs, void* user) {
 
     h.coverage.apiDraws++;
     if (!h.config->poly) return PCSX2HOOK_CONTINUE;
-    h.model.fldDrawPoly3(point, color, h.frames.getFrame());
+    h.modelHooks.fldDrawPoly3(point, color, h.frames.getFrame());
     return PCSX2HOOK_CONTINUE;
 }
 

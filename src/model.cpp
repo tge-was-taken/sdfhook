@@ -1,4 +1,4 @@
-#include "model.h"
+#include "hooks_impl_model.h"
 
 #include <cstddef>
 #include <cstring>
@@ -598,7 +598,7 @@ bool ModelParser::readVifStreamMesh(u32 at, u32 end, const NodeDraw& draw, sdfMa
     if (aMat) {
         mesh.texHandle = mTextures->getHandle(aMat->texHandle, frame);
         mTrace.countTexture(aMat->texHandle.addr != 0, mesh.texHandle.addr != 0);
-        readMaterialPacket(*aMat, mesh, frame);
+        mHooks->readMaterialPacket(*aMat, mesh, frame);
     }
 
     mTrace.countOt(mesh.otIndex);
@@ -737,7 +737,7 @@ bool ModelParser::finishMesh(guest_ref<sdfModelRootNode_t> root,
     }
     mesh.texHandle = mTextures->getHandle(material->texHandle, frame);
     mTrace.countTexture(material->texHandle.addr != 0, mesh.texHandle.addr != 0);
-    readMaterialPacket(*material, mesh, frame);
+    mHooks->readMaterialPacket(*material, mesh, frame);
     mesh.lighting = mLighting;
     mesh.fog = mFog;
     mesh.gs = sdfGsStateForOt(mesh.otIndex);

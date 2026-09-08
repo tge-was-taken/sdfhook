@@ -10,7 +10,7 @@
 #include "config.h"
 #include "render_state.h"
 #include "gif.h"
-#include "model.h"
+#include "hooks_impl_model.h"
 #include "texture.h"
 #include "render/frame.h"
 #include "types.h"
@@ -213,6 +213,7 @@ struct HookContext {
     TextureCache textures;
     CallStack calls;
     ModelParser model;
+    ModelHooks modelHooks{model};
     RenderState state;
     Coverage coverage;
 };

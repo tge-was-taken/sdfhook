@@ -14,6 +14,7 @@
 
 namespace sdfhook {
 
+class ModelHooks;
 class TextureCache;
 class Trace;
 
@@ -176,10 +177,12 @@ private:
 /// @note SLUS-20911 0x002B1DB8
 class ModelParser {
 public:
+    /// The hook implementations run over this state; ModelParser decodes the formats they hand it.
+    friend class ModelHooks;
+
+    void setHooks(ModelHooks* hooks) { mHooks = hooks; }
     void attach(pcsx2hook_ctx* runtime, const Config& config, TextureCache* textures,
                 Trace* trace, const RenderState* state);
-
-    void sdfModelLinkOt(sdfModelRootNodePtr_t aRoot, Frame* frame);
 
     /// Says whether a producer hands world or projected coordinates. Magnitude alone cannot.
     /// @todo TODO.md V19: nothing calls it while that entry's remaining producers are unhooked.
@@ -194,43 +197,10 @@ public:
     /// Needs the frame's chain: a row recorded at decode carries the table's default instead.
     void traceMeshes(const Frame& frame);
 
-    /// So the ramp's coordinate is read from the guest rather than fitted.
-    /// @fn corePktSetFaceDivParm
-    /// @note SLUS-20911 0x002B6A30
-    void setFaceDivTerms(f32 soften, f32 bias);
-
-    /// Reads the ramp corePktMakeFaceDivParm left on the caller's stack, keyed by the material
-    /// packet the cb names.
-    /// @fn corePktApplyFaceDivColor
-    /// @note SLUS-20911 0x002B72D8
-    void readFaceDivParm(sdfCorePacketCbPtr_t aCb, sdfVector4Ptr_t aParm);
-
     ModelTrace& getTrace() { return mTrace; }
     const ModelTrace& getTrace() const { return mTrace; }
 
-    /// Offsets are a rotated pair of view-space axes per corner, so a quad carries size and spin.
-    /// @fn sdfBillBoardMakeN
-    /// @note SLUS-20911 0x002BB0F0
-    void sdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Frame* frame);
-
     void setBillboardTexture(sdfTexHandlePtr_t aTex) { mBillboardTexture = aTex; }
-
-    /// sdfBillBoardMakeN is handed the batch alone, and the table index lives on the node above.
-    void readBillboardTables();
-
-    /// Three world positions and three colors, no texture and no UVs.
-    /// @fn fldDrawPoly3
-    /// @note SLUS-20911 0x0012A5E0
-    void fldDrawPoly3(const sdfVector3_t point[3], const u32 color[3], Frame* frame);
-
-    /// A world-space VIF stream whose header sits past a color unpack, not at the target.
-    /// @fn fldSdwDraw
-    /// @note SLUS-20911 0x001193E8
-    bool fldSdwDraw(u32 aPacket, u32 aEnd, const sdfGsState_t& aState, Frame* frame);
-
-    void sdf3DPrimMakePoly(sdf3DPolyPtr_t aPoly, Frame* frame);
-
-    void drawSprite3D(TexHandle aTexHandle, sdfSprite3DPtr_t aSprite, Frame* frame);
 
     /// The GS state the linked packets have left in force, tracked across a frame's whole chain.
     sdfGsState_t& getGsState() { return mGsState; }
@@ -248,42 +218,13 @@ private:
         u8 otIndex;
     };
 
-    /// @fn sdfMatMakePacket
-    /// @note SLUS-20911 0x002B3558
-    void readMaterialPacket(const sdfMat_t& material, DrawMesh& mesh,
-                            Frame* frame);
-
-    /// @fn corePktEmitMultiTexPass
-    /// @note SLUS-20911 0x002B8C30
-    void readMultiTexturePacket(const sdfMat_t& material, sdfMatPacketPtr_t packet, DrawMesh& mesh,
-                                Frame* frame);
-
-    void readLighting(sdf3DLightParallelPacketPtr_t aLight);
-    void readFog(sdf3DFogPacketPtr_t aFog);
     bool readScreenTm();
-
-    /// @fn sdfModelCheckBounds
-    /// @note SLUS-20911 0x002B1838
-    bool sdfModelCheckBounds(sdfModelBoundsPtr_t aBounds, const Matrix4& clip) const;
-
-    void walkChain(guest_ref<sdfModelRootNode_t> root, const NodeDraw& draw,
-                   u32 chainAddr, Frame* frame);
-
-    /// @fn sdfCorePacketGen
-    /// @note SLUS-20911 0x002B9178
-    void sdfCorePacketGen(guest_ref<sdfModelRootNode_t> root, const NodeDraw& draw,
-                         sdfCorePacketPtr_t aPacket, Frame* frame);
 
     void dumpWords(const char* what, u32 at);
     void dumpPayload(sdfCorePacketPtr_t aPacket);
 
     /// A batch caps at VU0 memory, so a larger mesh arrives split, triangles indexing the whole.
     bool readRigidBatches(u32 at, const sdfCorePacket_t& packet, DrawMesh& mesh);
-
-    /// @fn corePktSkinVertFirst
-    /// @note SLUS-20911 0x002B6BC0
-    bool readWeightedBatches(u32 at, const sdfCorePacket_t& packet,
-                             u32 nodesAddr, DrawMesh& mesh);
 
     /// Plain arrays, not VIF-tagged. Shapes past the first are deltas, weighted by the root's
     /// morph controller.
@@ -295,24 +236,8 @@ private:
     /// @note SLUS-20911 0x002B1950
     void reportFaceDiv(const char* what, f32 value);
 
-    void sdfModelTempPacketLinkOt(guest_ref<sdfModelRootNode_t> root, Frame* frame);
-
-    /// Type 2: up to two blend targets, their streams chained behind the mesh's. Also unseen.
-    /// @fn sdfModelLinkShapedDrawPacket
-    /// @note SLUS-20911 0x002B0CB0
-    void sdfModelLinkShapedDrawPacket(guest_ref<sdfModelRootNode_t> root, const NodeDraw& draw,
-                                      u32 dataAddr, Frame* frame);
-
-    /// @fn sdfModelSetNormalDrawPacket
-    /// @note SLUS-20911 0x002B0AC0
-    void sdfModelSetNormalDrawPacket(const NodeDraw& draw, u32 chainAddr, Frame* frame);
-
     bool readVifStreamMesh(u32 at, u32 end, const NodeDraw& draw, sdfMatPtr_t aMat,
                            Frame* frame);
-
-    /// @fn corePktBuildFaceList
-    /// @note SLUS-20911 0x002B7A80
-    bool corePktBuildFaceList(u32 at, const sdfCorePacket_t& packet, DrawMesh& mesh);
 
     void readSecondUv(u32 at, const sdfCorePacket_t& packet, DrawMesh& mesh);
 
@@ -365,6 +290,7 @@ private:
     std::unordered_map<u32, u32> mMatByPacket;
     Matrix4 mScreenTm{};
     ModelTrace mTrace;
+    ModelHooks* mHooks = nullptr;
 };
 
 }  // namespace sdfhook

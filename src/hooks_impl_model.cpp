@@ -4,7 +4,7 @@
 
 #include "json.h"
 #include "log.h"
-#include "model.h"
+#include "hooks_impl_model.h"
 #include "model_internal.h"
 #include "texture.h"
 #include "trace.h"
@@ -24,23 +24,23 @@ LogChannel log("model");
 
 // 0x2B9230/0x2B923C: sdfCorePacketGen keeps its two float arguments in $f20 and $f21 and hands
 // them straight back, so entry is where they can be read.
-void ModelParser::setFaceDivTerms(f32 soften, f32 bias) {
-    if (!mFaceDivTermsSeen && mConfig) {
+void ModelHooks::setFaceDivTerms(f32 soften, f32 bias) {
+    if (!mParser.mFaceDivTermsSeen && mParser.mConfig) {
         log.info("face division terms from the guest: soften {} bias {}, fitted {} {}", soften, bias,
-                 mConfig->faceDivSoften, mConfig->faceDivBias);
+                 mParser.mConfig->faceDivSoften, mParser.mConfig->faceDivBias);
     }
-    mFaceDivSoftenTerm = soften;
-    mFaceDivBiasTerm = bias;
-    mFaceDivTermsSeen = true;
+    mParser.mFaceDivSoftenTerm = soften;
+    mParser.mFaceDivBiasTerm = bias;
+    mParser.mFaceDivTermsSeen = true;
 }
 // 0x2B6DF4 and 0x2B6E30 read the coordinate's scale from [0].w and its offset from [0].y, and
 // 0x2B6E80 interpolates [16] to [16]+[32] across it.
-void ModelParser::readFaceDivParm(sdfCorePacketCbPtr_t aCb, sdfVector4Ptr_t aParm) {
+void ModelHooks::readFaceDivParm(sdfCorePacketCbPtr_t aCb, sdfVector4Ptr_t aParm) {
     const sdfVector4_t* parm = aParm.slice(3);
     if (!parm || !aCb) return;
     const u32 aMatPacket = aCb->matPacketPtr.addr;
 
-    MeshRamp& ramp = mFaceDivRamps[aMatPacket];
+    MeshRamp& ramp = mParser.mFaceDivRamps[aMatPacket];
     const f32 lo[3] = {parm[1].x, parm[1].y, parm[1].z};
     const f32 delta[3] = {parm[2].x, parm[2].y, parm[2].z};
     // 128 is one, as the GS modulate has it.
@@ -50,34 +50,34 @@ void ModelParser::readFaceDivParm(sdfCorePacketCbPtr_t aCb, sdfVector4Ptr_t aPar
     }
     ramp.known = true;
 
-    if (!mFaceDivParmSeen) {
-        mFaceDivParmSeen = true;
+    if (!mParser.mFaceDivParmSeen) {
+        mParser.mFaceDivParmSeen = true;
         log.info("face division ramp, material packet {:08X}: scale {} offset {}", aMatPacket,
                  parm[0].w, parm[0].y);
         log.info("  lo {} {} {}, delta {} {} {}", lo[0], lo[1], lo[2], delta[0], delta[1], delta[2]);
     }
 }
-void ModelParser::readLighting(sdf3DLightParallelPacketPtr_t aLight) {
-    mLighting = {};
-    const sdf3DLightParallelPacketPtr_t light = aLight ? aLight : mSdf3DLightDefault.valueOr();
+void ModelHooks::readLighting(sdf3DLightParallelPacketPtr_t aLight) {
+    mParser.mLighting = {};
+    const sdf3DLightParallelPacketPtr_t light = aLight ? aLight : mParser.mSdf3DLightDefault.valueOr();
     if (!light) return;
 
     for (u32 i = 0; i < kParallelLights; i++) {
         for (usize axis = 0; axis < 3; axis++) {
             // normal is a matrix whose columns are the light vectors, so a light reads down them.
-            mLighting.direction[i][axis] = light->normal[axis][i];
-            mLighting.color[i][axis] = light->color[i][axis];
+            mParser.mLighting.direction[i][axis] = light->normal[axis][i];
+            mParser.mLighting.color[i][axis] = light->color[i][axis];
         }
-        mLighting.base[i] = light->colorBase[i];
-        mLighting.ambientColor[i] = light->color[3][i];
-        mLighting.fullColor[i] = light->color[4][i];
+        mParser.mLighting.base[i] = light->colorBase[i];
+        mParser.mLighting.ambientColor[i] = light->color[3][i];
+        mParser.mLighting.fullColor[i] = light->color[4][i];
     }
 
     static std::set<u32> shown;
-    if (mConfig->dumpLight && shown.insert(light.addr).second) {
+    if (mParser.mConfig->dumpLight && shown.insert(light.addr).second) {
         JsonObject row;
         row.addString("dump", "light").addHexDigits("at", light.addr, 8);
-        row.addReals("base", {mLighting.base[0], mLighting.base[1], mLighting.base[2]}, 4);
+        row.addReals("base", {mParser.mLighting.base[0], mParser.mLighting.base[1], mParser.mLighting.base[2]}, 4);
         for (u32 c = 0; c < 5; c++) {
             const std::string name = std::format("color{}", c);
             row.addReals(name.c_str(),
@@ -86,10 +86,10 @@ void ModelParser::readLighting(sdf3DLightParallelPacketPtr_t aLight) {
         row.beginArray("lights");
         for (u32 i = 0; i < kParallelLights; i++) {
             row.beginObject();
-            row.addReals("direction", {mLighting.direction[i][0], mLighting.direction[i][1],
-                                       mLighting.direction[i][2]}, 4);
+            row.addReals("direction", {mParser.mLighting.direction[i][0], mParser.mLighting.direction[i][1],
+                                       mParser.mLighting.direction[i][2]}, 4);
             row.addReals("color",
-                         {mLighting.color[i][0], mLighting.color[i][1], mLighting.color[i][2]}, 4);
+                         {mParser.mLighting.color[i][0], mParser.mLighting.color[i][1], mParser.mLighting.color[i][2]}, 4);
             row.endObject();
         }
         row.endArray();
@@ -98,47 +98,47 @@ void ModelParser::readLighting(sdf3DLightParallelPacketPtr_t aLight) {
 }
 // F is per vertex, 255 keeping the color and 0 replacing it with FOGCOL. VU1 builds it as
 // `fogParm[2] + fogParm[3] / w` clamped to fogParm[0]..fogParm[1] (0x04DC, 0x04DF, 0x04E3).
-void ModelParser::readFog(sdf3DFogPacketPtr_t aFog) {
-    mFog = {};
-    const sdf3DFogPacketPtr_t fog = aFog ? aFog : mSdf3DFogDefault.valueOr();
+void ModelHooks::readFog(sdf3DFogPacketPtr_t aFog) {
+    mParser.mFog = {};
+    const sdf3DFogPacketPtr_t fog = aFog ? aFog : mParser.mSdf3DFogDefault.valueOr();
     if (!fog) return;
 
     const u32 fogcol = u32(fog->fogColor);
-    mFog.on = true;
-    mFog.minimum = fog->fogParm[0] / 255.0f;
-    mFog.maximum = fog->fogParm[1] / 255.0f;
-    mFog.offset = fog->fogParm[2] / 255.0f;
-    mFog.scale = fog->fogParm[3] / 255.0f;
-    mFog.color[0] = f32(fogcol & 0xFF) / 255.0f;
-    mFog.color[1] = f32((fogcol >> 8) & 0xFF) / 255.0f;
-    mFog.color[2] = f32((fogcol >> 16) & 0xFF) / 255.0f;
+    mParser.mFog.on = true;
+    mParser.mFog.minimum = fog->fogParm[0] / 255.0f;
+    mParser.mFog.maximum = fog->fogParm[1] / 255.0f;
+    mParser.mFog.offset = fog->fogParm[2] / 255.0f;
+    mParser.mFog.scale = fog->fogParm[3] / 255.0f;
+    mParser.mFog.color[0] = f32(fogcol & 0xFF) / 255.0f;
+    mParser.mFog.color[1] = f32((fogcol >> 8) & 0xFF) / 255.0f;
+    mParser.mFog.color[2] = f32((fogcol >> 16) & 0xFF) / 255.0f;
 }
 // The sampler state lives in the material's packet, which sdfMatUpdatePacketBasic fills from the
 // texture handle rather than from the material.
-void ModelParser::readMaterialPacket(const sdfMat_t& material, DrawMesh& mesh,
+void ModelHooks::readMaterialPacket(const sdfMat_t& material, DrawMesh& mesh,
                                    Frame* frame) {
     mesh.diffuse = Rgba::fromPacked(material.diffuse);
     mesh.ambient = Rgba::fromPacked(material.ambient);
 
     // The finished buffer, not the one about to be rewritten: our walk runs at sdfModelLinkOt's
     // entry, so the index the frame id names is the one sdfMatListUpdatePacket is about to fill.
-    const u32 frameId = mSdfFrameId ? (*mSdfFrameId & 1) ^ 1 : 0;
+    const u32 frameId = mParser.mSdfFrameId ? (*mParser.mSdfFrameId & 1) ^ 1 : 0;
     const sdfMatPacketPtr_t packet{material.packet[frameId].addr};
     if (!packet) return;
     mesh.specular = Rgba::fromPacked(packet->specularColor);
-    mTrace.countSpecular(mesh.attrBits, packet->specularColor);
+    mParser.mTrace.countSpecular(mesh.attrBits, packet->specularColor);
     // 0x2B8D9C: one global texture for every reflection pass, so it is keyed by that address.
     if (mesh.attrBits & sdfCoreAttrRefMapPass) {
-        mesh.refMap = mTextures->getHandleForTex0(TexHandle{mSdf3DRefMapParam.addr},
-                                                  mSdf3DRefMapParam.valueOr());
+        mesh.refMap = mParser.mTextures->getHandleForTex0(TexHandle{mParser.mSdf3DRefMapParam.addr},
+                                                  mParser.mSdf3DRefMapParam.valueOr());
     }
     // The specular pass names a handle, so it resolves like any other texture.
     if (mesh.attrBits & sdfCoreAttrSpecularPass) {
-        if (const u32 handleAddr = mSdf3DSpecularTex.valueOr()) {
+        if (const u32 handleAddr = mParser.mSdf3DSpecularTex.valueOr()) {
             const sdfTexHandlePtr_t handle{handleAddr};
             // The handle's own pixels, with its upload packet's TEX0 for TCC so the alpha
             // survives. The overlay's real texture is never uploaded. See TODO V7.
-            mesh.specularTex = mTextures->getHandle(TexHandle{handleAddr}, frame);
+            mesh.specularTex = mParser.mTextures->getHandle(TexHandle{handleAddr}, frame);
             if (handle) {
                 mesh.specularTex0 =
                     guest_ptr<u64>{handle->packet.addr + kTex0InPacket}.valueOr();
@@ -151,17 +151,17 @@ void ModelParser::readMaterialPacket(const sdfMat_t& material, DrawMesh& mesh,
     // A material can name a TEX0 and carry no handle. The packet's address is stable, so the
     // recovered texture files under that.
     if (!mesh.texHandle.addr) {
-        mesh.texHandle = mTextures->getHandleForTex0(TexHandle{packet.addr}, packet->tex0Data);
+        mesh.texHandle = mParser.mTextures->getHandleForTex0(TexHandle{packet.addr}, packet->tex0Data);
     }
     // Inline at texTm rather than behind it: that field's address is what corePktXfmLightClipUV
     // is handed.
     std::memcpy(mesh.texMatrix, packet->texTm, sizeof(mesh.texMatrix));
-    mTrace.countTexMatrix(packet->texTm[0] != 0.0f || packet->texTm[3] != 0.0f);
+    mParser.mTrace.countTexMatrix(packet->texTm[0] != 0.0f || packet->texTm[3] != 0.0f);
 
     // 0x2B6A4C: read off the material *packet* at +44 and +40, plus the root's, soften clamped to
     // at least one. sdfMat_t carries the same two fields at 0x44 and 0x40 with different values.
-    const f32 softenTerm = mFaceDivTermsSeen ? mFaceDivSoftenTerm : mConfig->faceDivSoften;
-    const f32 biasTerm = mFaceDivTermsSeen ? mFaceDivBiasTerm : mConfig->faceDivBias;
+    const f32 softenTerm = mParser.mFaceDivTermsSeen ? mParser.mFaceDivSoftenTerm : mParser.mConfig->faceDivSoften;
+    const f32 biasTerm = mParser.mFaceDivTermsSeen ? mParser.mFaceDivBiasTerm : mParser.mConfig->faceDivBias;
     mesh.multi.soften = std::max(packet->fdSoften + softenTerm, 1.0f);
     mesh.multi.bias = packet->fdBias + biasTerm;
     mesh.faceDivSoften = mesh.multi.soften;
@@ -180,15 +180,15 @@ void ModelParser::readMaterialPacket(const sdfMat_t& material, DrawMesh& mesh,
 /// face-division terms, which belong to the first pass.
 /// @fn corePktEmitMultiTexPass
 /// @note SLUS-20911 0x002B8C30
-void ModelParser::readMultiTexturePacket(const sdfMat_t& material, sdfMatPacketPtr_t packet,
+void ModelHooks::readMultiTexturePacket(const sdfMat_t& material, sdfMatPacketPtr_t packet,
                                          DrawMesh& mesh, Frame* frame) {
     if (!(mesh.attrBits & sdfCoreAttrMultiTexPass)) return;
-    mesh.multi.texHandle = mTextures->getHandle(material.multiTexHandle, frame);
+    mesh.multi.texHandle = mParser.mTextures->getHandle(material.multiTexHandle, frame);
     // The second pass can name its TEX0 with no handle just as the first can. Keyed apart from the
     // first by an offset into the same packet, since one material carries both.
     if (!mesh.multi.texHandle.addr) {
         mesh.multi.texHandle =
-            mTextures->getHandleForTex0(TexHandle{packet.addr + 8}, packet->mtexTex0Data);
+            mParser.mTextures->getHandleForTex0(TexHandle{packet.addr + 8}, packet->mtexTex0Data);
     }
     mesh.multi.alpha = packet->mtexAlpha;
     mesh.multi.tex0 = packet->mtexTex0Data;
@@ -204,7 +204,7 @@ void ModelParser::readMultiTexturePacket(const sdfMat_t& material, sdfMatPacketP
     mesh.multi.constant = packet->constant;
     // Generation runs after the walk, so these are the previous frame's endpoints. Every captured
     // one is algo 3 and every ramp mesh algo 1 or 2, so on the measured scenes this path is inert.
-    if (const auto it = mFaceDivRamps.find(packet.addr); it != mFaceDivRamps.end()) {
+    if (const auto it = mParser.mFaceDivRamps.find(packet.addr); it != mParser.mFaceDivRamps.end()) {
         mesh.multi.rampColors = it->second;
     }
     if (packet->mtexAlgo > 3) reportUnsupported("corePktEmitMultiTexPass mtexAlgo", packet->mtexAlgo);
@@ -213,7 +213,7 @@ void ModelParser::readMultiTexturePacket(const sdfMat_t& material, sdfMatPacketP
 /// Culls a node by its bounds against the VU0 clip codes the engine tests.
 /// @fn sdfModelCheckBounds
 /// @note SLUS-20911 0x002B1838
-bool ModelParser::sdfModelCheckBounds(sdfModelBoundsPtr_t aBounds, const Matrix4& clip) const {
+bool ModelHooks::sdfModelCheckBounds(sdfModelBoundsPtr_t aBounds, const Matrix4& clip) const {
     if (!aBounds) return false;
     const f32* box = &aBounds->min.x;
 
@@ -230,16 +230,16 @@ bool ModelParser::sdfModelCheckBounds(sdfModelBoundsPtr_t aBounds, const Matrix4
 /// The engine's node list, turned into meshes instead of ordering-table entries.
 /// @fn sdfModelLinkOt
 /// @note SLUS-20911 0x002B1DB8
-void ModelParser::sdfModelLinkOt(sdfModelRootNodePtr_t aRoot, Frame* frame) {
-    if (!aRoot || !readScreenTm()) return;
+void ModelHooks::sdfModelLinkOt(sdfModelRootNodePtr_t aRoot, Frame* frame) {
+    if (!aRoot || !mParser.readScreenTm()) return;
     const guest_ref<sdfModelRootNode_t> root{aRoot};
     if (frame) {
-        frame->screenTm = mScreenTm;
-        frame->projectionScale[0] = mProjectionScale[0];
-        frame->projectionScale[1] = mProjectionScale[1];
+        frame->screenTm = mParser.mScreenTm;
+        frame->projectionScale[0] = mParser.mProjectionScale[0];
+        frame->projectionScale[1] = mParser.mProjectionScale[1];
     }
 
-    mTrace.countRoot((root->flags & sdfModelRootTempPackets) != 0);
+    mParser.mTrace.countRoot((root->flags & sdfModelRootTempPackets) != 0);
 
     // 0x2B1E04: the temporary packets are linked first, over the same nodes.
     if (root->flags & sdfModelRootTempPackets) sdfModelTempPacketLinkOt(root, frame);
@@ -248,19 +248,19 @@ void ModelParser::sdfModelLinkOt(sdfModelRootNodePtr_t aRoot, Frame* frame) {
     readLighting(root->light);
     readFog(root->fog);
 
-    const u32 frameId = mSdfFrameId ? *mSdfFrameId : 0;
+    const u32 frameId = mParser.mSdfFrameId ? *mParser.mSdfFrameId : 0;
 
     // 0x2B1E6C: the root's own bias under flags & 2, else the global. It rides in the per-node
     // state packet, which nothing here models.
-    reportFaceDiv("sdfModelLinkOt faceDivBias", (root->flags & sdfModelRootOwnFaceDivBias)
+    mParser.reportFaceDiv("sdfModelLinkOt faceDivBias", (root->flags & sdfModelRootOwnFaceDivBias)
                                                     ? root->faceDivBias
-                                                    : mSdfFaceDivBias.valueOr());
+                                                    : mParser.mSdfFaceDivBias.valueOr());
     // The terms reach sdfCorePacketGen in $f12 and $f13, so Config's values are only the first
     // frame's fallback.
     if (root->flags & sdfModelRootOwnFaceDivBias) {
         reportUnsupported("sdfModelLinkOt root faceDiv terms", root->flags);
     }
-    if (const u8 soften = mCorePktSoftenBias.valueOr()) {
+    if (const u8 soften = mParser.mCorePktSoftenBias.valueOr()) {
         reportUnsupported("corePktSoftenBias", soften);
     }
     // 0x2B1E94: flags & 8 suppresses the type 1 and 2 paths.
@@ -268,16 +268,16 @@ void ModelParser::sdfModelLinkOt(sdfModelRootNodePtr_t aRoot, Frame* frame) {
 
     const sdfModelNodeListPtr_t list = root->nodeList;
     if (!list) return;
-    mNodeListAddr = root->nodeList.addr;
+    mParser.mNodeListAddr = root->nodeList.addr;
 
     // A chain names a material by its sdfMatMakePacket address, so the lookup is built once.
-    mMatByPacket.clear();
+    mParser.mMatByPacket.clear();
     if (const sdfMatListPtr_t matList = root->matList) {
         for (s16 m = 0; m < matList->count; m++) {
             const sdfMatPtr_t material{readListItem(root->matList.addr, u32(m))};
             if (!material) continue;
             for (const sdfVoidPtr_t& packet : material->packet) {
-                if (packet.addr) mMatByPacket[packet.addr] = material.addr;
+                if (packet.addr) mParser.mMatByPacket[packet.addr] = material.addr;
             }
         }
     }
@@ -286,27 +286,27 @@ void ModelParser::sdfModelLinkOt(sdfModelRootNodePtr_t aRoot, Frame* frame) {
         const u32 nodeAddr = readListItem(root->nodeList.addr, u32(i));
         const sdfModelNodePtr_t node{nodeAddr};
         if (!node) {
-            mTrace.countNode(ModelTrace::Node::Unreadable);
+            mParser.mTrace.countNode(ModelTrace::Node::Unreadable);
             continue;
         }
         const u32 chainAddr = node->drawPacket[frameId & 1].addr;
         if (!chainAddr) {
-            mTrace.countNode(ModelTrace::Node::NoChain);
+            mParser.mTrace.countNode(ModelTrace::Node::NoChain);
             continue;
         }
         // 0x2B1EEC
         if (node->flags & sdfModelNodeHidden) {
-            mTrace.countNode(ModelTrace::Node::Hidden);
+            mParser.mTrace.countNode(ModelTrace::Node::Hidden);
             continue;
         }
 
         NodeDraw draw{};
         std::memcpy(&draw.model, &node->tm, sizeof(Matrix4));
         // 0x2B1F0C: MultMatrixRev(&sdf3DScreenTm) over the node's own tm, held in VU0.
-        draw.clip = MultMatrixRev(draw.model, mScreenTm);
+        draw.clip = MultMatrixRev(draw.model, mParser.mScreenTm);
         // 0x2B1F20
         if (node->bounds && sdfModelCheckBounds(node->bounds, draw.clip)) {
-            mTrace.countNode(ModelTrace::Node::BoundsCulled);
+            mParser.mTrace.countNode(ModelTrace::Node::BoundsCulled);
             continue;
         }
 
@@ -322,19 +322,19 @@ void ModelParser::sdfModelLinkOt(sdfModelRootNodePtr_t aRoot, Frame* frame) {
         // sdfCorePacketGen turns the same flag into corePktBuildFaceList's backfaceSign.
         draw.reverse = suppressLinked;
 
-        mTrace.countNode(ModelTrace::Node::Drawn);
+        mParser.mTrace.countNode(ModelTrace::Node::Drawn);
         walkChain(root, draw, chainAddr, frame);
     }
 }
 /// sdfModelLinkOt's inner loop over a node's packet chain; recheck the two together.
-void ModelParser::walkChain(guest_ref<sdfModelRootNode_t> root, const NodeDraw& draw,
+void ModelHooks::walkChain(guest_ref<sdfModelRootNode_t> root, const NodeDraw& draw,
                           u32 chainAddr, Frame* frame) {
     const bool suppressLinked = (root->flags & sdfModelRootNoLinkedPackets) != 0;
 
     for (u32 addr = chainAddr; addr;) {
         const sdfModelPacketHeaderPtr_t header{addr};
         if (!header) {
-            mTrace.countPacket(ModelTrace::Packet::Unknown);
+            mParser.mTrace.countPacket(ModelTrace::Packet::Unknown);
             return;
         }
         NodeDraw packetDraw = draw;
@@ -344,28 +344,28 @@ void ModelParser::walkChain(guest_ref<sdfModelRootNode_t> root, const NodeDraw& 
         switch (header->type) {
             case sdfPacketDmaCall:
                 if (suppressLinked) {
-                    mTrace.countPacket(ModelTrace::Packet::Suppressed);
+                    mParser.mTrace.countPacket(ModelTrace::Packet::Suppressed);
                     break;
                 }
-                mTrace.countPacket(ModelTrace::Packet::DmaCall);
-                dumpWords("call", addr + sizeof(sdfModelPacketHeader_t));
+                mParser.mTrace.countPacket(ModelTrace::Packet::DmaCall);
+                mParser.dumpWords("call", addr + sizeof(sdfModelPacketHeader_t));
                 sdfModelSetNormalDrawPacket(packetDraw, addr + u32(sizeof(sdfModelPacketHeader_t)), frame);
                 break;
             case sdfPacketShaped:
                 if (suppressLinked) {
-                    mTrace.countPacket(ModelTrace::Packet::Suppressed);
+                    mParser.mTrace.countPacket(ModelTrace::Packet::Suppressed);
                     break;
                 }
-                mTrace.countPacket(ModelTrace::Packet::Shaped);
+                mParser.mTrace.countPacket(ModelTrace::Packet::Shaped);
                 sdfModelLinkShapedDrawPacket(root, packetDraw, header->dataPtr.addr, frame);
                 break;
             case sdfPacketGenerated:
-                mTrace.countPacket(ModelTrace::Packet::Generated);
-                mCurrentLink = mLinkIndex++;
+                mParser.mTrace.countPacket(ModelTrace::Packet::Generated);
+                mParser.mCurrentLink = mParser.mLinkIndex++;
                 sdfCorePacketGen(root, packetDraw, sdfCorePacketPtr_t{header->dataPtr.addr}, frame);
                 break;
             default:
-                mTrace.countPacket(ModelTrace::Packet::Unknown);
+                mParser.mTrace.countPacket(ModelTrace::Packet::Unknown);
                 reportUnsupported("sdfModelLinkOt packet type", header->type);
                 break;
         }
@@ -375,15 +375,15 @@ void ModelParser::walkChain(guest_ref<sdfModelRootNode_t> root, const NodeDraw& 
 /// Reads the generated packet the engine would build, by packet type.
 /// @fn sdfCorePacketGen
 /// @note SLUS-20911 0x002B9178
-void ModelParser::sdfCorePacketGen(guest_ref<sdfModelRootNode_t> root, const NodeDraw& draw,
+void ModelHooks::sdfCorePacketGen(guest_ref<sdfModelRootNode_t> root, const NodeDraw& draw,
                                   sdfCorePacketPtr_t aPacket, Frame* frame) {
     if (!aPacket) return;
     const sdfCorePacket_t& packet = *aPacket;
 
     const sdfCorePacketType_t type = sdfCorePacketType_t(packet.header.packetType);
-    mTrace.countGeom(type, packet.prim.faceCount);
-    mTrace.countPacketType(packet.header.packetType, packet.prim.attrBits, packet.prim.packetBits);
-    dumpPayload(aPacket);
+    mParser.mTrace.countGeom(type, packet.prim.faceCount);
+    mParser.mTrace.countPacketType(packet.header.packetType, packet.prim.attrBits, packet.prim.packetBits);
+    mParser.dumpPayload(aPacket);
 
     switch (type) {
         case sdfCorePacketTypeRigid:
@@ -394,7 +394,7 @@ void ModelParser::sdfCorePacketGen(guest_ref<sdfModelRootNode_t> root, const Nod
             return;
     }
     if (!packet.prim.faceCount || !packet.prim.pointCount) {
-        mTrace.countReject(type, ModelTrace::Reject::Empty);
+        mParser.mTrace.countReject(type, ModelTrace::Reject::Empty);
         return;
     }
 
@@ -416,7 +416,7 @@ void ModelParser::sdfCorePacketGen(guest_ref<sdfModelRootNode_t> root, const Nod
     mesh.reverseFacing = draw.reverse;
 
     if (!corePktBuildFaceList(at, packet, mesh)) {
-        mTrace.countReject(type, ModelTrace::Reject::BadElems);
+        mParser.mTrace.countReject(type, ModelTrace::Reject::BadElems);
         return;
     }
     at = align16(at + 6u * packet.prim.faceCount);
@@ -425,42 +425,42 @@ void ModelParser::sdfCorePacketGen(guest_ref<sdfModelRootNode_t> root, const Nod
     switch (type) {
         case sdfCorePacketTypeRigid:
             mesh.bones.push_back(draw.model);
-            ok = readRigidBatches(at, packet, mesh);
+            ok = mParser.readRigidBatches(at, packet, mesh);
             break;
         case sdfCorePacketTypeWeighted:
             ok = readWeightedBatches(at, packet, nodesAddr, mesh);
             break;
         case sdfCorePacketTypeBlendShape:
             mesh.bones.push_back(draw.model);
-            ok = readBlendShapes(at, packet, root, mesh);
+            ok = mParser.readBlendShapes(at, packet, root, mesh);
             break;
     }
     if (!ok) {
-        mTrace.countReject(type, ModelTrace::Reject::BadBatch);
+        mParser.mTrace.countReject(type, ModelTrace::Reject::BadBatch);
         return;
     }
 
-    mTrace.countSampler(mesh.tex0, mesh.tex1, mesh.clamp);
-    mTrace.countDeterminant(mesh.bones[0]);
-    mTrace.countAttr(mesh.attrBits);
-    mTrace.countGs(mesh.gs);
-    mTrace.countOt(mesh.otIndex);
-    mTrace.countBones(u32(mesh.bones.size()));
-    finishMesh(root, packet, type, mesh, frame);
+    mParser.mTrace.countSampler(mesh.tex0, mesh.tex1, mesh.clamp);
+    mParser.mTrace.countDeterminant(mesh.bones[0]);
+    mParser.mTrace.countAttr(mesh.attrBits);
+    mParser.mTrace.countGs(mesh.gs);
+    mParser.mTrace.countOt(mesh.otIndex);
+    mParser.mTrace.countBones(u32(mesh.bones.size()));
+    mParser.finishMesh(root, packet, type, mesh, frame);
 }
 /// The same node walk over the root's temporary packet list, run first under flags & 4.
 /// @fn sdfModelTempPacketLinkOt
 /// @note SLUS-20911 0x002B1950
-void ModelParser::sdfModelTempPacketLinkOt(guest_ref<sdfModelRootNode_t> root, Frame* frame) {
+void ModelHooks::sdfModelTempPacketLinkOt(guest_ref<sdfModelRootNode_t> root, Frame* frame) {
     // @optout 0x2B1954 packetbuf: sdfFrameId picks which of the two per-frame packets to build
     // @optout 0x2B19A4 packetbuf: sdfMatListUpdatePacket rebuilds each material's DMA packet
 
     // 0x2B19FC..0x2B1A17: this walk takes faceDivSoften where sdfModelLinkOt takes faceDivBias,
     // and falls back to its own global.
-    reportFaceDiv("sdfModelTempPacketLinkOt faceDivSoften",
+    mParser.reportFaceDiv("sdfModelTempPacketLinkOt faceDivSoften",
                   (root->flags & sdfModelRootOwnFaceDivBias) ? root->faceDivSoften
-                                                             : mSdfFaceDivSoften.valueOr());
-    mTrace.countTempPacketWalk();
+                                                             : mParser.mSdfFaceDivSoften.valueOr());
+    mParser.mTrace.countTempPacketWalk();
 
     const sdfModelNodeListPtr_t list = root->nodeList;
     if (!list) return;
@@ -478,7 +478,7 @@ void ModelParser::sdfModelTempPacketLinkOt(guest_ref<sdfModelRootNode_t> root, F
         NodeDraw draw{};
         std::memcpy(&draw.model, &node->tm, sizeof(Matrix4));
         // @optout 0x2B1AA0 elsewhere(readScreenTm): sdf3DScreenTm is captured once a frame
-        draw.clip = MultMatrixRev(draw.model, mScreenTm);
+        draw.clip = MultMatrixRev(draw.model, mParser.mScreenTm);
         // 0x2B1AA8..0x2B1AB8: a node without bounds is never culled.
         if (node->bounds && sdfModelCheckBounds(node->bounds, draw.clip)) continue;
 
@@ -520,10 +520,10 @@ void ModelParser::sdfModelTempPacketLinkOt(guest_ref<sdfModelRootNode_t> root, F
                 }
                 // @optout 0x2B1C78..0x2B1CE3 dma: builds the material REF packet and links it
                 const sdfMatPtr_t mat{readListItem(root->matList.addr, packet->matIndex)};
-                if (!readVifStreamMesh(packet->dataPtr.addr,
+                if (!mParser.readVifStreamMesh(packet->dataPtr.addr,
                                        packet->dataPtr.addr + 16u * packet->qwc, packetDraw, mat,
                                        frame)) {
-                    mTrace.countStrayRef();
+                    mParser.mTrace.countStrayRef();
                 }
             }
         }
@@ -536,9 +536,9 @@ void ModelParser::sdfModelTempPacketLinkOt(guest_ref<sdfModelRootNode_t> root, F
 }
 /// @fn sdfModelLinkShapedDrawPacket
 /// @note SLUS-20911 0x002B0CB0
-void ModelParser::sdfModelLinkShapedDrawPacket(guest_ref<sdfModelRootNode_t> root,
+void ModelHooks::sdfModelLinkShapedDrawPacket(guest_ref<sdfModelRootNode_t> root,
                                                const NodeDraw& draw, u32 dataAddr, Frame* frame) {
-    mTrace.countShapedWalk();
+    mParser.mTrace.countShapedWalk();
 
     // 0x2B0CD0: the low half of word 1 indexes the morph list, the high half the material list.
     const u32 word1 = guest_ptr<u32>{dataAddr + 4}.valueOr();
@@ -573,22 +573,22 @@ void ModelParser::sdfModelLinkShapedDrawPacket(guest_ref<sdfModelRootNode_t> roo
                                                 u32(sizeof(sdfModelShapeEntry_t)) * targets[t]}
                     .valueOr();
             if (!entry.dataPtr) continue;
-            if (!readVifStreamMesh(entry.dataPtr.addr, entry.dataPtr.addr + 16u * entry.qwc, draw,
+            if (!mParser.readVifStreamMesh(entry.dataPtr.addr, entry.dataPtr.addr + 16u * entry.qwc, draw,
                                    mat, frame)) {
-                mTrace.countStrayRef();
+                mParser.mTrace.countStrayRef();
             }
         }
         // The list's own stream closes the chain, which is the mesh the targets deform.
-        if (!readVifStreamMesh(list->next.addr, list->next.addr + 16u * list->count, draw, mat,
+        if (!mParser.readVifStreamMesh(list->next.addr, list->next.addr + 16u * list->count, draw, mat,
                                frame)) {
-            mTrace.countStrayRef();
+            mParser.mTrace.countStrayRef();
         }
     }
 }
 /// One camera-facing quad, rotated in its own plane by the angle sdfBillBoardMake1 never sees.
 /// @fn drawSprite3D
 /// @note SLUS-20911 0x0012A2D0
-void ModelParser::drawSprite3D(TexHandle aTexHandle, sdfSprite3DPtr_t aSprite, Frame* frame) {
+void ModelHooks::drawSprite3D(TexHandle aTexHandle, sdfSprite3DPtr_t aSprite, Frame* frame) {
     if (!frame || !aSprite) return;
     const sdfSprite3D_t& sprite = *aSprite;
 
@@ -602,24 +602,24 @@ void ModelParser::drawSprite3D(TexHandle aTexHandle, sdfSprite3DPtr_t aSprite, F
     };
     f32 right[3];
     f32 up[3];
-    axis(mScreenTm.m[0][0], mScreenTm.m[1][0], mScreenTm.m[2][0], right);
-    axis(mScreenTm.m[0][1], mScreenTm.m[1][1], mScreenTm.m[2][1], up);
+    axis(mParser.mScreenTm.m[0][0], mParser.mScreenTm.m[1][0], mParser.mScreenTm.m[2][0], right);
+    axis(mParser.mScreenTm.m[0][1], mParser.mScreenTm.m[1][1], mParser.mScreenTm.m[2][1], up);
 
     DrawMesh mesh;
     Matrix4 identity{};
     for (int i = 0; i < 4; i++) identity.m[i][i] = 1.0f;
     mesh.bones.push_back(identity);
     mesh.color = Rgba::fromPacked(sprite.color);
-    mesh.lighting = mLighting;
-    mesh.fog = mFog;
+    mesh.lighting = mParser.mLighting;
+    mesh.fog = mParser.mFog;
     // Stamped alongside the state, or the row reports table 0 beside table 2's registers.
     mesh.otIndex = 2;
     mesh.gs = sdfGsStateForOt(mesh.otIndex);
-    mesh.gs.frameMask = mState ? mState->frameMask : 0;
+    mesh.gs.frameMask = mParser.mState ? mParser.mState->frameMask : 0;
     mesh.attrBits = sdfCoreAttrTextured | sdfCoreAttrBlend | sdfPrimTriangle;
     mesh.lit = false;
     mesh.packetType = sdfPacketGenerated;
-    mesh.texHandle = mTextures->getHandle(aTexHandle, frame);
+    mesh.texHandle = mParser.mTextures->getHandle(aTexHandle, frame);
 
     // 0x12A344: SetRotateMatrixZ turns the offsets in the quad's own plane before the camera
     // axes, which is why this call is the hook rather than sdfBillBoardMake1.
@@ -647,14 +647,14 @@ void ModelParser::drawSprite3D(TexHandle aTexHandle, sdfSprite3DPtr_t aSprite, F
     }
     static constexpr u16 kQuad[6] = {0, 2, 1, 0, 3, 2};
     mesh.indices.assign(std::begin(kQuad), std::end(kQuad));
-    mTrace.countBones(1);
+    mParser.mTrace.countBones(1);
     frame->addMesh(std::move(mesh));
 }
 /// An indexed triangle list in world space: the vertices are quadword-strided with only xyz used,
 /// and +0x0C holds one byte index per lane, three to a word, with the word count at +0x00.
 /// @fn sdf3DPrimMakePoly
 /// @note SLUS-20911 0x002BAAB8
-void ModelParser::sdf3DPrimMakePoly(sdf3DPolyPtr_t aPoly, Frame* frame) {
+void ModelHooks::sdf3DPrimMakePoly(sdf3DPolyPtr_t aPoly, Frame* frame) {
     if (!frame || !aPoly) return;
     const u32 vertexCount = u32(aPoly->vertexCount);
     const u32 triangles = u32(aPoly->extraQwords);
@@ -672,18 +672,18 @@ void ModelParser::sdf3DPrimMakePoly(sdf3DPolyPtr_t aPoly, Frame* frame) {
     Matrix4 identity{};
     for (int axis = 0; axis < 4; axis++) identity.m[axis][axis] = 1.0f;
     mesh.bones.push_back(identity);
-    mesh.lighting = mLighting;
-    mesh.fog = mFog;
+    mesh.lighting = mParser.mLighting;
+    mesh.fog = mParser.mFog;
     mesh.gs = sdfGsStateForOt(0);
     // fldSdwDraw sets its own blend and test through rsetAlpha and rsetTest rather than taking an
     // ordering table's pair, so the state in force at the call is the one this draw runs under.
-    if (mState) {
-        mesh.gs.frameMask = mState->frameMask;
-        mesh.gs.test = mState->test;
+    if (mParser.mState) {
+        mesh.gs.frameMask = mParser.mState->frameMask;
+        mesh.gs.test = mParser.mState->test;
     }
     // 0x2BAAF4: the prim word is the descriptor's own or'd with 0x68, which is IIP, FGE and ABE.
     mesh.attrBits = u16(aPoly->prim | 0x68);
-    const GsAlpha alpha = mState ? mState->alpha : GsAlpha::Blend;
+    const GsAlpha alpha = mParser.mState ? mParser.mState->alpha : GsAlpha::Blend;
     if (alpha == GsAlpha::Opaque) {
         mesh.attrBits = u16(mesh.attrBits & ~u16(sdfCoreAttrBlend));
     } else {
@@ -706,23 +706,23 @@ void ModelParser::sdf3DPrimMakePoly(sdf3DPolyPtr_t aPoly, Frame* frame) {
             mesh.indices.push_back(u16(at));
         }
     }
-    mTrace.countBones(1);
-    mTrace.countStreamGeom(triangles);
-    mTrace.countStreamMesh(triangles);
+    mParser.mTrace.countBones(1);
+    mParser.mTrace.countStreamGeom(triangles);
+    mParser.mTrace.countStreamMesh(triangles);
     frame->addMesh(std::move(mesh));
 }
 /// A flat triangle the field draws directly, with a colour per corner and no texture.
 /// @fn fldDrawPoly3
 /// @note SLUS-20911 0x0012A5E0
-void ModelParser::fldDrawPoly3(const sdfVector3_t point[3], const u32 color[3], Frame* frame) {
+void ModelHooks::fldDrawPoly3(const sdfVector3_t point[3], const u32 color[3], Frame* frame) {
     if (!frame) return;
 
     DrawMesh mesh;
     Matrix4 identity{};
     for (int axis = 0; axis < 4; axis++) identity.m[axis][axis] = 1.0f;
     mesh.bones.push_back(identity);
-    mesh.lighting = mLighting;
-    mesh.fog = mFog;
+    mesh.lighting = mParser.mLighting;
+    mesh.fog = mParser.mFog;
     mesh.gs = sdfGsStateForOt(0);
     // Gouraud and blended, with no texture: the call carries no UVs, so there is nothing to sample.
     mesh.attrBits = sdfCoreAttrGouraud | sdfCoreAttrBlend | sdfPrimTriangle;
@@ -735,13 +735,13 @@ void ModelParser::fldDrawPoly3(const sdfVector3_t point[3], const u32 color[3], 
     }
     static constexpr u16 kTriangle[3] = {0, 1, 2};
     mesh.indices.assign(std::begin(kTriangle), std::end(kTriangle));
-    mTrace.countBones(1);
+    mParser.mTrace.countBones(1);
     frame->addMesh(std::move(mesh));
 }
 /// Self-describing, so it is read rather than rebuilt.
 /// @fn fldSdwDraw
 /// @note SLUS-20911 0x001193E8
-bool ModelParser::fldSdwDraw(u32 aPacket, u32 aEnd, const sdfGsState_t& aState,
+bool ModelHooks::fldSdwDraw(u32 aPacket, u32 aEnd, const sdfGsState_t& aState,
                              Frame* frame) {
     if (!frame || aEnd <= aPacket) return false;
 
@@ -793,8 +793,8 @@ bool ModelParser::fldSdwDraw(u32 aPacket, u32 aEnd, const sdfGsState_t& aState,
     Matrix4 identity{};
     for (int axis = 0; axis < 4; axis++) identity.m[axis][axis] = 1.0f;
     mesh.bones.push_back(identity);
-    mesh.lighting = mLighting;
-    mesh.fog = mFog;
+    mesh.lighting = mParser.mLighting;
+    mesh.fog = mParser.mFog;
     // The state the chain left in force at this packet, FBMSK included: the engine masks RGB for
     // part of this pass, and drawing that as visible color is what costs 24 points.
     mesh.gs = aState;
@@ -814,7 +814,7 @@ bool ModelParser::fldSdwDraw(u32 aPacket, u32 aEnd, const sdfGsState_t& aState,
         }
     }
 
-    mTrace.countBones(1);
+    mParser.mTrace.countBones(1);
     frame->addMesh(std::move(mesh));
     return true;
 }
@@ -823,13 +823,13 @@ bool ModelParser::fldSdwDraw(u32 aPacket, u32 aEnd, const sdfGsState_t& aState,
 /// @note SLUS-20911 0x0015B7C0
 constexpr u32 kMaxBillboardNodes = 4096;
 
-void ModelParser::readBillboardTables() {
-    mBillboardOt.clear();
-    if (!mDds3BillboardTag) return;
+void ModelHooks::readBillboardTables() {
+    mParser.mBillboardOt.clear();
+    if (!mParser.mDds3BillboardTag) return;
     // The engine's own loop rewrites `next` as it consumes each node, so this runs at its entry.
-    dds3BillboardNodePtr_t node{u32Ptr_t{mDds3BillboardTag.addr}.valueOr()};
+    dds3BillboardNodePtr_t node{u32Ptr_t{mParser.mDds3BillboardTag.addr}.valueOr()};
     for (u32 steps = 0; node && steps < kMaxBillboardNodes; steps++) {
-        mBillboardOt[node->batch.addr] = node->otIndex;
+        mParser.mBillboardOt[node->batch.addr] = node->otIndex;
         node = node->next;
     }
 }
@@ -837,14 +837,14 @@ void ModelParser::readBillboardTables() {
 /// the engine is handed.
 /// @fn sdfBillBoardMakeN
 /// @note SLUS-20911 0x002BB0F0
-void ModelParser::sdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Frame* frame) {
+void ModelHooks::sdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Frame* frame) {
     if (!frame || !aBatch || !aNum || aNum > std::size(aBatch->centre)) return;
     const sdfBillBoardBatch_t& batch = *aBatch;
 
     // Offsets are view-space, so they need the camera's axes to land back in world.
     // A billboard faces the camera by construction, which is what makes taking them from the
     // matrix's columns exact rather than an approximation.
-    const Matrix4& tm = mScreenTm;
+    const Matrix4& tm = mParser.mScreenTm;
     const auto axis = [](f32 x, f32 y, f32 z, f32 out[3]) {
         const f32 length = std::sqrt(x * x + y * y + z * z);
         const f32 scale = length > 1e-6f ? 1.0f / length : 0.0f;
@@ -860,9 +860,9 @@ void ModelParser::sdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Fra
     // The node above the batch names its table; the GS trace puts the specters' additive batches at
     // ALPHA 0x48 with TEST 0x71801, which is what table 2 decodes to, so a miss says so rather than
     // silently picking one.
-    const auto found = mBillboardOt.find(aBatch.addr);
-    if (found == mBillboardOt.end()) reportUnsupported("billboard batch with no ordering table", 0);
-    const u32 otIndex = found != mBillboardOt.end() ? found->second : 2;
+    const auto found = mParser.mBillboardOt.find(aBatch.addr);
+    if (found == mParser.mBillboardOt.end()) reportUnsupported("billboard batch with no ordering table", 0);
+    const u32 otIndex = found != mParser.mBillboardOt.end() ? found->second : 2;
 
     for (u32 i = 0; i < aNum; i++) {
         const sdfVector4_t& centre = batch.centre[i];
@@ -874,19 +874,19 @@ void ModelParser::sdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Fra
         for (int axisIndex = 0; axisIndex < 4; axisIndex++) identity.m[axisIndex][axisIndex] = 1.0f;
         mesh.bones.push_back(identity);
         mesh.color = Rgba::fromPacked(batch.color[i]);
-        mesh.lighting = mLighting;
-        mesh.fog = mFog;
+        mesh.lighting = mParser.mLighting;
+        mesh.fog = mParser.mFog;
         mesh.otIndex = u8(otIndex);
         mesh.gs = sdfGsStateForOt(otIndex);
-        mesh.gs.frameMask = mState ? mState->frameMask : 0;
+        mesh.gs.frameMask = mParser.mState ? mParser.mState->frameMask : 0;
         mesh.attrBits = sdfCoreAttrTextured | sdfCoreAttrBlend | sdfPrimTriangle;
         mesh.lit = false;
         mesh.billboard = true;
         mesh.packetType = sdfPacketGenerated;
-        mesh.texHandle = mTextures->getHandle(mBillboardTexture, frame);
+        mesh.texHandle = mParser.mTextures->getHandle(mParser.mBillboardTexture, frame);
         // The batch stores texel coordinates in 12.4; the sampler wants them over the texture.
-        const f32 width = mBillboardTexture ? f32(mBillboardTexture->width) : 0.0f;
-        const f32 height = mBillboardTexture ? f32(mBillboardTexture->height) : 0.0f;
+        const f32 width = mParser.mBillboardTexture ? f32(mParser.mBillboardTexture->width) : 0.0f;
+        const f32 height = mParser.mBillboardTexture ? f32(mParser.mBillboardTexture->height) : 0.0f;
         const f32 uScale = width > 0.0f ? 1.0f / (16.0f * width) : 0.0f;
         const f32 vScale = height > 0.0f ? 1.0f / (16.0f * height) : 0.0f;
         mesh.vertices.resize(4);
@@ -903,7 +903,7 @@ void ModelParser::sdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Fra
         // Wound the way the engine lists the corners, which is the reverse of a GL front face.
         static constexpr u16 kQuad[6] = {0, 2, 1, 0, 3, 2};
         mesh.indices.assign(std::begin(kQuad), std::end(kQuad));
-        mTrace.countBones(1);
+        mParser.mTrace.countBones(1);
         frame->addMesh(std::move(mesh));
     }
 }
@@ -911,8 +911,8 @@ void ModelParser::sdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Fra
 /// record's matIndex and the stream from extData.
 /// @fn sdfModelSetNormalDrawPacket
 /// @note SLUS-20911 0x002B0AC0
-void ModelParser::sdfModelSetNormalDrawPacket(const NodeDraw& draw, u32 chainAddr, Frame* frame) {
-    mCurrentChain = chainAddr;
+void ModelHooks::sdfModelSetNormalDrawPacket(const NodeDraw& draw, u32 chainAddr, Frame* frame) {
+    mParser.mCurrentChain = chainAddr;
     sdfMatPtr_t mat;
     for (u32 at = chainAddr; ; at += 16) {
         const u32* tag = u32Ptr_t{at}.slice(2);
@@ -922,8 +922,8 @@ void ModelParser::sdfModelSetNormalDrawPacket(const NodeDraw& draw, u32 chainAdd
         if (id != sdfDmaTagRef) return;
 
         const u32 target = tag[1];
-        const auto found = mMatByPacket.find(target);
-        if (found != mMatByPacket.end()) {
+        const auto found = mParser.mMatByPacket.find(target);
+        if (found != mParser.mMatByPacket.end()) {
             mat = {found->second};
             continue;
         }
@@ -933,11 +933,11 @@ void ModelParser::sdfModelSetNormalDrawPacket(const NodeDraw& draw, u32 chainAdd
         VifCode code;
         if (!readVifCode(target, code) || !isUnpack(code) || code.count != 1 ||
             unpackWidth(code) != 8) {
-            mTrace.countSetupRef();
+            mParser.mTrace.countSetupRef();
             continue;
         }
-        if (!readVifStreamMesh(target, target + 16u * (tag[0] & 0xFFFF), draw, mat, frame)) {
-            mTrace.countStrayRef();
+        if (!mParser.readVifStreamMesh(target, target + 16u * (tag[0] & 0xFFFF), draw, mat, frame)) {
+            mParser.mTrace.countStrayRef();
         }
     }
 }
@@ -945,7 +945,7 @@ void ModelParser::sdfModelSetNormalDrawPacket(const NodeDraw& draw, u32 chainAdd
 /// sign is non-negative.
 /// @fn corePktBuildFaceList
 /// @note SLUS-20911 0x002B7A80
-bool ModelParser::corePktBuildFaceList(u32 at, const sdfCorePacket_t& packet,
+bool ModelHooks::corePktBuildFaceList(u32 at, const sdfCorePacket_t& packet,
                               DrawMesh& mesh) {
     const u32 bytes = 6u * packet.prim.faceCount;
     const u8* source = u8Ptr_t{at}.slice(bytes);
@@ -958,7 +958,7 @@ bool ModelParser::corePktBuildFaceList(u32 at, const sdfCorePacket_t& packet,
     }
     return true;
 }
-bool ModelParser::readWeightedBatches(u32 at, const sdfCorePacket_t& packet,
+bool ModelHooks::readWeightedBatches(u32 at, const sdfCorePacket_t& packet,
                                     u32 nodesAddr, DrawMesh& mesh) {
     const u16 usedNodeCount = u16Ptr_t{nodesAddr}.valueOr();
     if (!usedNodeCount || usedNodeCount > kMaxBones) return false;
@@ -968,7 +968,7 @@ bool ModelParser::readWeightedBatches(u32 at, const sdfCorePacket_t& packet,
     if (!nodeIndices) return false;
     mesh.bones.resize(usedNodeCount);
     for (u16 n = 0; n < usedNodeCount; n++) {
-        const u32 nodeAddr = readListItem(mNodeListAddr, nodeIndices[n]);
+        const u32 nodeAddr = readListItem(mParser.mNodeListAddr, nodeIndices[n]);
         const Matrix4Ptr_t tm{nodeAddr + u32(offsetof(sdfModelNode_t, tm))};
         if (!tm) return false;
         mesh.bones[n] = *tm;
@@ -1004,7 +1004,7 @@ bool ModelParser::readWeightedBatches(u32 at, const sdfCorePacket_t& packet,
                 usize slot = 0;
                 while (slot < kMaxBoneInfluences && out.influence[slot].weight != 0.0f) slot++;
                 if (slot == kMaxBoneInfluences) {
-                    mTrace.countInfluences(kMaxBoneInfluences + 1);
+                    mParser.mTrace.countInfluences(kMaxBoneInfluences + 1);
                     continue;
                 }
                 MeshInfluence& influence = out.influence[slot];
@@ -1041,9 +1041,9 @@ bool ModelParser::readWeightedBatches(u32 at, const sdfCorePacket_t& packet,
         for (const MeshInfluence& influence : vertex.influence) {
             used += influence.weight != 0.0f ? 1 : 0;
         }
-        mTrace.countInfluences(used);
+        mParser.mTrace.countInfluences(used);
     }
-    readSecondUv(at, packet, mesh);
+    mParser.readSecondUv(at, packet, mesh);
     return true;
 }
 
