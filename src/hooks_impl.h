@@ -23,6 +23,10 @@ void collectPackets(HookContext& h);
 /// decode. Runs before collectPackets, which clears the linked list the owner names come from.
 void censusFrame(HookContext& h, u32 aTag);
 
+/// One sceDmaSend. Only the send that carries the frame's chain builds a chain frame, and only
+/// the first of the two the engine makes per chain.
+void chainFrameSend(HookContext& h, u32 aRa, u32 aAddr);
+
 /// Y is in half-height units, the same scale the draw space uses vertically.
 void submitSprite(HookContext& h, const char* producer, f32 x, f32 y, f32 w, f32 height, f32 u,
                   f32 v, f32 uw, f32 vh, Rgba color, u32 texFileHandle);

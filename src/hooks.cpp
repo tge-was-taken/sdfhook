@@ -2,6 +2,7 @@
 #include "hooks.h"
 
 #include "hooks_impl.h"
+#include "chain_frame.h"
 
 #include <bit>
 #include <cstring>
@@ -718,6 +719,7 @@ int dmaSendHook(pcsx2hook_regs* regs, void* user) {
     const u32 aChan = c.getArg(0);
     const u32 aAddr = c.getArg(1);
 
+    chainFrameSend(h, c.getRa(), aAddr);
     if (h.config->dumpChainCensus) {
         const u32 flag = pcsx2hook_find_symbol(h.runtime, "sdfDispThreadFlag");
         log.dump(JsonObject()

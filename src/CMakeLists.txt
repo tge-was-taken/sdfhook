@@ -19,6 +19,7 @@ add_executable(sdfhook
 	guest_ptr.cpp
 	log.cpp
 	chain_census.cpp
+	chain_frame.cpp
 	gif.cpp
 	model.cpp
 	hooks_impl_model.cpp

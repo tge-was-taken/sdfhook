@@ -43,6 +43,9 @@ struct Config {
 
     /// An inventory of the frame's DMA chain, one row per entry.
     bool dumpChainCensus = false;
+
+    /// Build a second frame from the chain alone and report it beside the one the hooks built.
+    bool chainFrame = false;
     bool dumpRecover = false;
     bool describeFrame = false;
     bool debugDepth = false;

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "chain_census.h"
+#include "chain_frame.h"
 #include "gif.h"
 #include "guest_ptr.h"
 #include "json.h"
@@ -162,6 +163,32 @@ void settleMeshState(HookContext& h, u32 aTag) {
 void censusFrame(HookContext& h, u32 aTag) {
     if (!h.config->dumpChainCensus) return;
     censusChain(aTag, h.frames.getPackets(), h.symbols, h.trace->getFrame(), h.packetTypes);
+}
+
+void chainFrameSend(HookContext& h, u32 aRa, u32 aAddr) {
+    if (!h.config->chainFrame) return;
+    // sceDmaSend has three call sites: sdfImageSetTrans, and sdfGrDrawFrame's own send and its
+    // resume after a GS readback. Only the first of those carries the frame.
+    static const char* const kFrameSend = "sdfGrDrawFrame+0x12C";
+    const char* site = h.symbols.getSite(aRa);
+    if (std::strcmp(site, kFrameSend) != 0) {
+        log.debug("chain send from {}, not the frame send", site);
+        return;
+    }
+    // The engine draws one chain twice, at mode 0 and mode 1, so the second send repeats it.
+    if (aAddr == h.lastChainHead) return;
+    h.lastChainHead = aAddr;
+
+    // sdfGrDrawFrame runs after dds3DrawProcessPost has closed the API path's frame, so the walk
+    // builds its own rather than borrowing one. Frame boundaries belong to the chain here.
+    Frame chain;
+    const ChainFrameCounts counts = buildFrameFromChain(aAddr, h, &chain);
+    log.info("chain frame: {} entries, {} sprites, {} regs, {} opaque, {} dropped; api {} sprites",
+             counts.entries, counts.sprites, counts.registerWrites, counts.opaque,
+             counts.verticesDropped, h.coverage.apiDraws - h.lastApiDraws);
+    log.info("chain frame: x {:.1f}..{:.1f} y {:.1f}..{:.1f}", counts.minX, counts.maxX,
+             counts.minY, counts.maxY);
+    h.lastApiDraws = h.coverage.apiDraws;
 }
 
 void collectPackets(HookContext& h) {
