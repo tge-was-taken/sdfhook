@@ -86,6 +86,45 @@ bool looksLikeVif(u32 word) {
     }
 }
 
+/// How many 32-bit words of data follow a VIF code, so the next code in the stream can be found.
+u32 vifDataWords(u32 aCode) {
+    const u32 command = vifCommand(aCode);
+    const u32 num = (aCode >> 16) & 0xFF;
+    const u32 immediate = aCode & 0xFFFF;
+    if ((command & 0x60) == 0x60) {
+        const u32 vl = command & 3;
+        const u32 vn = (command >> 2) & 3;
+        const u32 count = num ? num : 256;
+        // V4-5 packs a whole vector into 16 bits; every other format is elements times width.
+        const u32 bits = (vl == 3) ? count * 16 : count * (vn + 1) * (32u >> vl);
+        return (bits + 31) / 32;
+    }
+    switch (command) {
+        case vifMpg: return (num ? num : 256) * 2;
+        case vifDirect:
+        case vifDirectHl: return (immediate ? immediate : 65536) * 4;
+        case vifStMask: return 1;
+        case vifStRow:
+        case vifStCol: return 4;
+        default: return 0;
+    }
+}
+
+/// Every VIF code in one transfer. MSCAL is what actually runs a microprogram, so counting them
+/// says whether the chain delimits its own draws or only a hook can.
+void scanVif(u32 aData, u32 aQwc, u32* aCalls, u32* aUnpacks, u32* aMicrocode) {
+    const u32 words = aQwc * 4;
+    for (u32 at = 0; at < words;) {
+        const u32 code = u32Ptr_t{aData + at * 4}.valueOr();
+        const u32 command = vifCommand(code);
+        if (!looksLikeVif(code)) return;
+        if (command == vifMsCal || command == vifMsCalF || command == vifMsCnt) (*aCalls)++;
+        if ((command & 0x60) == 0x60) (*aUnpacks)++;
+        if (command == vifMpg) (*aMicrocode)++;
+        at += 1 + vifDataWords(code);
+    }
+}
+
 /// What the entry carries, which is the whole question a chain-walk renderer has to answer.
 const char* classify(u32 aData, u32 aQwc, const char** aDetail) {
     *aDetail = "";
@@ -146,6 +185,8 @@ void censusChain(u32 aTag, const std::vector<LinkedPacket>& aLinked, SymbolCache
         const char* detail = "";
         const char* kind = classify(data, qwc, &detail);
         const auto owner = byAddr.find(at);
+        u32 calls = 0, unpacks = 0, microcode = 0;
+        if (kind[0] == 'v') scanVif(data, qwc, &calls, &unpacks, &microcode);
 
         log.dump(JsonObject()
                      .addString("dump", "census")
@@ -161,6 +202,9 @@ void censusChain(u32 aTag, const std::vector<LinkedPacket>& aLinked, SymbolCache
                      .addHexDigits("w0", u32Ptr_t{data}.valueOr(), 8)
                      .addHexDigits("w1", u32Ptr_t{data + 4}.valueOr(), 8)
                      .addHexDigits("w4", u32Ptr_t{data + 16}.valueOr(), 8)
+                     .addUint("mscal", calls)
+                     .addUint("unpacks", unpacks)
+                     .addUint("mpg", microcode)
                      .take());
 
         switch (id) {
