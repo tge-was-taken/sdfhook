@@ -35,9 +35,11 @@ def main(argv):
         for kind, count in kinds.most_common():
             print("   %-14s %5d  %5.1f%%" % (kind, count, 100.0 * count / len(carrying)))
         untyped = [r for r in carrying if r["type"] == "unknown"]
-        print("   typed: %d of %d (%.1f%%)"
+        how = collections.Counter(r["how"] for r in carrying if r["type"] != "unknown")
+        print("   typed: %d of %d (%.1f%%)   by %s"
               % (len(carrying) - len(untyped), len(carrying),
-                 100.0 * (len(carrying) - len(untyped)) / len(carrying)))
+                 100.0 * (len(carrying) - len(untyped)) / len(carrying),
+                 ", ".join("%s %d" % kv for kv in how.most_common())))
         if untyped:
             for name, n in collections.Counter(r["by"] for r in untyped).most_common(6):
                 print("      untyped from %-34s %d" % (name, n))

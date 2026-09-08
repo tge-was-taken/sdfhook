@@ -61,4 +61,24 @@ PacketType packetTypeForBuilder(const char* symbol);
 /// that linked it is what names it. Unknown for everything else.
 PacketType packetTypeForProducer(const char* symbol);
 
+/// A packet named by its own contents, for the ones a savestate inherits from before the hooks
+/// attached and whose builder call can never be seen. Inference, so it is the last resort and the
+/// census counts it apart from what the engine told us.
+PacketType packetTypeForShape(u32 aData, u32 aQwc);
+
+/// How a packet's type was settled, so what the engine stated stays distinguishable from what we
+/// inferred.
+enum class TypedBy : u8 { Nothing, Payload, Builder, Producer, Shape };
+
+constexpr const char* typedByName(TypedBy how) {
+    switch (how) {
+        case TypedBy::Nothing: return "-";
+        case TypedBy::Payload: return "payload";
+        case TypedBy::Builder: return "builder";
+        case TypedBy::Producer: return "producer";
+        case TypedBy::Shape: return "shape";
+    }
+    return "invalid";
+}
+
 }  // namespace sdfhook

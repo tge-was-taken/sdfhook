@@ -1,5 +1,7 @@
 #include "chain_census.h"
 
+#include <cstdio>
+#include <string>
 #include <unordered_map>
 
 #include "gif.h"
@@ -15,6 +17,18 @@ namespace sdfhook {
 namespace {
 
 LogChannel log("census");
+
+/// The whole payload of an entry nothing typed, so its layout can be read rather than guessed.
+std::string dumpWords(u32 aData, u32 aQwc) {
+    std::string out;
+    const u32 words = aQwc * 4 < 64 ? aQwc * 4 : 64;
+    for (u32 i = 0; i < words; i++) {
+        char buffer[16];
+        std::snprintf(buffer, sizeof(buffer), "%08X ", u32Ptr_t{aData + i * 4}.valueOr());
+        out += buffer;
+    }
+    return out;
+}
 
 // VIF1's command byte, the field that says what a quadword of a stream is for.
 constexpr u32 vifCommand(u32 word) { return (word >> 24) & 0x7F; }
@@ -148,14 +162,29 @@ PacketType classifySelf(u32 aData, u32 aQwc) {
 /// The entry's type: what it says it is, or failing that what its builder said. A builder is
 /// handed the packet, its data, or an interior offset of either, so all four are probed.
 PacketType classify(u32 aPacket, u32 aData, u32 aQwc, const char* aProducer,
-                    const std::unordered_map<u32, PacketType>& aTypes) {
+                    const std::unordered_map<u32, PacketType>& aTypes, TypedBy* aHow) {
+    *aHow = TypedBy::Payload;
     const PacketType told = classifySelf(aData, aQwc);
     if (told != PacketType::Unknown) return told;
+
+    *aHow = TypedBy::Builder;
     for (const u32 probe : {aPacket, aData, aPacket + 16, aData + 16}) {
         const auto found = aTypes.find(probe);
         if (found != aTypes.end()) return found->second;
     }
-    return packetTypeForProducer(aProducer);
+
+    *aHow = TypedBy::Producer;
+    const PacketType byProducer = packetTypeForProducer(aProducer);
+    if (byProducer != PacketType::Unknown) return byProducer;
+
+    // Last, and inference rather than a fact the engine stated: a packet built before the hooks
+    // attached, which is every one a savestate inherits.
+    *aHow = TypedBy::Shape;
+    const PacketType byShape = packetTypeForShape(aData, aQwc);
+    if (byShape != PacketType::Unknown) return byShape;
+
+    *aHow = TypedBy::Nothing;
+    return PacketType::Unknown;
 }
 
 }  // namespace
@@ -174,7 +203,8 @@ void censusLinked(const std::vector<LinkedPacket>& aLinked, SymbolCache& aSymbol
         const u32 data = byRef ? tag.addr : packet.addr + sdfQwordBytes;
 
         const char* producer = aSymbols.getFunction(packet.caller);
-        const PacketType type = classify(packet.addr, data, tag.qwc, producer, aTypes);
+        TypedBy how = TypedBy::Nothing;
+        const PacketType type = classify(packet.addr, data, tag.qwc, producer, aTypes, &how);
         u32 calls = 0, unpacks = 0, microcode = 0;
         scanVif(data, tag.qwc, &calls, &unpacks, &microcode);
 
@@ -186,6 +216,7 @@ void censusLinked(const std::vector<LinkedPacket>& aLinked, SymbolCache& aSymbol
                      .addUint("dmaId", tag.id)
                      .addUint("qwc", tag.qwc)
                      .addString("type", packetTypeName(type))
+                     .addString("how", typedByName(how))
                      .addString("by", producer)
                      .addUint("mscal", calls)
                      .take());
@@ -218,10 +249,13 @@ void censusChain(u32 aTag, const std::vector<LinkedPacket>& aLinked, SymbolCache
 
         const auto owner = byAddr.find(at);
         const char* producer = owner == byAddr.end() ? "-" : aSymbols.getFunction(owner->second);
-        const PacketType type = classify(at, data, qwc, producer, aTypes);
+        TypedBy how = TypedBy::Nothing;
+        const PacketType type = classify(at, data, qwc, producer, aTypes, &how);
         u32 calls = 0, unpacks = 0, microcode = 0;
         scanVif(data, qwc, &calls, &unpacks, &microcode);
 
+        const std::string words =
+            type == PacketType::Unknown ? dumpWords(data, qwc) : std::string();
         log.dump(JsonObject()
                      .addString("dump", "census")
                      .addUint("frame", aFrame)
@@ -230,6 +264,7 @@ void censusChain(u32 aTag, const std::vector<LinkedPacket>& aLinked, SymbolCache
                      .addUint("dmaId", id)
                      .addUint("qwc", qwc)
                      .addString("type", packetTypeName(type))
+                     .addString("how", typedByName(how))
                      .addString("by", producer)
                      .addHexDigits("w0", u32Ptr_t{data}.valueOr(), 8)
                      .addHexDigits("w1", u32Ptr_t{data + 4}.valueOr(), 8)
@@ -237,6 +272,7 @@ void censusChain(u32 aTag, const std::vector<LinkedPacket>& aLinked, SymbolCache
                      .addUint("mscal", calls)
                      .addUint("unpacks", unpacks)
                      .addUint("mpg", microcode)
+                     .addString("words", words.c_str())
                      .take());
 
         switch (id) {
