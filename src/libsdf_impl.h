@@ -232,6 +232,7 @@ struct XsdfModel {
     f32Ptr_t sdfModelShapeWeightEpsilon;
     u32 frFontClutTable = 0;
     u32Ptr_t sdfGrPacketBuffPtr;
+    u32Ptr_t corePktCurrLight;
     f32Ptr_t sdfFaceDivBias;
     f32Ptr_t sdfFaceDivSoften;
     u8Ptr_t corePktSoftenBias;
@@ -273,6 +274,8 @@ extern ModelParser* gConvert;
 void xsdfTexSetEx(sdfTexFilePtr_t aTex, sdfTexHandlePtr_t aHandle, Frame* frame);
 void xsdfTexFree(sdfTexHandlePtr_t aHandle);
 void xsdfTexDup(sdfTexHandlePtr_t aSource, sdfTexHandlePtr_t aCopy);
+void xsdfGsMemAllocFromHead(sdfGsMemSlicePtr_t aSlice);
+void xsdfModelSetMatRefPacket(u32 aChainAddr);
 void xsdfGsAllocFrameBuff(sdfGsMemSlicePtr_t aSlice);
 void xfrCopyFontClutToVram(u32 aData);
 

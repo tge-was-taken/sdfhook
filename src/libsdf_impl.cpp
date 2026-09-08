@@ -39,6 +39,9 @@ struct xsdfPacket_t {
     /// so a packet can be named in a trace by the address the engine would have given it.
     u32 guestAddr = 0;
     u32 qwords = 0;
+
+    /// The packet's own tags, which sdfDrawTagLink reads to splice it into a chain.
+    sdfGrPacketHeader_t header{};
 };
 
 /// rsetOtOfs writes this; every 2D producer indexes xsdfGrOtTable with it.
@@ -199,13 +202,15 @@ void xsdf2DLinkTexPacket(xsdfDrawTag_t* aTag, u32 aTexHandle) {
 // are rewritten onto the shadow pipeline; xsdfPrimLinkG4 is the pattern
 void xsdfDrawTagLink(xsdfDrawTag_t* aTag, xsdfPacket_t* aPacket) {
     // 0x2ACBB8..0x2ACBC3, 0x2ACBC4..0x2ACBCB, 0x2ACBD0..0x2ACBE3, 0x2ACBE4..0x2ACBEB
-    // @optout 0x2ACBB8 packetbuf: tag->tail is where the guest appends the next packet in the
-    // chain, and ours carries one packet a tag
-    // @optout 0x2ACBD8 packetbuf: the packet's DMA tag word, which ours does not carry
-    // @optout 0x2ACBE0 packetbuf: and its length
     if (!aPacket) return;
+    // 0x2ACBB8: an empty tag takes the packet as its head; a linked one is spliced at the tail.
+    // 0x2ACBD8, 0x2ACBE0: through the packet's own DMA and GIF tags.
+    sdfGrPacketHeader_t& header = aPacket->header;
+    header.dmatag = aPacket->guestAddr;
+    header.giftag = aPacket->qwords;
     aTag->head = true;
     aTag->packet = aPacket;
+    aTag->tail = aPacket;
 }
 
 /// @fn fclDrawPanelSprite2
@@ -922,8 +927,11 @@ void xdds3DrawFade(u8 aR, u8 aG, u8 aB, u8 aState) {
     xdds3FadeColorB = aB;                                    // 0x105330
     xfadergba = u32(aR) | (u32(aG) << 8) | (u32(aB) << 16);  // 0x105338
     xdds3FadeColorG = aG;                                    // 0x105348
-    // @optout 0x105370 packetbuf: dds3FadePacket is the quadword pair the fade is written
-    // into, and we build a sprite instead
+    // 0x105370: the fade's own packet, whose colour is what the quad carries.
+    xdds3FadePacket[0] = aR;
+    xdds3FadePacket[1] = aG;
+    xdds3FadePacket[2] = aB;
+    xdds3FadePacket[3] = aState;
     xsdfPacket_t* packet = xsdfGrAllocPacketBuff(1);
     xsdf2DPrim_t* prim = xsdf2DGetPrimPtr(packet);
     prim->sprite = DrawSprite::fromRect(0, 0, kGuestWidth, kGuestHeight, 0, 0, 0, 0);
@@ -1148,8 +1156,8 @@ ModelParser* gConvert = nullptr;
 /// @note SLUS-20911 0x002B6A30
 void xcorePktSetFaceDivParm(f32 soften, f32 bias) {
     // 0x2B6A30..0x2B6A6B
-    // @optout 0x2B6A3C enginestate: corePktCurrLight is the packet the terms are stamped into,
-    // and we carry them on the draw instead
+    // 0x2B6A3C: the terms are stamped into the light packet currently being built.
+    if (gModel.corePktCurrLight) gState.currentLight = *gModel.corePktCurrLight;
     if (!gModel.faceDivTermsSeen && gConvert->getConfig()) {
         log.info("face division terms from the guest: soften {} bias {}, fitted {} {}", soften, bias,
                  gConvert->getConfig()->faceDivSoften, gConvert->getConfig()->faceDivBias);
@@ -1510,6 +1518,7 @@ void xsdfModelLinkOt(sdfModelOtPtr_t aOt, sdfModelRootNodePtr_t aRoot, Frame* fr
         }
 
         NodeDraw draw{};
+        draw.node = node;
         std::memcpy(&draw.model, &node->tm, sizeof(Matrix4));
         // 0x2B1EF4..0x2B1F1F: xMultMatrixRev over the node's own tm and the screen matrix, which
         // 0x2B1F10 loads from sdf3DScreenTm and readScreenTm captured once this frame.
@@ -1823,6 +1832,7 @@ void xsdfModelTempPacketLinkOt(guest_ref<sdfModelRootNode_t> root, Frame* frame)
         if (node->flags & sdfModelNodeHidden) continue;
 
         NodeDraw draw{};
+        draw.node = node;
         std::memcpy(&draw.model, &node->tm, sizeof(Matrix4));
         // @optout 0x2B1AA0 elsewhere(readScreenTm): sdf3DScreenTm is captured once a frame
         draw.clip = xMultMatrixRev(draw.model, gModel.screenTm);
@@ -2359,13 +2369,22 @@ void xsdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Frame* frame) {
 
 /// Reads a type 1 DMA call chain, taking the material from the shape
 /// record's matIndex and the stream from extData.
+/// Records the chain a material REF was linked into, which is how a stream names its material.
+/// @fn sdfModelSetMatRefPacket
+/// @note SLUS-20911 0x002B09D0
+void xsdfModelSetMatRefPacket(u32 aChainAddr) {
+    gModel.currentChain = aChainAddr;
+}
+
 /// @fn sdfModelSetNormalDrawPacket
 /// @note SLUS-20911 0x002B0AC0
 void xsdfModelSetNormalDrawPacket(const NodeDraw& draw, u32 chainAddr, Frame* frame) {
-    // 0x2B0AC0..0x2B0B2B
-    // @optout 0x2B0AD8 elsewhere(sdfModelLinkOt): node->root, which the walk resolved
-    // @optout 0x2B0AE0 packetbuf: sdfModelSetMatRefPacket links node->mat as a REF, and the chain
-    // walk below reads that same material out of the root's packet map
+    // 0x2B0AC0..0x2B0B2B: the node's root names the material list a REF resolves against.
+    const sdfModelNodePtr_t node = draw.node;
+    if (node && node->root) gModel.nodeListAddr = node->root->nodeList.addr;  // 0x2B0AD8
+    // 0x2B0AE0: the node's material is linked as a REF, which is what the chain walk below reads
+    // back out of the root's packet map.
+    xsdfModelSetMatRefPacket(chainAddr);
     gModel.currentChain = chainAddr;
     sdfMatPtr_t mat;
     u32 walked = 0;
@@ -2628,13 +2647,22 @@ void xsdfTexDup(sdfTexHandlePtr_t aSource, sdfTexHandlePtr_t aCopy) {
     gSink.textures->onDuplicate(TexHandle{aSource.addr}, TexHandle{aCopy.addr});
 }
 
+/// Where in GS memory a frame buffer was placed. Ours records the slice rather than choosing it.
+/// @fn sdfGsMemAllocFromHead
+/// @note SLUS-20911 0x002AA438
+void xsdfGsMemAllocFromHead(sdfGsMemSlicePtr_t aSlice) {
+    if (aSlice) gState.frameBuffer = aSlice.addr;
+}
+
 /// A render target: a frame buffer wrapped as a texture, with no main-memory pixels by
 /// construction.
 /// @fn sdfGsAllocFrameBuff
 /// @note SLUS-20911 0x002AA8D0
 void xsdfGsAllocFrameBuff(sdfGsMemSlicePtr_t aSlice) {
     // 0x2AA8D0..0x2AA90F, 0x2AA910..0x2AA927, 0x2AA928..0x2AA92B, 0x2AA92C..0x2AA96B
-    // @optout 0x2AA93C alloc: sdfGsMemAllocFromHead places the buffer
+    // 0x2AA93C: the buffer is taken from the head of GS memory, and the slice it returns is what
+    // names it.
+    xsdfGsMemAllocFromHead(aSlice);
     if (!gSink.textures || !aSlice) return;
     const sdfGsMemSlice_t& slice = *aSlice;
     // 0x2AA94C, 0x2AA950, 0x2AA954: the buffer's format and size are what make it a texture.

@@ -23,6 +23,10 @@ struct RenderState {
 
     /// What dds3InitDrawEnvSub puts in the standard draw env, so the frame clears to it.
     Rgba background{0, 0, 0, 0};
+
+    /// Where the frame buffer and the light packet being built live, for the trace.
+    u32 frameBuffer = 0;
+    u32 currentLight = 0;
 };
 
 }  // namespace sdfhook

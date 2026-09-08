@@ -25,7 +25,7 @@ AUTONAME = ("unk_", "asc_", "off_", "flt_", "dbl_", "qword_", "dword_", "word_",
 # answers it rather than the author.
 CLASSES = ("vu1",)
 
-FACT = re.compile(r"^\s+(read|write|glob|call)\s+0x([0-9A-Fa-f]+)\s+(\S+)(?:\s+addrs=(\S+))?")
+FACT = re.compile(r"^\s+(read|write|addr|glob|call)\s+0x([0-9A-Fa-f]+)\s+(\S+)(?:\s+addrs=(\S+))?")
 BLK  = re.compile(r"^\s+(blk)\s+0x([0-9A-Fa-f]+)\.\.0x([0-9A-Fa-f]+)(?:\s+depth=(\d+))?(?:\s+cond=(\d+))?\s*$")
 BRCH = re.compile(r"^\s+(brch)\s+0x([0-9A-Fa-f]+)\s+(\S.*?)\s*$")
 FIELD = re.compile(r"SDF_STATIC_ASSERT_OFFSETOF\((\w+),\s*(\w+),\s*(0x[0-9A-Fa-f]+)\)")
@@ -379,7 +379,7 @@ def opaque(kind, target, field_map):
 def satisfied(kind, target, text, field_map, global_map, addrs, touched=(), code=None, table=()):
     # Citations live in comments; a name that only appears in one is not a use of it.
     code = text if code is None else code
-    if kind in ("read", "write"):
+    if kind in ("read", "write", "addr"):
         type_, off = target.split("+")
         # The database spells some structs <name>_tag where our header has <name>_t.
         name = (field_map.get((type_, int(off, 16)))

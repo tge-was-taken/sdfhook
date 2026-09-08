@@ -175,6 +175,8 @@ private:
 /// @fn sdfModelLinkOt
 /// @note SLUS-20911 0x002B1DB8
 struct NodeDraw {
+    /// The node the draw came from, which the packet paths read their material list through.
+    guest_ptr<sdfModelNode_t> node;
     Matrix4 model;
     Matrix4 clip;
     f32 sortZ;

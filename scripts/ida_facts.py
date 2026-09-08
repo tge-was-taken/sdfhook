@@ -60,13 +60,17 @@ class Members(ida_hexrays.ctree_parentee_t):
         parent = self.parent_expr()
         write = bool(parent and ida_hexrays.cot_asg <= parent.op <= ida_hexrays.cot_asgumod
                      and parent.x is e)
+        # &x->field computes an address and never loads it. Recording that as a read invents a
+        # fact: sdfGrSetFrameMaskRGB passes two such addresses and dereferences neither.
+        taken = bool(parent and parent.op == ida_hexrays.cot_ref)
         key = (name, e.m)
         at = e.ea if e.ea != idaapi.BADADDR else 0
         prev = self.found.get(key)
         if prev is None or (at and at < prev[0]):
-            self.found[key] = (at, write or (prev[1] if prev else False))
+            self.found[key] = (at, write or (prev[1] if prev else False),
+                               taken and (prev[2] if prev else True))
         elif write:
-            self.found[key] = (prev[0], True)
+            self.found[key] = (prev[0], True, prev[2])
         return 0
 
 
@@ -170,6 +174,15 @@ def calls_and_globals(fn):
         if not idc.is_code(idc.get_full_flags(ea)):
             continue
         mnem = idc.print_insn_mnem(ea)
+        # A tail call is a jump out of the function, and it is still a call: sdfGrSetFrameMaskRGB
+        # is nothing but two of them, and reading only jal made its whole body invisible.
+        if mnem in ("j", "b"):
+            for ref in idautils.CodeRefsFrom(ea, 0):
+                if not (fn.start_ea <= ref < fn.end_ea):
+                    name = idc.get_func_name(ref)
+                    if name:
+                        calls.setdefault(name, []).append(ea)
+            continue
         if mnem in ("jal", "jalr"):
             target = None
             for ref in idautils.CodeRefsFrom(ea, 0):
@@ -222,14 +235,16 @@ def emit(out, name):
     except Exception as exc:
         out.write("  # decompiler failed (%s); members are missing\n" % exc)
 
-    for (struct, off), (at, write) in sorted(members.items(), key=lambda kv: (kv[1][0], kv[0])):
+    for (struct, off), (at, write, taken) in sorted(members.items(),
+                                                   key=lambda kv: (kv[1][0], kv[0])):
         if not struct or struct.startswith(("int", "unsigned", "__", "void", "char", "float")):
             continue
         if not at:
             # The ctree gave the access no address, so it cannot be cited or opted out.
             out.write("  # %s+0x%02X has no address in the ctree\n" % (struct, off))
             continue
-        out.write("  %-5s 0x%X %s+0x%02X\n" % ("write" if write else "read", at, struct, off))
+        kind = "addr" if taken and not write else ("write" if write else "read")
+        out.write("  %-5s 0x%X %s+0x%02X\n" % (kind, at, struct, off))
 
     calls, globs = calls_and_globals(fn)
     for sym, at in sorted(globs.items(), key=lambda kv: kv[1][0]):

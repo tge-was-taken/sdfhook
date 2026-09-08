@@ -652,6 +652,18 @@ SDF_STATIC_ASSERT_OFFSETOF(sdfPrimG4Elem_t, rgbaq3, 0x40);
 SDF_STATIC_ASSERT_OFFSETOF(sdfPrimG4Elem_t, xy3, 0x48);
 SDF_STATIC_ASSERT_OFFSETOF(sdfPrimG4Elem_t, nop, 0x50);
 
+/// A packet's own two tags and the primitive that follows them. sdfDrawTagLink reads the pair to
+/// splice the packet into a tag's chain.
+struct sdfGrPacketHeader_t {
+    u32 dmatag;
+    u32 giftag;
+    u8 primitive[0x28];
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrPacketHeader_t, 0x30);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrPacketHeader_t, dmatag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrPacketHeader_t, giftag, 0x04);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrPacketHeader_t, primitive, 0x08);
+
 using sdfSprite3DPtr_t = guest_ptr<struct sdfSprite3D_t>;
 
 /// One camera-facing quad with its orientation, which sdfBillBoardMake1 never sees: drawSprite3D
