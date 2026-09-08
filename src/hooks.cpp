@@ -1153,8 +1153,6 @@ Frame* FrameBuilder::getFrame() {
 void FrameBuilder::submit() {
     mSubmitted = true;
     mSubmittedFrames++;
-    log.debug("submit sprites={} meshes={} order={}", mBuilding ? mBuilding->sprites.size() : 0,
-              mBuilding ? mBuilding->meshes.size() : 0, mBuilding ? mBuilding->order.size() : 0);
     if (!mBuilding || !mRenderer) return;
     // Every producer reaches the frame through addSprite, so one place stamps them all.
     if (mTrace && mTrace->isOpen()) {

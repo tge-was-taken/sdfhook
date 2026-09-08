@@ -106,6 +106,50 @@ def depths(chart, order):
     return {lo: sum(1 for a, z in loops if a <= lo < z) for lo, _hi in order}
 
 
+def conditionals(chart):
+    """How many `if` bodies a block sits inside, which is not how many guards it is past.
+
+    A branch whose arms rejoin is an if body, and its blocks belong inside one on our side. A branch
+    whose arm leaves for good is a guard, and `if (a || b) continue;` is the faithful flat form of a
+    chain of them. The branch's immediate post dominator tells the two apart: a merge inside the
+    function, or the exit.
+    """
+    ids = {b.start_ea: b for b in chart}
+    # Back edges are loop nesting, counted already, and never an if body.
+    succ = {a: sorted(x.start_ea for x in b.succs() if x.start_ea in ids and x.start_ea > a)
+            for a, b in ids.items()}
+    order = sorted(ids)
+
+    post = {a: (set(order) if succ[a] else {a}) for a in order}
+    for _ in range(len(order) + 1):
+        changed = False
+        for a in reversed(order):
+            if succ[a]:
+                new = {a} | set.intersection(*(post[x] for x in succ[a]))
+                if new != post[a]:
+                    post[a], changed = new, True
+        if not changed:
+            break
+
+    def ipdom(a):
+        cand = post.get(a, set()) - {a}
+        return min(cand, key=lambda x: len(post[x])) if cand else None
+
+    depth = {a: 0 for a in order}
+    for a in order:
+        if len(succ[a]) < 2:
+            continue
+        merge = ipdom(a)
+        if merge is None or not succ.get(merge):
+            continue
+        for arm in succ[a]:
+            at, steps = arm, 0
+            while at is not None and at != merge and steps <= len(order):
+                depth[at] = depth.get(at, 0) + 1
+                at, steps = ipdom(at), steps + 1
+    return depth
+
+
 def blocks(fn):
     """Only the blocks of the function's own range: FlowChart also walks tail chunks."""
     out = [(b.start_ea, min(b.end_ea, fn.end_ea)) for b in ida_gdl.FlowChart(fn, flags=ida_gdl.FC_PREDS)]
@@ -188,9 +232,11 @@ def emit(out, name):
     chart = ida_gdl.FlowChart(fn, flags=ida_gdl.FC_PREDS)
     order = blocks(fn)
     deep = depths(chart, order)
+    cond = conditionals(chart)
     for lo, hi in order:
-        # A block inside a loop must be transcribed inside one, not cited from the top.
-        out.write("  blk   0x%X..0x%X  depth=%d\n" % (lo, hi - 1, deep.get(lo, 0)))
+        # A block inside a loop or an if body must be transcribed inside one, not cited from the top.
+        out.write("  blk   0x%X..0x%X  depth=%d cond=%d\n"
+                  % (lo, hi - 1, deep.get(lo, 0), cond.get(lo, 0)))
     for at, text in cop2(fn):
         out.write("  # cop2 0x%X %s\n" % (at, text))
 
