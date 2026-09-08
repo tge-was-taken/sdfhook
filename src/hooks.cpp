@@ -736,6 +736,8 @@ constexpr Entry kEngineEntries[] = {
     {"sdfSortOtAvlRegist", &sdfSortOtAvlRegistHook, nullptr},
     {"sdfGrReqDraw", &sdfGrReqDrawHook, nullptr},
     {"sdfGrDrawFrame", &sdfGrDrawFrameHook, nullptr},
+    {"sdfDeliverDrawStart", &traceEntryHook, nullptr},
+    {"sdfDeliverDrawEnd", &traceEntryHook, nullptr},
     {"sdfModelDrawEnvLinkOt", &sdfModelDrawEnvLinkOtHook, nullptr},
     // Watched only, to find out whether any sample scene reaches a render target or a movie.
     {"dds3AllocRenderTexture", &observeHook, nullptr},
