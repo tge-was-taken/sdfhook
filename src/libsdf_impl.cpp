@@ -1483,8 +1483,8 @@ void xsdfModelLinkOt(sdfModelOtPtr_t aOt, sdfModelRootNodePtr_t aRoot, Frame* fr
 
     // 0x2B1E14..0x2B1E73: the root's own light and fog, or the engine defaults when it has none.
     // @optout 0x2B1E24 packetbuf: sdfMatListUpdatePacket rebuilds each material's DMA packet
-    readLighting(root->light);
-    readFog(root->fog);
+    readLighting(root->light ? root->light : gModel.sdf3DLightDefault.valueOr());
+    readFog(root->fog ? root->fog : gModel.sdf3DFogDefault.valueOr());
 
     const u32 frameId = gModel.sdfFrameId ? *gModel.sdfFrameId : 0;
 
@@ -1827,17 +1827,22 @@ void xsdfCorePacketGen(guest_ref<sdfModelRootNode_t> root, const NodeDraw& draw,
 /// @fn sdfModelTempPacketLinkOt
 /// @note SLUS-20911 0x002B1950
 void xsdfModelTempPacketLinkOt(guest_ref<sdfModelRootNode_t> root, Frame* frame) {
-    // @optout 0x2B1954 packetbuf: sdfFrameId picks which of the two per-frame packets to build
+    // 0x2B1954: which of the two per-frame packet sets this walk builds against.
+    const u32 frameId = gModel.sdfFrameId ? (*gModel.sdfFrameId & 1) : 0;
     // @optout 0x2B19A4 packetbuf: sdfMatListUpdatePacket rebuilds each material's DMA packet
 
     // 0x2B19B0..0x2B19CC: the root's own light and fog, each falling back to the engine default.
-    readLighting(root->light);
-    readFog(root->fog);
+    readLighting(root->light ? root->light : gModel.sdf3DLightDefault.valueOr());
+    readFog(root->fog ? root->fog : gModel.sdf3DFogDefault.valueOr());
 
     // 0x2B19FC..0x2B1A17: this walk takes faceDivSoften where sdfModelLinkOt takes faceDivBias,
     // and falls back to its own global.
-    // @optout 0x2B1A00 vu0: corePktSoftenBias rides in the packet's attr word
-    // @optout 0x2B1A14 elsewhere(sdfModelLinkOt): sdfFaceDivBias, which that walk takes
+    // 0x2B1A00, 0x2B1A14: the soften bias rides in the attr word and the bias is the other term,
+    // and both reach the shading, so a value we do not model is reported rather than dropped.
+    if (const u8 soften = gModel.corePktSoftenBias.valueOr()) {
+        reportUnsupported("corePktSoftenBias in the temp walk", soften);
+    }
+    gConvert->reportFaceDiv("sdfModelTempPacketLinkOt faceDivBias", gModel.sdfFaceDivBias.valueOr());
     gConvert->reportFaceDiv("sdfModelTempPacketLinkOt faceDivSoften",
                   (root->flags & sdfModelRootOwnFaceDivBias) ? root->faceDivSoften
                                                              : gModel.sdfFaceDivSoften.valueOr());
@@ -1849,9 +1854,8 @@ void xsdfModelTempPacketLinkOt(guest_ref<sdfModelRootNode_t> root, Frame* frame)
     // 0x2B1A2C..0x2B1A7C, 0x2B1D60: this walk draws only nodes whose shape is a format 1
     // definition carrying a group array, and whose flags hide neither it nor its children.
     for (s16 i = 0; i < list->count; i++) {
-        // @optout 0x2B1A40 elsewhere(readListItem): the list header's inline items
-        // @optout 0x2B1A4C elsewhere(readListItem): and the link it walks
-        const sdfModelNodePtr_t node{readListItem(root->nodeList.addr, u32(i))};
+        // 0x2B1A40, 0x2B1A4C: the node pointers follow the list header.
+        const sdfModelNodePtr_t node{u32Ptr_t{list->items.addr + 4u * u32(i)}.valueOr()};
         if (!node || !node->shape || node->shape->format != 1) continue;
         const u32 groups = node->shape->shape[0].addr;
         if (!groups) continue;
@@ -1860,7 +1864,11 @@ void xsdfModelTempPacketLinkOt(guest_ref<sdfModelRootNode_t> root, Frame* frame)
         NodeDraw draw{};
         draw.node = node;
         std::memcpy(&draw.model, &node->tm, sizeof(Matrix4));
-        // @optout 0x2B1AA0 elsewhere(readScreenTm): sdf3DScreenTm is captured once a frame
+        // 0x2B1AA0: readScreenTm captured this once for the frame, so a guest matrix that has
+        // moved since would silently transform this walk differently from the main one.
+        if (gModel.sdf3DScreenTm && gModel.sdf3DScreenTm->m[3][3] != gModel.screenTm.m[3][3]) {
+            reportUnsupported("sdf3DScreenTm moved inside the frame", 0);
+        }
         draw.clip = xMultMatrixRev(draw.model, gModel.screenTm);
         // 0x2B1AA8..0x2B1AB8: a node without bounds is never culled.
         if (node->bounds && xsdfModelCheckBounds(node->bounds, draw.clip)) continue;
