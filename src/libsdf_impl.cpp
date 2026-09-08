@@ -2028,8 +2028,7 @@ void xsdf3DPrimMakePoly(sdf3DPrimPolyParmPtr_t aPoly, Frame* frame) {
     const u32 triangles = u32(aPoly->faceCount);
     if (!vertexCount || !triangles) return;
 
-    const sdfVector4_t* point = sdfVector4Ptr_t{aPoly->position.addr}.slice(vertexCount);
-    if (!point) point = sdfVector4Ptr_t{aPoly->vertex}.slice(vertexCount);
+    const sdfVector4_t* point = sdfVector4Ptr_t{aPoly->vertex}.slice(vertexCount);
     // A null face list means the faces are implicit: face t is points 3t, 3t+1, 3t+2. Measured on
     // smt3_field_unknown_realm, where every call has faceCount 1, pointCount 3 and no list.
     const u32* index = aPoly->faceIndex ? u32Ptr_t{aPoly->faceIndex}.slice(triangles) : nullptr;
@@ -2087,7 +2086,7 @@ void xsdf3DPrimMakePoly(sdf3DPrimPolyParmPtr_t aPoly, Frame* frame) {
 /// @note SLUS-20911 0x0012A5E0
 void xfldDrawPoly3(const sdfVector3_t point[3], const u32 color[3], Frame* frame) {
     if (!frame) return;
-    // 0x12A5E0..0x12A75B
+    // 0x12A5E0..0x12A75B: one flat triangle, built and filed in a single block.
     // @optout 0x12A64C packetbuf: sdfGrAllocPacketBuff carves the prim packet
     // @optout 0x12A658 packetbuf: sdfDrawTagInit on its tag
     // @optout 0x12A664 packetbuf: sdf3DPrimLinkResetTm links an identity transform, which the
@@ -2098,6 +2097,26 @@ void xfldDrawPoly3(const sdfVector3_t point[3], const u32 color[3], Frame* frame
     xsdfDrawTag_t* tag = xsdfAllocDrawTag();
     xsdfDrawTagInit(tag);
 
+    // memset clears the block, then only the fields a flat triangle needs are set.
+    // @optout 0x12A684 alloc: value initialisation is our memset
+    sdf3DPrimPolyParm_t parm{};
+    parm.faceCount = 1;
+    // 0x12A6A8: one triangle, three points.
+    parm.pointCount = 3;
+    // 0x12A6AC, 0x12A6B4: no texture, so neither uv array is set.
+    parm.uv = 0;
+    parm.multiUv = 0;
+    // 0x12A6B8, 0x12A6BC, 0x12A6C0: no per-vertex colour array, the default allocator, no bias.
+    parm.vertexColor = 0;
+    parm.allocator = 0;
+    parm.zBias = 0.0f;
+    // 0x12A6DC: the flat colour every corner starts from.
+    parm.colorWord = 0x80808080;
+    // 0x12A6E4: the caller's own three points, which we already hold.
+    parm.vertex = 0;
+    // 0x12A6EC: a flat triangle carries no normals.
+    parm.normal = 0;
+
     DrawMesh mesh;
     Matrix4 identity{};
     for (int axis = 0; axis < 4; axis++) identity.m[axis][axis] = 1.0f;
@@ -2107,6 +2126,7 @@ void xfldDrawPoly3(const sdfVector3_t point[3], const u32 color[3], Frame* frame
     mesh.gs = sdfGsStateForOt(0);
     // Gouraud and blended, with no texture: the call carries no UVs, so there is nothing to sample.
     mesh.attrBits = sdfCoreAttrGouraud | sdfCoreAttrBlend | sdfPrimTriangle;
+    mesh.color = Rgba::fromPacked(parm.colorWord);
     mesh.lit = false;
     mesh.packetType = sdfPacketGenerated;
     mesh.vertices.resize(3);
@@ -2119,11 +2139,14 @@ void xfldDrawPoly3(const sdfVector3_t point[3], const u32 color[3], Frame* frame
     gConvert->getTrace().countBones(1);
     DrawSink::addMeshTo(frame, std::move(mesh), tag);
 
-    xsdfDrawTagLink(tag, packet);                             // 0x12A6F4
-    xsdfGrOt_t* ot = &xsdfGrOtTable[xrsetFrameMaskOtOffset];  // 0x12A6FC, 0x12A704
+    // 0x12A6F4: the prim packet is linked into the tag.
+    xsdfDrawTagLink(tag, packet);
+    // 0x12A6FC, 0x12A704: the ot offset rsetOtOfs last set names the table.
+    xsdfGrOt_t* ot = &xsdfGrOtTable[xrsetFrameMaskOtOffset];
     if (ot->regFunc) {
         tag->sequence = gSequence++;
-        ot->regFunc(ot, tag);  // 0x12A710, 0x12A714
+        // 0x12A710, 0x12A714: the table's registrar files the finished tag.
+        ot->regFunc(ot, tag);
     }
 }
 

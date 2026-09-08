@@ -645,28 +645,32 @@ struct sdf3DPrimPolyParm_t {
     u16 prim;
     u16 mask;
 
-    /// Measured 0x8080F080 and 0x408080F0, so a packed color rather than the pointer the packet
-    /// write at +20 suggested.
+    /// Measured 0x8080F080 and 0x408080F0, so a packed color rather than a pointer.
     u32 colorWord;
 
-    /// Measured on smt3_field_unknown_realm: faceIndex is null and the faces are implicit, and
-    /// vertex points at this block + 0x30, where the position array begins. The database types
-    /// both as inline sdfVector4_t arrays, which is what inflates its struct to 0x4C.
+    /// Null when the faces are implicit, which is every call measured on the field scenes.
     u32 faceIndex;
-    u32 vertex;
 
-    /// Non-null takes the per-vertex stride from 96 to 224 and the base PRIM from 18 to 19. Null on
-    /// every call measured on the field scenes, so the extended mode is not what fldSdwDraw uses.
-    sdfVector3Ptr_t position;
-    sdfVector2Ptr_t uv;
-    sdfVector2Ptr_t uv2;
-    guest_ptr<u32> color;
+    /// A pointer, though the database types this slot and normal as inline sdfVector4_t arrays,
+    /// which is what makes its struct 0x4C. Measured at 0x555FA0: vertex addresses this block
+    /// + 0x30 and normal + 0x60, so the header is 0x30 and the arrays follow it.
+    u32 vertex;
+    u32 vertexRest[3];
+    u32 normal;
+    u32 normalRest[3];
+
+    /// Read only when prim says the attribute is present.
+    u32 uv;
+    u32 uvRest;
+    u32 multiUv;
+    u32 multiUvRest;
+    u32 vertexColor;
 
     /// Called instead of sdfGrAllocPacketBuff when it is set.
     u32 allocator;
-    f32 depth;
+    f32 zBias;
 };
-SDF_STATIC_ASSERT_SIZE(sdf3DPrimPolyParm_t, 0x2C);
+SDF_STATIC_ASSERT_SIZE(sdf3DPrimPolyParm_t, 0x4C);
 SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, faceCount, 0x00);
 SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, pointCount, 0x02);
 SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, prim, 0x04);
@@ -674,9 +678,19 @@ SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, mask, 0x06);
 SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, colorWord, 0x08);
 SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, faceIndex, 0x0C);
 SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, vertex, 0x10);
-SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, position, 0x14);
-SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, color, 0x20);
-SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, depth, 0x28);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, normal, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, uv, 0x30);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, multiUv, 0x38);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, vertexColor, 0x40);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, allocator, 0x44);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, zBias, 0x48);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, faceCount, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, pointCount, 0x02);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, prim, 0x04);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, mask, 0x06);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, colorWord, 0x08);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, faceIndex, 0x0C);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, vertex, 0x10);
 
 enum sdfCoreAttrBit_t : u16 {
     sdfCoreAttrRefMapPass = 0x0001,

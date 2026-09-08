@@ -603,6 +603,8 @@ int sdfPrimLinkG4Hook(pcsx2hook_regs* regs, void* user) {
 }
 
 // cmpDrawBoxG(X, Y, Z, W, H, pCol, OtNo): four corner colors read through a pointer.
+// cppcheck-suppress unusedFunction  // @todo TODO.md: complete, but drawing it costs the menu 6
+// points, so the table entry stays a trace until its geometry is right
 int cmpDrawBoxGHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);

@@ -16,8 +16,6 @@ FACTS = "assets/SLUS-20911.facts"
 AUTONAME = ("unk_", "asc_", "off_", "flt_", "dbl_", "qword_", "dword_", "word_", "byte_",
             "xmmword_", "stru_")
 
-# "alloc" is the one class that names no hardware: our allocation model is not the guest's, and
-# what it allocates where does not reach a pixel.
 # VU1 is the only opt-out, and it is one because the work is accounted for somewhere that is itself
 # checked: docs/vu1/ under scripts/vucheck.py. Every other class was a way of not modelling
 # something. "packetbuf", "dma", "gif" and "gs" declined a packet whose *contents* are the draw, and
