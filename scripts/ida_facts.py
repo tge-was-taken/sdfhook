@@ -229,7 +229,8 @@ def emit(out, name):
         out.write("  glob  0x%X %s%s\n" % (at[0], sym, addrs(at)))
     for sym, at in sorted(calls.items(), key=lambda kv: kv[1][0]):
         out.write("  call  0x%X %s%s\n" % (at[0], sym, addrs(at)))
-    chart = ida_gdl.FlowChart(fn, flags=ida_gdl.FC_PREDS)
+    # A FlowChart is consumed by one pass, and depths() goes first.
+    chart = list(ida_gdl.FlowChart(fn, flags=ida_gdl.FC_PREDS))
     order = blocks(fn)
     deep = depths(chart, order)
     cond = conditionals(chart)

@@ -2292,6 +2292,33 @@ right.
 - [ ] **B4: residual on the field scenes, +5.40 and +1.31 on ~11.** The worst tiles are the HUD
       corners. What is left after the texture work is a shading difference, not a missing feature.
 
+- [ ] **The shadow refactor lives on `shadow-refactor`, not on master.** Rendering was broken by the
+      refactor and is recovered: battle 5.933, field 5.283, underground 4.422, loading 2.080,
+      title 5.574 against master's 5.354, 5.125, 4.267, 2.080, 5.574. Two match exactly and three
+      sit within 0.6.
+
+      **Three bugs, all the same mistake: a hook rebuilt from scratch that guessed where a value
+      comes from.** `hooks.cpp` was destroyed by a `git checkout` and rewritten against the
+      shadow's header alone, so nothing checked the guest.
+
+      - The fade took R, G, B and state from a0..a3; the guest keeps them in `fadergba`. A garbage
+        state of 0 makes the alpha `128 - 0`, so it drew as a solid opaque quad. 42.133 to 9.274.
+      - The font read its uv array as floats where the guest stores 12.4, and never loaded
+        `frFontClutTable`, so every glyph sampled a garbage rectangle with no palette. 9.274 to
+        5.933.
+      - `fldDrawFrameSprite` passed a hardcoded 0x80 where the engine feeds the previous frame back
+        at 48, painting it opaquely over the field. 202.604 to 5.283.
+
+      **The menu is 17.774 against master's 11.785 and is not explained.** The two renders are
+      visually indistinguishable, both draw exactly 35675 sprites with the same producer
+      breakdown (cmpDrawTriG 18921, frCreateDrawFontPacket 8330, fclDrawSpriteCore 7735,
+      cmpDrawBoxG 689), and the frame is uniformly about 8 levels darker across every channel.
+      Ruled out: draw ordering, the rsetAlpha mode table, `otOffset` on the cmp producers, and the
+      sprite set itself. A uniform deficit with an identical draw list points at blend state or at
+      the shot landing on a different frame.
+
+      Battle is 0.58 over master, also unexplained, and likely the same cause.
+
 - [ ] **Moving the rest of the hooks into the shadow.** The 2D producers, the ordering-table queue
       and the engine state setters are done: `rsetAlpha` (12/12 blocks, its mode table moved out of
       hooks.cpp), `rsetOtOfs`, `rsetTest`, `rsetFrameMaskRgbOn`/`Off`, `sdf2DLinkTexPacket`, all
