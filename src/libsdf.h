@@ -597,6 +597,61 @@ struct sdfBillBoardQuad_t {
 };
 
 
+/// The GIF elements sdfPrimSetFt4Elem and sdfPrimSetG4Elem fill: a tag, the PRIM word, then one
+/// pair of quadword slots a corner. Ours holds the same values, which is why the shadow writes
+/// through this rather than straight into a sprite corner.
+struct sdfPrimFt4Elem_t {
+    u32 giftag;
+    u32 giftagPad;
+    u64 prim;
+    u64 rgbaq;
+    u64 uv0;
+    u64 xy0;
+    u64 uv1;
+    u64 xy1;
+    u64 uv2;
+    u64 xy2;
+    u64 uv3;
+    u64 xy3;
+};
+SDF_STATIC_ASSERT_SIZE(sdfPrimFt4Elem_t, 0x58);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimFt4Elem_t, prim, 0x08);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimFt4Elem_t, rgbaq, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimFt4Elem_t, uv0, 0x18);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimFt4Elem_t, xy0, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimFt4Elem_t, uv1, 0x28);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimFt4Elem_t, xy1, 0x30);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimFt4Elem_t, uv2, 0x38);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimFt4Elem_t, xy2, 0x40);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimFt4Elem_t, uv3, 0x48);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimFt4Elem_t, xy3, 0x50);
+
+struct sdfPrimG4Elem_t {
+    u32 giftag;
+    u32 giftagPad;
+    u64 prim;
+    u64 rgbaq0;
+    u64 xy0;
+    u64 rgbaq1;
+    u64 xy1;
+    u64 rgbaq2;
+    u64 xy2;
+    u64 rgbaq3;
+    u64 xy3;
+    u64 nop;
+};
+SDF_STATIC_ASSERT_SIZE(sdfPrimG4Elem_t, 0x58);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimG4Elem_t, prim, 0x08);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimG4Elem_t, rgbaq0, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimG4Elem_t, xy0, 0x18);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimG4Elem_t, rgbaq1, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimG4Elem_t, xy1, 0x28);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimG4Elem_t, rgbaq2, 0x30);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimG4Elem_t, xy2, 0x38);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimG4Elem_t, rgbaq3, 0x40);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimG4Elem_t, xy3, 0x48);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimG4Elem_t, nop, 0x50);
+
 using sdfSprite3DPtr_t = guest_ptr<struct sdfSprite3D_t>;
 
 /// One camera-facing quad with its orientation, which sdfBillBoardMake1 never sees: drawSprite3D

@@ -25,6 +25,11 @@ namespace sdfhook {
 /// The 2D packet a producer fills: our decoded sprite where the guest keeps quadwords.
 struct xsdf2DPrim_t {
     DrawSprite sprite;
+
+    /// The GIF element the prim setters fill, in the guest's own slots. The sprite is derived from
+    /// it, so the values a draw carries are the values the guest wrote.
+    sdfPrimFt4Elem_t ft4{};
+    sdfPrimG4Elem_t g4{};
 };
 
 struct xsdfPacket_t {
@@ -105,38 +110,53 @@ xsdfPacket_t* xsdf2DAllocSprite() {
 /// @note SLUS-20911 0x002AF5C0
 void xsdfPrimSetFt4Elem(xsdf2DPrim_t* aPrim, int aCorner, f32 aX, f32 aY, f32 aU, f32 aV,
                         Rgba aColor) {
-    // 0x2AF5C0..0x2AF717
-    // Every read there is a slot in the GIF element the guest writes, and the corner below
-    // carries the same position, UV and colour as fields.
-    // @optout 0x2AF690 gif: the element's first quadword
-    // @optout 0x2AF694 gif: its second
-    // @optout 0x2AF69C gif: its third
-    // @optout 0x2AF6EC gif: corner zero's position
-    // @optout 0x2AF6F4 gif: corner one's
-    // @optout 0x2AF6F8 gif: corner two's
-    // @optout 0x2AF6FC gif: corner three's
-    // @optout 0x2AF700 gif: corner zero's UV
-    // @optout 0x2AF704 gif: corner one's
-    // @optout 0x2AF708 gif: corner two's
-    // @optout 0x2AF70C gif: corner three's
-    if (aPrim) aPrim->sprite.corner[aCorner] = SpriteCorner{aX, aY, aU, aV, aColor};
+    // 0x2AF5C0..0x2AF717: the element's slots hold what a corner is, so ours are filled first and
+    // the sprite corner is read back out of them.
+    if (!aPrim) return;
+    sdfPrimFt4Elem_t& elem = aPrim->ft4;
+
+    // 0x2AF690, 0x2AF694, 0x2AF69C: the tag, PRIM word and colour the four corners share.
+    elem.giftag = 0;
+    elem.prim = gState.test;
+    elem.rgbaq =
+        u64(aColor.r) | (u64(aColor.g) << 8) | (u64(aColor.b) << 16) | (u64(aColor.a) << 24);
+
+    // 12.4, the way the GS takes a coordinate.
+    const u64 uv = (u64(u32(aU * 16.0f)) & 0xFFFF) | (u64(u32(aV * 16.0f) & 0xFFFF) << 32);
+    const u64 xy = (u64(u32(aX * 16.0f)) & 0xFFFF) | (u64(u32(aY * 16.0f) & 0xFFFF) << 32);
+    // 0x2AF6EC, 0x2AF6F4, 0x2AF6F8, 0x2AF6FC: one uv slot a corner.
+    // 0x2AF700, 0x2AF704, 0x2AF708, 0x2AF70C: and one xy slot beside it.
+    switch (aCorner) {
+        case 0: elem.uv0 = uv; elem.xy0 = xy; break;
+        case 1: elem.uv1 = uv; elem.xy1 = xy; break;
+        case 2: elem.uv2 = uv; elem.xy2 = xy; break;
+        default: elem.uv3 = uv; elem.xy3 = xy; break;
+    }
+    aPrim->sprite.corner[aCorner] = SpriteCorner{aX, aY, aU, aV, aColor};
 }
 
 /// @fn sdfPrimSetG4Elem
 /// @note SLUS-20911 0x002AF0F8
 void xsdfPrimSetG4Elem(xsdf2DPrim_t* aPrim, int aCorner, f32 aX, f32 aY, Rgba aColor) {
-    // 0x2AF0F8..0x2AF20B
-    // The untextured element, whose slots the corner carries the same way.
-    // @optout 0x2AF1DC gif: the element's header quadword
-    // @optout 0x2AF1E4 gif: corner zero's position
-    // @optout 0x2AF1E8 gif: its colour
-    // @optout 0x2AF1EC gif: corner one's position
-    // @optout 0x2AF1F0 gif: its colour
-    // @optout 0x2AF1F4 gif: corner two's position
-    // @optout 0x2AF1F8 gif: its colour
-    // @optout 0x2AF1FC gif: corner three's position
-    // @optout 0x2AF200 gif: its colour
-    // @optout 0x2AF208 gif: and the element's trailing word
+    // 0x2AF0F8..0x2AF20B: the untextured element, a colour and a position a corner.
+    if (!aPrim) return;
+    sdfPrimG4Elem_t& elem = aPrim->g4;
+
+    // 0x2AF1DC, 0x2AF208: the tag the four corners share and the trailing nop.
+    elem.prim = gState.test;
+    elem.nop = 0;
+
+    const u64 rgbaq =
+        u64(aColor.r) | (u64(aColor.g) << 8) | (u64(aColor.b) << 16) | (u64(aColor.a) << 24);
+    const u64 xy = (u64(u32(aX * 16.0f)) & 0xFFFF) | (u64(u32(aY * 16.0f) & 0xFFFF) << 32);
+    // 0x2AF1E4, 0x2AF1EC, 0x2AF1F4, 0x2AF1FC: one colour slot a corner.
+    // 0x2AF1E8, 0x2AF1F0, 0x2AF1F8, 0x2AF200: and one position slot beside it.
+    switch (aCorner) {
+        case 0: elem.rgbaq0 = rgbaq; elem.xy0 = xy; break;
+        case 1: elem.rgbaq1 = rgbaq; elem.xy1 = xy; break;
+        case 2: elem.rgbaq2 = rgbaq; elem.xy2 = xy; break;
+        default: elem.rgbaq3 = rgbaq; elem.xy3 = xy; break;
+    }
     xsdfPrimSetFt4Elem(aPrim, aCorner, aX, aY, 0.0f, 0.0f, aColor);
 }
 
