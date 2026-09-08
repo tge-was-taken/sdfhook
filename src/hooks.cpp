@@ -480,8 +480,11 @@ int frCreateDrawFontPacketHook(pcsx2hook_regs* regs, void* user) {
     const u32 pUv = u32Ptr_t{c.getStackArgAddr(8)}.valueOr();
     const u32 pGsTex = u32Ptr_t{c.getStackArgAddr(9)}.valueOr();
 
+    // The uv array is 12.4 fixed point, not floats.
     f32 uv[4] = {};
-    for (int i = 0; i < 4; i++) uv[i] = f32Ptr_t{pUv + u32(i) * 4}.valueOr();
+    for (int i = 0; i < 4; i++) {
+        uv[i] = f32(s32(u32Ptr_t{pUv + u32(i) * 4}.valueOr())) / 16.0f;
+    }
     frGsTex_PTR_t gsTex{pGsTex};
     if (!gsTex) return PCSX2HOOK_CONTINUE;
     frGsTex_t tex = *gsTex;

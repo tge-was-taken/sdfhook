@@ -710,6 +710,9 @@ void xfrCreateDrawFontPacket(s32 aX, s32 aY, s32 aWidth, s32 aHeight, u32 aCol, 
         || (1u << aGsTex->HeightLog2) != aGsTex->Height) {
         reportUnsupported("font sheet log2 size disagrees with its pixels", aGsTex->WidthLog2);
     }
+    // The palettes are static data, so they read whether or not the glyph uploads ran in the
+    // capture window.
+    gSink.textures->loadFontClut(gModel.frFontClutTable);
     gSink.textures->wantFontSheet(aGsTex->Addr, aGsTex->BufWidth, aGsTex->Width,
                                   aGsTex->Height);  // 0x1C6554, 0x1C655C
     prim->sprite = DrawSprite::fromRect(f32(aX) / 16.0f, f32(aY) / 16.0f, f32(aWidth),

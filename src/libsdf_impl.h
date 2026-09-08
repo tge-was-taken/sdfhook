@@ -229,6 +229,7 @@ struct XsdfModel {
     u32Ptr_t sdfFrameId;
     u32Ptr_t dds3FrameID;
     f32Ptr_t sdfModelShapeWeightEpsilon;
+    u32 frFontClutTable = 0;
     f32Ptr_t sdfFaceDivBias;
     f32Ptr_t sdfFaceDivSoften;
     u8Ptr_t corePktSoftenBias;
