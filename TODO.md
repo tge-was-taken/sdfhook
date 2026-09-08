@@ -2322,10 +2322,17 @@ right.
       - not the shot frame: pinned to the same SDF_SHOT_FRAME the two still split 11.9 to 17.5,
       - not the feedback pass, the rsetAlpha table, otOffset or the GS state, all compared equal.
 
-      So identical sprites drawn over an identical background with identical textures produce
-      renders 9.318 apart, spread across the frame rather than concentrated. The remaining
-      suspects are the font sheet, which is fetched through getFontSheet and recovered from GS
-      asynchronously so its arrival could differ by a frame, and the sprite pass's own GL state.
+      - not the font path either: the glyph and sheet log lines are identical between the builds,
+        frFontClutTable resolves, and both report the same "0 glyph uploads, font clut loaded".
+
+      Both builds are deterministic: two runs of either produce a bit identical native and emu
+      shot. So identical sprites drawn over an identical background with identical textures and an
+      identical font sheet produce renders 9.318 apart. **That cannot all be true, so one of the
+      comparisons above is measuring the wrong object.** The trace is written from
+      `mBuilding->sprites` at submit, the same vector the renderer draws, which is why the sprite
+      comparison looks conclusive and probably is; the untested link is `frame.textureUploads`,
+      which the shadow fills through xsdfTexSetEx and which decides what is actually bound at draw
+      time rather than what the cache holds when SDF_DUMP_TEXTURES writes it. Start there.
       **An earlier note here claimed a whole frame composite difference; SDF_NO_SPRITES disproves
       that and it is withdrawn.**
 
