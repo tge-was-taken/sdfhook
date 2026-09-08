@@ -154,6 +154,9 @@ struct MeshRamp {
     bool known = false;
 };
 
+/// A mesh whose tag the transmit chain never reached, so its draw order is unknown.
+constexpr u32 kNoChainPos = 0xFFFFFFFF;
+
 struct DrawMesh {
     std::vector<MeshVertex> vertices;
     std::vector<u16> indices;
@@ -169,6 +172,10 @@ struct DrawMesh {
     bool linked = true;
     u32 linkAddr = 0;
     u32 linkIndex = 0xFFFFFFFF;
+
+    /// Where the mesh's tag sits in the frame's DMA chain, which is the order the hardware draws
+    /// in. kNoChainPos when the chain never reached it.
+    u32 chainPos = kNoChainPos;
     u16 attrBits = 0;
     u16 matFlags = 0;
     u8 matDuty = 0;

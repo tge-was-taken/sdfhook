@@ -110,7 +110,7 @@ struct Config {
     char cull = 'b';
 
     /// 'f' draws nearest first, 'b' farthest first, 'n' leaves submission order alone.
-    char meshOrder = 'b';
+    char meshOrder = 'q';
 };
 
 }  // namespace sdfhook

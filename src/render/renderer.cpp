@@ -711,7 +711,14 @@ void Renderer::drawMeshes(const Frame& frame) {
         }
         if (frame.meshes[index].otIndex <= mConfig->otMax) mOrder.push_back(index);
     }
-    if (mConfig->meshOrder != 'n') {
+    if (mConfig->meshOrder == 'q') {
+        // The DMA chain is the order the hardware drew in, so no table index or depth key is
+        // needed. Barely half the meshes match a tag; the rest keep kNoChainPos and follow in
+        // build order, which measured better than sorting them by table and depth.
+        std::stable_sort(mOrder.begin(), mOrder.end(), [&](usize a, usize b) {
+            return frame.meshes[a].chainPos < frame.meshes[b].chainPos;
+        });
+    } else if (mConfig->meshOrder != 'n') {
         const bool nearFirst = mConfig->meshOrder == 'f';
         std::stable_sort(mOrder.begin(), mOrder.end(), [&](usize a, usize b) {
             const DrawMesh& x = frame.meshes[a];

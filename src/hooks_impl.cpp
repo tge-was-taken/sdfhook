@@ -74,7 +74,8 @@ bool isHandled(const char* producer) {
 /// @disc SLUS-20911
 /// @address 0x002AD980
 /// @function sdfGrDrawFrame
-std::unordered_map<u32, sdfGsState_t> replayTransmitOrder(u32 aTag) {
+std::unordered_map<u32, sdfGsState_t> replayTransmitOrder(u32 aTag,
+                                                          std::unordered_map<u32, u32>* aPosition) {
     std::unordered_map<u32, sdfGsState_t> settled;
     sdfGsState_t gs{};
     u32 stack[16] = {};
@@ -93,6 +94,7 @@ std::unordered_map<u32, sdfGsState_t> replayTransmitOrder(u32 aTag) {
 
         applyGsRegisterWrites(at, gs);
         settled[at] = gs;
+        if (aPosition) aPosition->emplace(at, steps);
 
         switch (id) {
             case sdfDmaTagRef:
@@ -118,9 +120,10 @@ void settleMeshState(HookContext& h, u32 aTag) {
     Frame* frame = h.frames.getFrame();
     if (!frame || frame->meshes.empty()) return;
 
+    std::unordered_map<u32, u32> position;
     const std::unordered_map<u32, sdfGsState_t> settled =
         h.config->noTransmitState ? std::unordered_map<u32, sdfGsState_t>()
-                                  : replayTransmitOrder(aTag);
+                                  : replayTransmitOrder(aTag, &position);
     if (settled.empty()) {
         h.model.traceMeshes(*frame);
         return;
@@ -130,13 +133,18 @@ void settleMeshState(HookContext& h, u32 aTag) {
 
     for (DrawMesh& mesh : frame->meshes) {
         const sdfGsState_t* state = nullptr;
+        u32 tag = 0;
         if (mesh.linkAddr) {
-            const auto found = settled.find(mesh.linkAddr);
-            if (found != settled.end()) state = &found->second;
+            tag = mesh.linkAddr;
         } else if (mesh.linkIndex < byLink.size()) {
             mesh.linked = byLink[mesh.linkIndex] != 0;
-            const auto found = settled.find(byLink[mesh.linkIndex]);
+            tag = byLink[mesh.linkIndex];
+        }
+        if (tag) {
+            const auto found = settled.find(tag);
             if (found != settled.end()) state = &found->second;
+            const auto where = position.find(tag);
+            if (where != position.end()) mesh.chainPos = where->second;
         }
         if (!state) {
             h.model.getTrace().countUnsettledMesh();

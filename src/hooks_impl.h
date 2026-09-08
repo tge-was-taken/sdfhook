@@ -12,7 +12,8 @@ void dumpPacket(const LinkedPacket& packet, const char* by, const DmaTag& tag);
 /// Producers whose draws reach the renderer through their own entry point.
 bool isHandled(const char* producer);
 
-/// Gives every mesh the ALPHA and TEST its packet transmitted under.
+/// Gives every mesh the ALPHA and TEST its packet transmitted under, and where in the chain it
+/// was drawn.
 void settleMeshState(HookContext& h, u32 aTag);
 
 /// Parses the frame's linked packets for coverage, shadows and the trace.
