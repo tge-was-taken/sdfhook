@@ -117,6 +117,20 @@ This covers names, layouts, sizes, missing headers and argument meaning.
 
 ## Code conventions
 
+**Transport is separate from what a hook does.** `hooks.cpp` names a hooked function's arguments
+out of the registers and calls into `hooks_impl.cpp`; `hooks_impl_model.cpp` is the same split for
+the model half, as `ModelHooks` over the parser's state. `model.cpp` keeps only what decodes a mesh
+body (`readRigidBatches`, `readBlendShapes`, `readVifStreamMesh`, `readSecondUv`, `finishMesh`) and
+the trace, with `model_internal.h` for the helpers both halves need. **No inline logic in a
+handler**: a handler that does more than name arguments and delegate is one that will be read as
+transport and edited as logic.
+
+**Hooks stay minimal, and a guest function is not reimplemented to replace one.** The
+`shadow-refactor` branch tried it and was abandoned: guest code is known-correct, so a hook that
+reads its arguments has one unknown, our rendering, and a translation adds a second, after which a
+moved score no longer says which broke. If it is ever wanted again, the reimplementation runs
+beside the hook and is compared field by field until silent, before anything switches over.
+
 **Guest memory is reached through `guest_ptr<T>`, never a threaded accessor.** `installGuestRam` puts
 the RAM base in thread-local storage on the CPU thread the hooks and frame callback share; the render
 thread never installs it, so a pointer reaching it reads as unmapped rather than as a race. Hold the
