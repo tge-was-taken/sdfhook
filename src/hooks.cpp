@@ -709,6 +709,29 @@ int packetTypeHook(pcsx2hook_regs* regs, void* user) {
     return PCSX2HOOK_CONTINUE;
 }
 
+/// Every DMA send, with the caller and the engine's own display-thread flag, to judge whether
+/// either identifies the one send that carries the frame's chain.
+int dmaSendHook(pcsx2hook_regs* regs, void* user) {
+    Context c{regs};
+    HookContext& h = *static_cast<HookContext*>(user);
+
+    const u32 aChan = c.getArg(0);
+    const u32 aAddr = c.getArg(1);
+
+    if (h.config->dumpChainCensus) {
+        const u32 flag = pcsx2hook_find_symbol(h.runtime, "sdfDispThreadFlag");
+        log.dump(JsonObject()
+                     .addString("dump", "dmaSend")
+                     .addUint("frame", h.trace->getFrame())
+                     .addUint("chan", aChan)
+                     .addHexDigits("addr", aAddr, 8)
+                     .addString("by", h.symbols.getSite(c.getRa()))
+                     .addUint("dispThreadFlag", flag ? u8Ptr_t{flag}.valueOr() : 0xFFu)
+                     .take());
+    }
+    return PCSX2HOOK_CONTINUE;
+}
+
 int traceEntryHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
@@ -738,6 +761,7 @@ constexpr Entry kEngineEntries[] = {
     {"sdfGrDrawFrame", &sdfGrDrawFrameHook, nullptr},
     {"sdfDeliverDrawStart", &traceEntryHook, nullptr},
     {"sdfDeliverDrawEnd", &traceEntryHook, nullptr},
+    {"sceDmaSend", &dmaSendHook, nullptr},
     {"sdfModelDrawEnvLinkOt", &sdfModelDrawEnvLinkOtHook, nullptr},
     // Watched only, to find out whether any sample scene reaches a render target or a movie.
     {"dds3AllocRenderTexture", &observeHook, nullptr},
