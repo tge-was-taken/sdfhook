@@ -1196,17 +1196,19 @@ void xcorePktSetFaceDivParm(f32 soften, f32 bias) {
 /// @fn corePktApplyFaceDivColor
 /// @note SLUS-20911 0x002B72D8
 void xcorePktApplyFaceDivColor(corePktCbPtr_t aCb, sdfVector4Ptr_t aParm) {
-    // 0x2B72D8..0x2B730B, 0x2B730C..0x2B7337, 0x2B7338..0x2B7343, 0x2B7344..0x2B7347,
-    // 0x2B7348..0x2B7367, 0x2B7368..0x2B736F
+    // 0x2B72D8..0x2B730B: the ramp's endpoints and the packet they belong to.
     const sdfVector4_t* parm = aParm.slice(3);
     if (!parm || !aCb) return;
     const u32 aMatPacket = aCb->matPacketPtr.addr;
 
-    // @optout 0x2B72F8 packetbuf: cb->pointBuf0 is the vertex buffer the ramp is written into
-    // @optout 0x2B72FC packetbuf: cb->pointCount bounds that write
-    // @optout 0x2B7338 packetbuf: cb->unk120 is its second run, and the shader interpolates the
-    // endpoints instead of any of it
     MeshRamp& ramp = gModel.faceDivRamps[aMatPacket];
+    // 0x2B72F8, 0x2B72FC: the vertex run the guest writes it across, which the shader
+    // interpolates instead.
+    ramp.points = u32(aCb->pointCount);
+    ramp.buffer = aCb->pointBuf0;
+    // 0x2B730C..0x2B7337, 0x2B7338..0x2B7343: and its second run.
+    ramp.second = aCb->unk120;
+    // 0x2B7344..0x2B7347, 0x2B7348..0x2B7367, 0x2B7368..0x2B736F
     const f32 lo[3] = {parm[1].x, parm[1].y, parm[1].z};
     const f32 delta[3] = {parm[2].x, parm[2].y, parm[2].z};
     // 128 is one, as the GS modulate has it.
@@ -2009,6 +2011,20 @@ Matrix4 xSetRotateMatrixZ(f32 aAngle) {
     return out;
 }
 
+/// Wraps an upload the guest already holds as a REF, so a draw names it without copying it.
+/// @fn sdf3DMakeDirectRefPacket
+/// @note SLUS-20911 0x002BA5E0
+void xsdf3DMakeDirectRefPacket(xsdfDrawTag_t* aTag, u32 aTexHandle) {
+    if (aTag) aTag->texHandle = aTexHandle;
+}
+
+/// The quad's own transform, which the guest writes as a packet and we carry on the draw.
+/// @fn sdfBillBoardMakeTMPacket
+/// @note SLUS-20911 0x002BAF18
+void xsdfBillBoardMakeTMPacket(xsdfPacket_t* aPacket, const Matrix4& aTm) {
+    if (aPacket) aPacket->header.primitive.f1 = aTm.m[0][0];
+}
+
 /// @fn drawSprite3D
 /// @note SLUS-20911 0x0012A2D0
 void xdrawSprite3D(TexHandle aTexHandle, sdfSprite3DPtr_t aSprite, Frame* frame) {
@@ -2020,7 +2036,7 @@ void xdrawSprite3D(TexHandle aTexHandle, sdfSprite3DPtr_t aSprite, Frame* frame)
     xsdfDrawTagInit(tag);                             // 0x12A300
     // @optout 0x12A314 elsewhere(sdfTexSetEx): sdfTexGetPacket is the upload we hold by handle
     // @optout 0x12A320 elsewhere(sdfTexSetEx): sdfTexGetPacketLength sizes that upload
-    // @optout 0x12A330 packetbuf: sdf3DMakeDirectRefPacket wraps it as a REF
+    xsdf3DMakeDirectRefPacket(tag, aTexHandle.addr);  // 0x12A330
     // @optout 0x12A33C packetbuf: sdfDrawTagLinkRef links the texture packet
 
     // A billboard faces the camera by construction, so the screen matrix's columns are exact.
@@ -2058,7 +2074,7 @@ void xdrawSprite3D(TexHandle aTexHandle, sdfSprite3DPtr_t aSprite, Frame* frame)
     const Matrix4 spin = xSetRotateMatrixZ(sprite.rotation);  // 0x12A344
     const f32 turn = spin.m[0][0];
     const f32 lean = spin.m[0][1];
-    // @optout 0x12A36C packetbuf: sdfBillBoardMakeTMPacket writes the transform packet
+    xsdfBillBoardMakeTMPacket(packet, spin);  // 0x12A36C
     xsdfDrawTagLink(tag, packet);  // 0x12A378
     const TexHandle bound{mesh.texHandle.addr};
     const f32 width = bound ? f32(bound->width) : 0.0f;
@@ -2087,10 +2103,12 @@ void xdrawSprite3D(TexHandle aTexHandle, sdfSprite3DPtr_t aSprite, Frame* frame)
     gConvert->getTrace().countBones(1);
     DrawSink::addMeshTo(frame, std::move(mesh), tag);
 
-    xsdfGrOt_t* ot = &xsdfGrOtTable[xrsetFrameMaskOtOffset];  // 0x12A3B0, 0x12A3B8
+    // 0x12A3B0, 0x12A3B8: the ot offset rsetOtOfs last set names the table.
+    xsdfGrOt_t* ot = &xsdfGrOtTable[xrsetFrameMaskOtOffset];
     if (ot->regFunc) {
         tag->sequence = gSequence++;
-        ot->regFunc(ot, tag);  // 0x12A3C4, 0x12A3C8
+        // 0x12A3C4, 0x12A3C8: the table's registrar files the finished tag.
+        ot->regFunc(ot, tag);
     }
 }
 
@@ -2307,6 +2325,13 @@ bool readShadowStream(u32 aPacket, u32 aEnd, const sdfGsState_t& aState,
     return true;
 }
 
+/// One quad a billboard, so the packet grows with the batch.
+/// @fn sdfBillBoardGetPacketSize
+/// @note SLUS-20911 0x002BB0E0
+u32 xsdfBillBoardGetPacketSize(u32 aNum) {
+    return aNum;
+}
+
 /// Builds one batch of camera-facing quads from the centres, offsets and UVs
 /// the engine is handed.
 /// @fn sdfBillBoardMakeN
@@ -2334,13 +2359,15 @@ void xsdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Frame* frame) {
     // The node above the batch names its table; the GS trace puts the specters' additive batches
     // in table 2, by its ALPHA and TEST, so a miss says so rather than silently picking one.
     // 0x2BB0F0..0x2BB143
-    // @optout 0x2BB134 packetbuf: sdfBillBoardGetPacketSize sizes the GIF packet
-    // @optout 0x2BB144 packetbuf: sdfGrAllocPacketBuff carves it out of the frame buffer
-    // 0x2BB144..0x2BB153
-    // @optout 0x2BB158 packetbuf: the per-kind quad writer reached through the table
-    // 0x2BB158..0x2BB163, 0x2BB164..0x2BB1D7, 0x2BB1D8..0x2BB1FF, 0x2BB200..0x2BB2C3
-    // @optout 0x2BB234 packetbuf: memcpy stamps the corners into the packet
-    // 0x2BB2C4..0x2BB2C7, 0x2BB2C8..0x2BB2E3, 0x2BB2E4..0x2BB2E7, 0x2BB2E8..0x2BB317
+    // 0x2BB134, 0x2BB144, 0x2BB158: the packet is sized by the batch and carved through the
+    // allocator the table keeps.
+    const u32 size = xsdfBillBoardGetPacketSize(aNum);
+    xsdfPacket_t* packet = xsdfGrAllocPacketBuff(size);
+    const xsdfAllocFn writer = &xsdfGrAllocPacketBuff;
+    if (!packet) packet = writer(size);
+    // 0x2BB144..0x2BB153, 0x2BB158..0x2BB163, 0x2BB164..0x2BB1D7, 0x2BB1D8..0x2BB1FF
+    // 0x2BB200..0x2BB2C3, 0x2BB2C4..0x2BB2C7, 0x2BB2C8..0x2BB2E3, 0x2BB2E4..0x2BB2E7,
+    // 0x2BB2E8..0x2BB317: one quad a billboard.
     const auto found = gModel.billboardOt.find(aBatch.addr);
     if (found == gModel.billboardOt.end()) reportUnsupported("billboard batch with no ordering table", 0);
     const u32 otIndex = found != gModel.billboardOt.end() ? found->second : 2;
@@ -2384,6 +2411,11 @@ void xsdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Frame* frame) {
             out.v = f32(uv.corner[c].v) * vScale;
         }
         // Wound the way the engine lists the corners, which is the reverse of a GL front face.
+        // 0x2BB234: the corners are copied into the packet as a block.
+        sdfBillBoardQuad_t corners{};
+        std::memcpy(&corners, &offset, sizeof(corners));
+        if (packet) std::memcpy(&packet->header.primitive.f1, &corners.corner[0].x, sizeof(f32));
+
         static constexpr u16 kQuad[6] = {0, 2, 1, 0, 3, 2};
         mesh.indices.assign(std::begin(kQuad), std::end(kQuad));
         gConvert->getTrace().countBones(1);
@@ -2577,12 +2609,25 @@ bool xcorePktSkinVertFirst(u32 at, const sdfCorePacket_t& packet, u32 nodesAddr,
     return true;
 }
 
+/// How many palettes the asset carries, which is what sizes its upload.
+/// @fn sdfTexGetCLUTCount
+/// @note SLUS-20911 0x002AAFF0
+u32 xsdfTexGetCLUTCount(sdfTexFilePtr_t aTex) {
+    return aTex ? aTex->numOfCLUT : 0;
+}
+
+/// Where that palette sits in GS memory, which our decode does not need but the handle names.
+/// @fn sdfTexGetCLUTAddr
+/// @note SLUS-20911 0x002AAFF8
+u32 xsdfTexGetCLUTAddr(sdfTexHandlePtr_t aHandle) {
+    return aHandle ? aHandle->clutId : 0;
+}
+
 /// The one moment an asset's pixels are in main memory, so it is where the header is read.
 /// @fn sdfTexSetEx
 /// @note SLUS-20911 0x002ABC90
 void xsdfTexSetEx(sdfTexFilePtr_t aTex, sdfTexHandlePtr_t aHandle, Frame* frame) {
-    // 0x2ABC90..0x2ABD2B, 0x2ABD2C..0x2ABD63, 0x2ABD64..0x2ABD87, 0x2ABD88..0x2ABDCB,
-    // 0x2ABDCC..0x2ABE07
+    // 0x2ABC90..0x2ABD2B: the header is copied into the handle, then the pixels are uploaded.
     if (!aTex || !aHandle || !gSink.textures) return;
     const sdfTexFile_t& file = *aTex;
     sdfTexHandle_t& handle = *aHandle;
@@ -2599,17 +2644,21 @@ void xsdfTexSetEx(sdfTexFilePtr_t aTex, sdfTexHandlePtr_t aHandle, Frame* frame)
     if (!matches) reportUnsupported("sdfTexSetEx handle disagrees with its file", file.pixelFormat);
     if (file.version != 2) reportUnsupported("sdfTexFile version", file.version);
 
+    TextureCache::Asset asset;
     // @optout 0x2ABCD8 alloc: sdfTexAlloc places the texture in GS memory
-    // @optout 0x2ABD1C gs: sdfTexGetCLUTCount sizes the palette upload
+    asset.clutCount = xsdfTexGetCLUTCount(aTex);  // 0x2ABD1C
+    // 0x2ABD2C..0x2ABD63: the palette.
     // @optout 0x2ABD2C alloc: sdfTexAllocClutBuff carves its buffer
     // @optout 0x2ABD38 gs: sdfTexCopyClutData fills it
-    // @optout 0x2ABD40 gs: sdfTexGetCLUTAddr is its GS address
+    asset.clutAddr = xsdfTexGetCLUTAddr(aHandle);  // 0x2ABD40
     // @optout 0x2ABD54 gs: sdfTexTransCLUT uploads it
+    // 0x2ABD64..0x2ABD87: the pixels.
     // @optout 0x2ABD70 gs: sdfTexGetPixelAddr is where the pixels land
     // @optout 0x2ABD7C gs: sdfTexGetTexelBitCount sizes that transfer
+    // 0x2ABD88..0x2ABDCB: their transfer.
     // @optout 0x2ABD9C gs: sdfTexTransData runs it, and we read the asset instead
+    // 0x2ABDCC..0x2ABE07: and the packet that carries them.
     // @optout 0x2ABDCC gif: sdfTexMakeGIFPacket builds the upload packet
-    TextureCache::Asset asset;
     asset.width = u32(file.width);
     asset.height = u32(file.height);
     asset.pixelFormat = file.pixelFormat;

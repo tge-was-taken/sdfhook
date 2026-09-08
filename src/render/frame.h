@@ -136,6 +136,11 @@ struct MeshRamp {
     f32 lo[3] = {};
     f32 delta[3] = {};
     bool known = false;
+
+    /// The vertex run the guest wrote the ramp across, which the shader interpolates instead.
+    u32 points = 0;
+    u32 buffer = 0;
+    u32 second = 0;
 };
 
 struct DrawMesh {

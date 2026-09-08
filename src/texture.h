@@ -59,6 +59,8 @@ public:
         u8 clutFormat = 0;
         u8 numOfCLUT = 0;
         u32 dataStart = 0;
+        u32 clutCount = 0;
+        u32 clutAddr = 0;
     };
 
     void add(const Asset& aAsset, TexHandle handle, Frame* frame);
