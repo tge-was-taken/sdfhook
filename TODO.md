@@ -2309,7 +2309,18 @@ right.
       - `fldDrawFrameSprite` passed a hardcoded 0x80 where the engine feeds the previous frame back
         at 48, painting it opaquely over the field. 202.604 to 5.283.
 
-      **The menu is 17.774 against master's 11.785 and is not explained.** The two renders are
+      **The menu is 17.774 against master's 11.785 and is not explained. What it is not:**
+      the sprite stream is byte identical (35675 sprites, same producer breakdown, and every field
+      of all 301 sprites in frame 8 matches including corner colours), the menu draws no meshes at
+      all (SDF_ORDER q/b/n and SDF_OT_MAX=84 all score the same 17.774), the GS state matches
+      (every sprite ALPHA 0x44, TEST 0, otOffset 0 in both), and it is not the shot frame: pinned
+      to the same SDF_SHOT_FRAME both builds still split 11.9 against 17.5. **95.3% of pixels are
+      darker than master's, 2.4% identical, 2.3% brighter**, which is a whole-frame composite
+      difference rather than anything per draw. Start at the post pass, not at the sprite
+      pipeline, which is cleared.
+
+      **The old text of this entry said the cause was unknown between the sprite producers; that
+      was wrong and the measurements above replace it.** The two renders are
       visually indistinguishable, both draw exactly 35675 sprites with the same producer
       breakdown (cmpDrawTriG 18921, frCreateDrawFontPacket 8330, fclDrawSpriteCore 7735,
       cmpDrawBoxG 689), and the frame is uniformly about 8 levels darker across every channel.
