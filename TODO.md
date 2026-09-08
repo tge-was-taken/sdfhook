@@ -2309,24 +2309,25 @@ right.
       - `fldDrawFrameSprite` passed a hardcoded 0x80 where the engine feeds the previous frame back
         at 48, painting it opaquely over the field. 202.604 to 5.283.
 
-      **The menu is 17.774 against master's 11.785 and is not explained. What it is not:**
-      the sprite stream is byte identical (35675 sprites, same producer breakdown, and every field
-      of all 301 sprites in frame 8 matches including corner colours), the menu draws no meshes at
-      all (SDF_ORDER q/b/n and SDF_OT_MAX=84 all score the same 17.774), the GS state matches
-      (every sprite ALPHA 0x44, TEST 0, otOffset 0 in both), and it is not the shot frame: pinned
-      to the same SDF_SHOT_FRAME both builds still split 11.9 against 17.5. **95.3% of pixels are
-      darker than master's, 2.4% identical, 2.3% brighter**, which is a whole-frame composite
-      difference rather than anything per draw. Start at the post pass, not at the sprite
-      pipeline, which is cleared.
+      **The menu is 17.774 against master's 11.785 and I did not find the cause.** What it is
+      not, each measured rather than argued:
 
-      **The old text of this entry said the cause was unknown between the sprite producers; that
-      was wrong and the measurements above replace it.** The two renders are
-      visually indistinguishable, both draw exactly 35675 sprites with the same producer
-      breakdown (cmpDrawTriG 18921, frCreateDrawFontPacket 8330, fclDrawSpriteCore 7735,
-      cmpDrawBoxG 689), and the frame is uniformly about 8 levels darker across every channel.
-      Ruled out: draw ordering, the rsetAlpha mode table, `otOffset` on the cmp producers, and the
-      sprite set itself. A uniform deficit with an identical draw list points at blend state or at
-      the shot landing on a different frame.
+      - not the sprite stream: all 119 frames have byte identical sprite records between the two
+        builds, every field including corner colours and submission order,
+      - not the meshes: the menu draws none, and SDF_ORDER q/b/n and SDF_OT_MAX=84 all score the
+        same 17.774,
+      - not the composite, clear or post pass: with SDF_NO_SPRITES the two renders are bit
+        identical, 0.000 mean difference,
+      - not the textures: every texture SDF_DUMP_TEXTURES writes is byte identical,
+      - not the shot frame: pinned to the same SDF_SHOT_FRAME the two still split 11.9 to 17.5,
+      - not the feedback pass, the rsetAlpha table, otOffset or the GS state, all compared equal.
+
+      So identical sprites drawn over an identical background with identical textures produce
+      renders 9.318 apart, spread across the frame rather than concentrated. The remaining
+      suspects are the font sheet, which is fetched through getFontSheet and recovered from GS
+      asynchronously so its arrival could differ by a frame, and the sprite pass's own GL state.
+      **An earlier note here claimed a whole frame composite difference; SDF_NO_SPRITES disproves
+      that and it is withdrawn.**
 
       Battle is 0.58 over master, also unexplained, and likely the same cause.
 
