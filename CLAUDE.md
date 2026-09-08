@@ -227,6 +227,16 @@ it. **Skinning is on the GPU and a rigid body is the one-bone case**: the format
 own copy of a vertex's position and normal, already in that bone's space, so the shader sums
 transformed points and needs no bind pose. Measured cap: 4 bones a palette, 3 influences a vertex.
 
+**A helper that splits a guest function is invisible to `guestcheck`.** `walkChain` was
+`sdfModelLinkOt`'s inner loop as its own function, so the packet header reads and the type dispatch
+counted against `sdfModelLinkOt` with nothing to satisfy them. Merge such a split back, or the
+score lies by the size of the piece you moved out.
+
+**Citations and opt-outs are order-checked, and a block citation cites every address inside it.**
+So an opted-out call sitting inside a cited block reads as modelled and opted out at once: give
+that block its own `@optout` span alongside the call's point opt-out, rather than citing it. A
+span binds blocks only, never the calls or reads within.
+
 **The scene walk.** `ModelWalk` is `sdfModelLinkOt` walked again on our side, from the entry hook,
 over state the engine has not touched. `ModelLedger` checks that claim: `sdfCorePacketGen` and
 `sdfModelLinkShapedDrawPacket` have no caller but `sdfModelLinkOt`, so equal counts mean the

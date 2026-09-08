@@ -5,6 +5,13 @@ description: Reimplement a guest function from the SLUS-20911 disassembly comple
 
 # Reimplementing a guest function
 
+**Translate the function. Do not satisfy the checker.** `assets/SLUS-20911.pseudo.c` holds the
+decompiler's C for every function here; that is the source text and our version is the same function
+written in our terms. `scripts/guestcheck.py` is how the translation is audited afterwards, and a
+reader who works from its output instead of from the pseudocode writes code shaped like a checklist:
+a call whose result is dropped, a field named once and never used, a comment citing an address
+nobody read.
+
 A reimplementation that covers the branches that happened to fire is not a reimplementation, it is
 a guess that has not been caught yet. The cost is not a wrong pixel, it is a **claim in a comment**
 that stops the next reader looking: "both are inert at zero" was written about a field the engine
@@ -30,7 +37,16 @@ a two-color ramp. Inline `__asm` blocks hide `lqc2`/`sqc2` pairs that are the re
 **If the decompilation contains `cop2`, `__asm`, or an unnamed `unk_`, the disassembly is the
 source of truth for that region.**
 
-## 2. Extract the facts, do not enumerate by hand
+## 2. Write the translation from the pseudocode
+
+Read `assets/SLUS-20911.pseudo.c` for the function, then the disassembly for what the decompiler
+dropped, then write ours. **Mirror the guest's signature**: it takes what the guest takes, in the
+same order, so the same values are in scope for the same reasons. A convenient signature is how a
+function ends up unable to model its own inputs.
+
+Write the whole function before running any check.
+
+## 2a. Extract the facts, do not enumerate by hand
 
 The checklist is machine-derived, so it cannot be quietly narrowed. Add the function to `TARGETS`
 in `scripts/ida_facts.py` and run it in IDA; it rewrites `assets/SLUS-20911.facts` with one entry
@@ -53,7 +69,7 @@ scripts/guestcheck.py sdfModelTempPacketLinkOt
 open while it does, so a hang leaves the file empty. Regenerate it after any restart before
 trusting a score.
 
-## 2a. Account for every fact
+## 2b. Audit, once the translation stands
 
 `scripts/guestcheck.py` holds the reimplementation to the list. A fact is satisfied by the code
 itself wherever the tree already binds guest names to ours: the struct mirrors in `libsdf.h` resolve
@@ -99,7 +115,7 @@ drawing a box round a region silences the data it carries, which is how an opt-o
 material REF packet came to swallow the `matIndex` we do model. `elsewhere(<fn>)` is the exception,
 since it claims the reads are modelled in the function it names rather than skipped.
 
-## 2b. Read the score as two numbers
+## 2c. Read the score as two numbers
 
 `guestcheck.py` reports data facts and blocks apart, because a citation says the code was read and
 a data fact says the value was modelled, and one must never stand in for the other. `sdfModelLinkOt`
@@ -114,6 +130,27 @@ paperwork:
   missing mirror. There is no struct-level opt-out and there should not be one.
 - `unnamed in the database` means the IDB has `flt_54C1E8` where a name belongs. Name it, re-export,
   and it becomes a fact you can satisfy. See step 8.
+
+## 2d. What you may never do to make a check pass
+
+Each of these was found in this tree, and each has the same tell: making the check pass took no
+thought about what the function does.
+
+- **A call whose result you discard.** `xsdf2DGetPrimPacketSize(2);` next to a hardcoded size is a
+  call fact bought for one statement. Non-void shadows are `[[nodiscard]]` so the compiler says so.
+- **A citation you cannot explain.** The block list pasted into a comment accounts for every block
+  and says nothing about any of them.
+- **A field mention with no use.** Naming `aEnv->test2` satisfies a read fact; using its value is
+  the work.
+- **A description of something you have not identified.** `unk120` in our own mirror is not
+  "the chain it walks". Name the field in the database first, as with an unnamed global.
+- **An `elsewhere` you have not checked.** Five facts were deferred to `corePktApplyFaceDivColor`,
+  which reads none of them.
+
+**A failing check is a defect in the logic, never a missing annotation.** If the honest translation
+cannot model something yet, leave it unmodelled, let the check fail, and write the gap down. Red on
+a faithful partial transcription is worth more than green on a stub, because the stub reads as
+audited.
 
 ## 3. Casts and widths are load bearing
 
@@ -202,7 +239,11 @@ error: `dds3BillboardLinkOt` is at 0x0015B7C0, not the 0x0022E2E8 two of our com
 
 ## Done means
 
+- The function reads as a translation of its pseudocode: same parameters, same calls in the same
+  order, same loops, and a reader could recover the guest from it.
 - `scripts/guestcheck.py <fn>` reports every fact accounted for, and every opt-out names hardware.
+  Where it does not, the entry says which gaps are real and why they are still open. **An audit that
+  fails honestly is a finished piece of work; one that passes by construction is not.**
   A `reportUnsupported` is the alarm that a scene sets a field we skip; it does **not** discharge
   the fact, which stays failing until it is modelled.
 - `scripts/lint.sh`, `scripts/attrcheck.py` and `scripts/guestcheck.py` all print nothing to fix.
