@@ -1521,9 +1521,6 @@ void xsdfModelLinkOt(sdfModelOtPtr_t aOt, sdfModelRootNodePtr_t aRoot, Frame* fr
             // 0x2B2084 type 2, 0x2B2098 type 1, 0x2B20A8 type 3, each tested before any body.
             // 0x2B208C..0x2B2093, 0x2B20A0..0x2B20A7, 0x2B20B0..0x2B20B7, 0x2B20B8..0x2B20BF
             switch (header->type) {
-                case sdfPacketEnd:
-                    addr = 0;
-                    continue;
                 case sdfPacketDmaCall:
                     if (suppressLinked) {
                         gConvert->getTrace().countPacket(ModelTrace::Packet::Suppressed);

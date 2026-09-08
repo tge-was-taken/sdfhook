@@ -517,8 +517,9 @@ int fclDrawSpriteCoreHook(pcsx2hook_regs* regs, void* user) {
 int fldDrawFrameSpriteHook(pcsx2hook_regs*, void* user) {
     HookContext& h = *static_cast<HookContext*>(user);
 
+    // The plain entry feeds the previous frame back at a fixed 48, not at full alpha.
     SinkScope scope(h, "fldDrawFrameSprite");
-    xfldDrawFrameSprite(0x80);
+    xfldDrawFrameSprite(48);
     return PCSX2HOOK_CONTINUE;
 }
 

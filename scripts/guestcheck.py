@@ -49,14 +49,58 @@ def facts(path):
         b = BLK.match(line)
         if b and fn:
             lo, hi = int(b.group(2), 16), int(b.group(3), 16)
-            deep = int(b.group(4) or 0)
-            out[fn].append(("blk", lo, "0x%X..0x%X@%d" % (lo, hi, deep), list(range(lo, hi + 1))))
+            DEPTH[(fn, lo)] = int(b.group(4) or 0)
+            out[fn].append(("blk", lo, "0x%X..0x%X" % (lo, hi), list(range(lo, hi + 1))))
             continue
         m = FACT.match(line) or BRCH.match(line)
         if m and fn:
             extra = [int(a, 16) for a in m.group(4).split(",")] if m.lastindex > 3 and m.group(4) else []
             out[fn].append((m.group(1), int(m.group(2), 16), m.group(3), extra))
     return out, span
+
+
+LOOP = re.compile(r"^\s*(for|while|do)\b")
+
+# {(function, block start): loop nesting the guest runs it at}
+DEPTH = {}
+
+
+def citation_lines(text, lo, hi):
+    """[(line, every address it cites)], since a span covers blocks its first address does not."""
+    out = []
+    for i, line in enumerate(text.splitlines()):
+        if "//" not in line:
+            continue
+        seen = set()
+        comment = line[line.index("//"):]
+        for a, b in SPAN.findall(comment):
+            seen.update(range(int(a, 16), int(b, 16) + 1))
+        seen.update(int(a, 16) for a in ADDR.findall(SPAN.sub("", comment)))
+        inside = {a for a in seen if lo <= a <= hi}
+        if inside:
+            out.append((i, inside))
+    return out
+
+
+def loop_depth(text):
+    """Loop nesting per line of the body.
+
+    A block the guest runs inside two loops is transcribed inside two loops, or the citation is
+    parked somewhere that does not describe it: a comment at the top of a function accounts for a
+    loop body only in the sense that someone typed the address.
+    """
+    out, stack, depth = [], [], 0
+    for line in text.splitlines():
+        opening = LOOP.search(line) is not None
+        out.append(depth)
+        for ch in line:
+            if ch == "{":
+                stack.append(opening)
+                depth += opening
+                opening = False
+            elif ch == "}" and stack:
+                depth -= stack.pop()
+    return out
 
 
 def sequence(text, lo, hi):
@@ -416,6 +460,9 @@ def main(argv):
 
         done = {"blk": 0, "data": 0}
         need = {"blk": len(table[fn]) - len(data), "data": len(data)}
+        nest = loop_depth(text)
+        seq = sequence(text, *span[fn])
+        cites = citation_lines(text, *span[fn])
         for kind, at, target, extra in table[fn]:
             bucket = "blk" if kind == "blk" else "data"
             ok, shown = satisfied(kind, target, wide, field_map, global_map, {at} | set(extra),
@@ -435,6 +482,14 @@ def main(argv):
                         or (k[0] <= at <= k[1] and outs[k][0] == "elsewhere")]
             opt = outs[hits[0]] if hits else None
             used.update(hits)
+            deep = DEPTH.get((fn, at), 0)
+            if ok and kind == "blk" and deep:
+                where = max((nest[line] for line, seen in cites
+                             if line < len(nest) and seen & want), default=0)
+                if where < deep:
+                    print("  0x%07X blk   %-28s runs %d loops deep, cited at %d"
+                          % (at, target[:28], deep, where))
+                    bad += 1
             if ok and opt:
                 print("  0x%07X %-5s %-28s modelled as %s, and opted out" % (at, kind, target[:28], shown))
                 bad += 1
