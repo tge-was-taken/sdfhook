@@ -159,8 +159,51 @@ const char* classify(u32 aData, u32 aQwc, const char** aDetail) {
 
 }  // namespace
 
+/// One row per packet handed to a sdfDrawTagLink* entry point, which is the set that has to be
+/// identified exhaustively: a packet whose type is unknown cannot be processed without running the
+/// hardware that consumes it.
+void censusLinked(const std::vector<LinkedPacket>& aLinked, SymbolCache& aSymbols, u32 aFrame,
+                  const std::unordered_map<u32, const char*>& aTypes) {
+    static const char* const kLinkKind[] = {"packet", "ref", "call"};
+    for (const LinkedPacket& packet : aLinked) {
+        DmaTag tag{};
+        readDmaTag(packet.addr, tag);
+        const bool byRef = tag.id == sdfDmaTagRef || tag.id == sdfDmaTagRefs
+                           || tag.id == sdfDmaTagRefe;
+        const u32 data = byRef ? tag.addr : packet.addr + sdfQwordBytes;
+
+        const char* detail = "";
+        const char* kind = classify(data, tag.qwc, &detail);
+        u32 calls = 0, unpacks = 0, microcode = 0;
+        if (kind[0] == 'v') scanVif(data, tag.qwc, &calls, &unpacks, &microcode);
+
+        // A builder is handed the packet, its data, or an interior offset of either, so all three
+        // are tried and the census reports which one matched.
+        const char* builder = nullptr;
+        for (const u32 probe : {packet.addr, data, packet.addr + 16, data + 16}) {
+            const auto found = aTypes.find(probe);
+            if (found != aTypes.end()) { builder = found->second; break; }
+        }
+
+        log.dump(JsonObject()
+                     .addString("dump", "linked")
+                     .addUint("frame", aFrame)
+                     .addHexDigits("at", packet.addr, 8)
+                     .addString("link", kLinkKind[u8(packet.kind)])
+                     .addUint("dmaId", tag.id)
+                     .addUint("qwc", tag.qwc)
+                     .addString("kind", kind)
+                     .addString("detail", detail)
+                     .addString("by", aSymbols.getFunction(packet.caller))
+                     .addString("built", builder ? builder : "-")
+                     .addUint("mscal", calls)
+                     .take());
+    }
+}
+
 void censusChain(u32 aTag, const std::vector<LinkedPacket>& aLinked, SymbolCache& aSymbols,
-                 u32 aFrame) {
+                 u32 aFrame, const std::unordered_map<u32, const char*>& aTypes) {
+    censusLinked(aLinked, aSymbols, aFrame, aTypes);
     // Who linked each packet, so an entry the walk finds can still be named by the producer that
     // built it. A chain-walk renderer would not have this; the census uses it to say what it loses.
     std::unordered_map<u32, u32> byAddr;

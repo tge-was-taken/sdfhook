@@ -75,6 +75,7 @@ def main(argv):
     # A hook table name the map no longer carries installs nothing, and the only sign is a count
     # in the run log. Renaming a symbol in the IDB is what breaks it.
     stale = []
+    duplicate = []
     for path in files:
         if not path.endswith("hooks.cpp"):
             continue
@@ -82,9 +83,6 @@ def main(argv):
             m = re.search(r'\{"(\w+)",\s*&\w+', line)
             if m and m.group(1) not in syms:
                 stale.append((path, i + 1, m.group(1)))
-    for path, line, name in stale:
-        print("%s:%d: %s is hooked but not in the map" % (path, line, name))
-
     # Two entries for one address install only the second, which the run reports as an error and
     # is easy to miss in a log.
     for path in files:
@@ -96,16 +94,19 @@ def main(argv):
             if not m:
                 continue
             if m.group(1) in first:
-                stale.append((path, i + 1, "%s, already hooked at line %d"
-                              % (m.group(1), first[m.group(1)])))
+                duplicate.append((path, i + 1, m.group(1), first[m.group(1)]))
             else:
                 first[m.group(1)] = i + 1
 
+    for path, line, name in stale:
+        print("%s:%d: %s is hooked but not in the map" % (path, line, name))
+    for path, line, name, at in duplicate:
+        print("%s:%d: %s is hooked twice, first at line %d" % (path, line, name, at))
     for path, line, name, told, real in wrong:
         print("%s:%d: %s says %s, the map says %s" % (path, line, name, told, real))
     print("%d functions named for a guest symbol, %d unattributed, %d with a wrong address, "
-          "%d hook entries wrong" % (seen, len(bad), len(wrong), len(stale)))
-    return 1 if bad or wrong or stale else 0
+          "%d hook entries wrong" % (seen, len(bad), len(wrong), len(stale) + len(duplicate)))
+    return 1 if bad or wrong or stale or duplicate else 0
 
 
 if __name__ == "__main__":

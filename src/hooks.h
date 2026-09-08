@@ -216,6 +216,11 @@ struct HookContext {
     ModelHooks modelHooks{model};
     RenderState state;
     Coverage coverage;
+
+    /// What built each packet, recorded by the packet-type hooks. A packet whose type is unknown
+    /// cannot be processed without running the hardware that consumes it, so this is the set that
+    /// has to be exhaustive.
+    std::unordered_map<u32, const char*> packetTypes;
 };
 // o32: the first four arguments are in registers, the rest on the stack.
 

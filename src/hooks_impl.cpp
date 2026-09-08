@@ -161,7 +161,7 @@ void settleMeshState(HookContext& h, u32 aTag) {
 
 void censusFrame(HookContext& h, u32 aTag) {
     if (!h.config->dumpChainCensus) return;
-    censusChain(aTag, h.frames.getPackets(), h.symbols, h.trace->getFrame());
+    censusChain(aTag, h.frames.getPackets(), h.symbols, h.trace->getFrame(), h.packetTypes);
 }
 
 void collectPackets(HookContext& h) {

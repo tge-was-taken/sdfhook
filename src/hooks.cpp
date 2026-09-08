@@ -695,6 +695,20 @@ void observePost(pcsx2hook_regs* regs, void* user) {
     h.coverage.graph.recordReturn(h.symbols.getFunction(c.getPc()), c.getResult());
 }
 
+/// Records what built a packet, for the attribution census. Argument 0 is the packet in every
+/// builder measured; where it is an interior pointer the census says so rather than guessing.
+int packetTypeHook(pcsx2hook_regs* regs, void* user) {
+    Context c{regs};
+    HookContext& h = *static_cast<HookContext*>(user);
+
+    const u32 aPacket = c.getArg(0);
+
+    if (h.config->dumpChainCensus && aPacket) {
+        h.packetTypes[aPacket] = h.symbols.getFunction(c.getPc());
+    }
+    return PCSX2HOOK_CONTINUE;
+}
+
 int traceEntryHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
@@ -797,6 +811,18 @@ constexpr Entry kGameEntries[] = {
     // them costs 6.2 points on the menu. See TODO M2.
     {"cmpDrawBoxG", &traceEntryHook, nullptr},
     {"dds3DrawFade", &dds3DrawFadeHook, nullptr},
+    // The packet builders, recorded for the attribution census: every packet linked for transmit
+    // has to be identifiable, since an opaque one cannot be processed without the hardware.
+    {"sdf3DMakeLightParallelPacket", &packetTypeHook, nullptr},
+    {"sdf3DMakeFogPacket", &packetTypeHook, nullptr},
+    {"sdf3DMakeViewportPacket", &packetTypeHook, nullptr},
+    {"sdf3DMakeDirectRefPacket", &packetTypeHook, nullptr},
+    {"sdf3DPrimSetTmPacket", &packetTypeHook, nullptr},
+    {"sdfModelAllocTmPacket", &packetTypeHook, nullptr},
+    {"sdfModelSetTmRefPacket", &packetTypeHook, nullptr},
+    {"sdfMatMakePacket", &packetTypeHook, nullptr},
+    {"sdfGrSetFramePacket", &packetTypeHook, nullptr},
+    {"MakeLightPacket", &packetTypeHook, nullptr},
     {"dds3LinkZClearDrawTag", &dds3LinkZClearDrawTagHook, nullptr},
     {"aDrawBoxF", &aDrawBoxFHook, nullptr},
     {"aDrawBoxF_Direct", &aDrawBoxF_DirectHook, nullptr},
