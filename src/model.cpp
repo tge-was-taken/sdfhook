@@ -1298,6 +1298,9 @@ void ModelParser::sdf3DPrimMakePoly(sdf3DPolyPtr_t aPoly, Frame* frame) {
     frame->addMesh(std::move(mesh));
 }
 
+/// A flat triangle the field draws directly, with a colour per corner and no texture.
+/// @fn fldDrawPoly3
+/// @note SLUS-20911 0x0012A5E0
 void ModelParser::fldDrawPoly3(const sdfVector3_t point[3], const u32 color[3], Frame* frame) {
     if (!frame) return;
 
