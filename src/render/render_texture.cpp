@@ -56,10 +56,15 @@ void RenderTexture::bind() const {
     glViewport(0, 0, mWidth, mHeight);
 }
 
-void RenderTexture::blitToScreen() const {
+void RenderTexture::blitToScreen(int x, int y, int width, int height) const {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, mFramebuffer);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-    glBlitFramebuffer(0, 0, mWidth, mHeight, 0, 0, mWidth, mHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    // The letterbox is not overwritten by the blit, so it is painted before it.
+    glDisable(GL_SCISSOR_TEST);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glBlitFramebuffer(0, 0, mWidth, mHeight, x, y, x + width, y + height, GL_COLOR_BUFFER_BIT,
+                      GL_NEAREST);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 

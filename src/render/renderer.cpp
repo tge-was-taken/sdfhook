@@ -539,12 +539,38 @@ const Renderer::Texture* Renderer::findTexture(TexHandle handle) const {
     return found == mTextures.end() ? nullptr : &found->second;
 }
 
+void Renderer::screenRect(int* x, int* y, int* width, int* height) const {
+    const RenderTexture& target = mFrames[mCurrent];
+    const int screenWidth = mScreenWidth > 0 ? mScreenWidth : target.getWidth();
+    const int screenHeight = mScreenHeight > 0 ? mScreenHeight : target.getHeight();
+    const int scaled = std::min(screenWidth * target.getHeight(), screenHeight * target.getWidth());
+    *width = scaled / target.getHeight();
+    *height = scaled / target.getWidth();
+    *x = (screenWidth - *width) / 2;
+    *y = (screenHeight - *height) / 2;
+}
+
+void Renderer::mapToTarget(int x, int y, int* outX, int* outY) const {
+    int boxX = 0, boxY = 0, boxWidth = 0, boxHeight = 0;
+    screenRect(&boxX, &boxY, &boxWidth, &boxHeight);
+    const RenderTexture& target = mFrames[mCurrent];
+    // The blit flips vertically, so a window row counts from the bottom of the box.
+    *outX = boxWidth ? (x - boxX) * target.getWidth() / boxWidth : x;
+    *outY = boxHeight ? (y - boxY) * target.getHeight() / boxHeight : y;
+}
+
 void Renderer::present() {
-    mFrames[mCurrent].blitToScreen();
+    int x = 0, y = 0, width = 0, height = 0;
+    screenRect(&x, &y, &width, &height);
+    mFrames[mCurrent].blitToScreen(x, y, width, height);
     mCurrent ^= 1;
 }
 
-void Renderer::represent() { mFrames[mCurrent ^ 1].blitToScreen(); }
+void Renderer::represent() {
+    int x = 0, y = 0, width = 0, height = 0;
+    screenRect(&x, &y, &width, &height);
+    mFrames[mCurrent ^ 1].blitToScreen(x, y, width, height);
+}
 
 void Renderer::uploadTextures(const Frame& frame) {
     for (const TextureUpload& upload : frame.textureUploads) {

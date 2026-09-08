@@ -1154,6 +1154,10 @@ struct GsTex0 {
                 u32((reg >> 51) & 0xF),   u32((reg >> 56) & 0x1F)};
     }
 
+    /// The GS's own limits: TW and TH cap at 1024 and TBW is a buffer width in 64-texel units, so
+    /// a register outside them is not a texture and reading it walks off GS memory.
+    constexpr bool isReadable() const { return tbw != 0 && tw <= 10 && th <= 10; }
+
     constexpr bool isPaletted() const { return (psm & 0x13) == 0x13 || psm == 0x14 || psm == 0x24 || psm == 0x2C; }
     constexpr bool isFourBit() const { return psm == 0x14 || psm == 0x24 || psm == 0x2C; }
 };

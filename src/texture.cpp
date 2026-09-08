@@ -294,7 +294,7 @@ TexHandle TextureCache::getHandle(TexHandle wanted, Frame*) {
 }
 
 void TextureCache::wantFontSheet(u32 addr, u32 bufWidth, u32 width, u32 height) {
-    if (!mFontSheet.index.empty() || !addr || !width || !height) return;
+    if (!mFontSheet.index.empty() || !addr || !bufWidth || !width || !height) return;
     mWantedSheet = {addr, bufWidth, width, height};
 }
 
@@ -387,6 +387,11 @@ bool TextureCache::recoverTex0(TexHandle handle, u64 reg) {
     const GsTex0 tex0 = GsTex0::fromReg(reg);
     log.debug("recover {:08X} tbp0 {:#x} psm {:#x} cbp {:#x} cpsm {:#x} csa {}", handle.addr,
               tex0.tbp0, tex0.psm, tex0.cbp, tex0.cpsm, tex0.csa);
+    if (!tex0.isReadable()) {
+        note("TEX0 out of range", reg);
+        reportUnsupported("recover TEX0 out of range", u32(reg & 0xFFFFFFFFu));
+        return false;
+    }
     const u32 width = 1u << tex0.tw;
     const u32 height = 1u << tex0.th;
     note("read", reg);

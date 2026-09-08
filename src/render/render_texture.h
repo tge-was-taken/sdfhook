@@ -12,7 +12,9 @@ public:
 
     void bind() const;
 
-    void blitToScreen() const;
+    /// Scaled into the given rectangle of the default framebuffer, so a resized window shows the
+    /// whole picture rather than a corner of it.
+    void blitToScreen(int x, int y, int width, int height) const;
 
     u32 getTexture() const { return mTexture; }
 
