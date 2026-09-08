@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdio>
+#include <map>
 #include <string>
 
 #include "pcsx2hook/pcsx2hook.h"
@@ -13,7 +14,7 @@
 
 namespace sdfhook {
 
-// One JSONL record per event, in the order the game produced them.
+// One JSONL record per event, in the game's own order.
 class Trace {
 public:
     Trace(pcsx2hook_ctx* runtime, const std::string& path);
@@ -38,21 +39,24 @@ public:
     // Every packet the frame links, with the function that linked it and what its GIF tag draws.
     void onPacket(const LinkedPacket& packet, const char* by, const DmaTag& tag, u64 verts);
 
-    /// One decoded mesh, with the ranges that say whether the stream was read at the right stride.
-    /// The row is written once the frame's chain exists, so it names the frame the mesh was decoded
-    /// in rather than the one that happened to be current by then.
+    /// Carries the ranges that say whether the stream was read at the right stride. Written once
+    /// the frame's chain exists, so it names the frame the mesh decoded in, not the current one.
     void onMesh(const DrawMesh& mesh, const Matrix4& screenTm, u32 frame);
 
-    /// One 2D draw, carrying the same GS state fields a mesh does, so both sides of the frame can
-    /// be attributed against the GS trace rather than only the 3D half.
+    /// The same GS state fields a mesh carries, so 2D attributes against the GS trace too.
     void onSprite(const DrawSprite& sprite);
 
-    /// Everything the run covered, as its trace's last row, so two runs diff rather than being read.
+    /// The trace's last row, so two runs diff rather than being read.
     void onRunSummary(const std::string& row);
 
 private:
     void write(const std::string& row);
 
+    /// Written once and referenced by id, so a run carries the inputs beside the hardware's
+    /// answer without a per-mesh copy.
+    u32 litCase(const DrawMesh& mesh);
+
+    std::map<std::string, u32> mLitCases;
     pcsx2hook_ctx* mRuntime;
     std::FILE* mFile = nullptr;
     u32 mFrame = 0;

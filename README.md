@@ -39,6 +39,7 @@ SDF_BIOS=<bios.bin> SDF_TRACE=dumps/sdf_trace.jsonl SDF_FRAMES=400 \
 | `SDF_LOG` | log levels, one for everything (`trace`) or per channel (`model=trace,render=warn`) |
 | `SDF_DUMP_TEXTURES` | directory for decoded textures as PNG; GS-recovered ones are named `gs_*` |
 | `SDF_NO_GS_RECOVER` | stop reading textures back out of GS memory when the game registered none |
+| `SDF_DRAW_ONLY` | draw only matching meshes: comma separated `i=N`, `i=A-B`, `tbp=N`. Pairs with the emulator's `PCSX2HOOK_GS_ONLY`, which takes the same terms plus `prim=N`, so a frame can be cut to one draw on both sides and diffed without matching anything |
 
 The window never takes keyboard focus, which needs the X11 backend: a Wayland toplevel cannot refuse
 focus, so `SDL_WINDOW_NOT_FOCUSABLE` does nothing there. `x11,wayland` is set as a default only, so
@@ -67,14 +68,14 @@ root's nodes emit, and which of the four ordering tables the result lands in.
 |---|---|---|
 | `frame` | the run loop | a frame boundary |
 | `camera` | `sdf3DSetCamera` | the view the following draws use |
-| `modelLinkOt` | `sdfModelLinkOt` | a model root: flags, drawAttr, colour, node count, its four OTs |
+| `modelLinkOt` | `sdfModelLinkOt` | a model root: flags, drawAttr, color, node count, its four OTs |
 | `packetGen` | `sdfCorePacketGen` | the readable geometry path, kind 3 |
 | `shapedPacket` | `sdfModelLinkShapedDrawPacket` | the preprocessed path, kind 2 |
 | `otRegist` | `sdfSortOtAvlRegist` | a draw tag filed into an ordering table, with its z |
 | `reqDraw` | `sdfGrReqDraw` | a finished chain pushed into the three-slot ring |
 | `drawFrame` | `sdfGrDrawFrame` | the DMA kick |
 | `matSet`, `texSet`, `clear` | the state entry points | material, texture and clear changes |
-| `sprite` | `sdf2DAllocSprite`, read back at submit | one decoded 2D sprite: rect, UVs, colour |
+| `sprite` | `sdf2DAllocSprite`, read back at submit | one decoded 2D sprite: rect, UVs, color |
 
 ## Rendering
 

@@ -11,11 +11,8 @@ namespace sdfhook {
 
 enum class LogLevel { Trace, Debug, Info, Warn, Error, Off };
 
-/// One subsystem's output, named so SDF_LOG can set its level on its own.
-///
-/// Declare one per translation unit (`LogChannel log("model");`) and never tag a message by hand:
-/// a literal "[model]" in a format string is invisible to the level filter and drifts from the file
-/// it is in.
+/// One subsystem's output, named so SDF_LOG can set its level on its own. Declare one per
+/// translation unit; a hand-written "[model]" tag is invisible to the level filter.
 class LogChannel {
 public:
     explicit LogChannel(std::string name);

@@ -17,6 +17,11 @@ u32 number(const char* name, u32 fallback) {
     return value && *value ? u32(std::strtoul(value, nullptr, 10)) : fallback;
 }
 
+f32 real(const char* name, f32 fallback) {
+    const char* value = std::getenv(name);
+    return value && *value ? std::strtof(value, nullptr) : fallback;
+}
+
 }  // namespace
 
 Config Config::fromEnvironment() {
@@ -50,6 +55,11 @@ Config Config::fromEnvironment() {
     config.describeFrame = flag("SDF_DESCRIBE");
     config.debugDepth = flag("SDF_DEBUG_DEPTH");
     config.debugNormal = flag("SDF_DEBUG_NORMAL");
+    config.drawPrimPoly = !flag("SDF_NO_PRIM_POLY");
+    config.faceDivSoften = real("SDF_FACEDIV_SOFTEN", 7.0f);
+    config.faceDivBias = real("SDF_FACEDIV_BIAS", 0.0f);
+    config.pixelOffsetX = real("SDF_PIXEL_OFFSET_X", 0.5f);
+    config.pixelOffsetY = real("SDF_PIXEL_OFFSET_Y", 0.5f);
 
     // SDF_MESH_ONLY names one mesh; SDF_MESH_UPTO names a prefix.
     if (const char* only = std::getenv("SDF_MESH_ONLY")) {
@@ -61,10 +71,13 @@ Config Config::fromEnvironment() {
 
     config.otMax = number("SDF_OT_MAX", 3);
     config.noSprites = flag("SDF_NO_SPRITES");
+    config.drawOnly = text("SDF_DRAW_ONLY");
     config.noFeedback = flag("SDF_NO_FEEDBACK");
     config.noFog = flag("SDF_NO_FOG");
     config.noSpecular = flag("SDF_NO_SPECULAR");
+    config.drawSpecularOverlay = flag("SDF_DRAW_SPECULAR_OVERLAY");
     config.drawDirectBox = flag("SDF_DRAW_DIRECT_BOX");
+    config.drawShadows = flag("SDF_DRAW_SHADOWS");
     config.noBillboards = flag("SDF_NO_BILLBOARDS");
     config.poly = flag("SDF_POLY");
     config.noTransmitState = flag("SDF_NO_TRANSMIT_STATE");

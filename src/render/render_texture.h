@@ -4,17 +4,14 @@
 
 namespace sdfhook {
 
-/// A colour target the renderer draws into and can then sample, with the depth the 3D pass needs.
-/// The frame feedback needs one, as will anything else the engine keeps in GS memory and reads back.
+/// Sampleable, for the frame feedback and anything else the engine reads back out of GS memory.
 class RenderTexture {
 public:
     bool create(int width, int height);
     void destroy();
 
-    /// Makes this the target of subsequent drawing, with the viewport to match.
     void bind() const;
 
-    /// Copies it to the default framebuffer.
     void blitToScreen() const;
 
     u32 getTexture() const { return mTexture; }

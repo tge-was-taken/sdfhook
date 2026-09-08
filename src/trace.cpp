@@ -1,14 +1,55 @@
 #include "trace.h"
 #include "log.h"
 
+#include <algorithm>
+#include <cmath>
 #include <format>
 
 #include "json.h"
+#include "render/shading_cpu.h"
 
 namespace sdfhook {
 namespace {
 
 LogChannel log("trace");
+
+/// The color the mesh shaders give one vertex, in the GS's 0..255 units, to diff against the
+/// post-VU `rgbaq`. The sum is shading.inc, the same text the GPU runs, so it cannot drift.
+void predictLit(const DrawMesh& mesh, const MeshVertex& vertex, f32 out[3]) {
+    using shading::vec3;
+
+    f32 n[3] = {};
+    for (const MeshInfluence& influence : vertex.influence) {
+        if (influence.weight == 0.0f) continue;
+        const Matrix4& bone = mesh.bones[usize(influence.bone) % mesh.bones.size()];
+        for (int axis = 0; axis < 3; axis++) {
+            n[axis] += influence.weight * (influence.nx * bone.m[0][axis] +
+                                           influence.ny * bone.m[1][axis] +
+                                           influence.nz * bone.m[2][axis]);
+        }
+    }
+    const f32 length = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+    const f32 scale = length > 1e-6f ? 1.0f / length : 0.0f;
+
+    // gsRgb: the shader is handed colors over 128, and the vertex color over 255 like any
+    // normalised attribute. Mixing the two is what a hand-written copy of this got wrong.
+    const auto gsRgb = [](Rgba c) {
+        return vec3{c.r / sdfGsUnit, c.g / sdfGsUnit, c.b / sdfGsUnit};
+    };
+    const vec3 lit = shading::sdfMeshLit(
+        vec3{n[0] * scale, n[1] * scale, n[2] * scale}, mesh.lit, gsRgb(mesh.ambient),
+        gsRgb(mesh.diffuse), gsRgb(mesh.color), vec3{mesh.lighting.ambientColor},
+        vec3{mesh.lighting.base}, vec3{mesh.lighting.fullColor}, vec3{mesh.lighting.direction[0]},
+        vec3{mesh.lighting.direction[1]}, vec3{mesh.lighting.direction[2]},
+        vec3{mesh.lighting.color[1]}, vec3{mesh.lighting.color[2]}, mesh.flatten,
+        mesh.faceDivSoften, mesh.faceDivBias, mesh.streamColors);
+
+    const f32 vertexColor[3] = {f32(vertex.color.r) / 255.0f, f32(vertex.color.g) / 255.0f,
+                                 f32(vertex.color.b) / 255.0f};
+    for (int c = 0; c < 3; c++) {
+        out[c] = std::min(vertexColor[c] * 2.0f * lit[c] * sdfGsUnit, 255.0f);
+    }
+}
 
 }  // namespace
 
@@ -21,6 +62,66 @@ Trace::Trace(pcsx2hook_ctx* runtime, const std::string& path) : mRuntime(runtime
 
 Trace::~Trace() {
     if (mFile) std::fclose(mFile);
+}
+
+/// The inputs sdfMeshLit is given, keyed by their bytes so meshes that shade alike share one row.
+u32 Trace::litCase(const DrawMesh& mesh) {
+    struct Key {
+        f32 lighting[8][3];
+        u8 rgb[4][3];
+        f32 soften;
+        f32 bias;
+        u32 lit;
+    } key{};
+    for (int i = 0; i < 3; i++) {
+        for (int c = 0; c < 3; c++) {
+            key.lighting[i][c] = mesh.lighting.direction[i][c];
+            key.lighting[3 + i][c] = mesh.lighting.color[i][c];
+        }
+        key.lighting[6][i] = mesh.lighting.base[i];
+        key.lighting[7][i] = mesh.lighting.specularAxis[i];
+    }
+    const Rgba colors[4] = {mesh.ambient, mesh.diffuse, mesh.color, mesh.specular};
+    for (int i = 0; i < 4; i++) {
+        key.rgb[i][0] = colors[i].r;
+        key.rgb[i][1] = colors[i].g;
+        key.rgb[i][2] = colors[i].b;
+    }
+    key.soften = mesh.faceDivSoften;
+    key.bias = mesh.faceDivBias;
+    key.lit = mesh.lit ? 1u : 0u;
+
+    const std::string bytes(reinterpret_cast<const char*>(&key), sizeof(key));
+    const auto known = mLitCases.find(bytes);
+    if (known != mLitCases.end()) return known->second;
+
+    const u32 id = u32(mLitCases.size());
+    mLitCases.emplace(bytes, id);
+
+    JsonObject row;
+    row.addString("ev", "litcase").addUint("id", id).addUint("lit", key.lit);
+    const auto rgb = [&row](const char* name, Rgba c) {
+        row.addReals(name, {c.r / sdfGsUnit, c.g / sdfGsUnit, c.b / sdfGsUnit}, 6);
+    };
+    rgb("ambient", mesh.ambient);
+    rgb("diffuse", mesh.diffuse);
+    rgb("draw", mesh.color);
+    rgb("specular", mesh.specular);
+    const auto vec = [&row](const char* name, const f32 v[3]) {
+        row.addReals(name, {v[0], v[1], v[2]}, 6);
+    };
+    vec("lightAmbient", mesh.lighting.ambientColor);
+    vec("lightBase", mesh.lighting.base);
+    vec("lightFull", mesh.lighting.fullColor);
+    vec("dir0", mesh.lighting.direction[0]);
+    vec("dir1", mesh.lighting.direction[1]);
+    vec("dir2", mesh.lighting.direction[2]);
+    vec("color1", mesh.lighting.color[1]);
+    vec("color2", mesh.lighting.color[2]);
+    vec("specularAxis", mesh.lighting.specularAxis);
+    row.addReal("soften", mesh.faceDivSoften).addReal("bias", mesh.faceDivBias);
+    write(row.take());
+    return id;
 }
 
 void Trace::onRunSummary(const std::string& row) { write(row); }
@@ -67,7 +168,7 @@ void Trace::onSdfModelLinkOt(u32 otAddr, u32 rootAddr) {
         .addHexDigits("ot", otAddr, 8)
         .addHexDigits("root", rootAddr, 8);
     if (ok) {
-        // flags 0x08 suppresses the shaped and DMA paths, and a negative colour flips the
+        // flags 0x08 suppresses the shaped and DMA paths, and a negative color flips the
         // default ordering table.
         row.addUint("flags", u64(root.flags))
             .addUint("drawAttr", u64(root.drawAttr))
@@ -194,6 +295,10 @@ void Trace::onMesh(const DrawMesh& mesh, const Matrix4& screenTm, u32 frame) {
     f32 clipHi = 0.0f;
     f32 ndcLo[2] = {};
     f32 ndcHi[2] = {};
+    // The mean projected position, which pairs a batch to its own mesh where a bounding box cannot:
+    // several meshes of one model overlap, and the box match then picks whichever comes first.
+    double ndcSum[2] = {};
+    u32 ndcCount = 0;
     bool anyWeight = false;
     bool anyOnScreen = false;
     for (const MeshVertex& vertex : mesh.vertices) {
@@ -221,8 +326,23 @@ void Trace::onMesh(const DrawMesh& mesh, const Matrix4& screenTm, u32 frame) {
             for (int i = 0; i < 2; i++) {
                 ndcLo[i] = !anyOnScreen || ndc[i] < ndcLo[i] ? ndc[i] : ndcLo[i];
                 ndcHi[i] = !anyOnScreen || ndc[i] > ndcHi[i] ? ndc[i] : ndcHi[i];
+                ndcSum[i] += ndc[i];
             }
+            ndcCount++;
             anyOnScreen = true;
+        }
+    }
+
+    // The color range our shaders give this mesh, against which the GS trace's own post-VU rgbaq
+    // per batch is the answer key.
+    f32 litLo[3] = {};
+    f32 litHi[3] = {};
+    for (usize v = 0; v < mesh.vertices.size(); v++) {
+        f32 lit[3];
+        predictLit(mesh, mesh.vertices[v], lit);
+        for (int c = 0; c < 3; c++) {
+            litLo[c] = v == 0 || lit[c] < litLo[c] ? lit[c] : litLo[c];
+            litHi[c] = v == 0 || lit[c] > litHi[c] ? lit[c] : litHi[c];
         }
     }
 
@@ -244,6 +364,9 @@ void Trace::onMesh(const DrawMesh& mesh, const Matrix4& screenTm, u32 frame) {
               // first reports it as never sampled.
               .addUint("mtex", mesh.multi.on ? 1u : 0u)
               .addUint("mtbp", u64(sdfDecodeTex0(mesh.multi.tex0).tbp))
+              // The second pass carries its own blend, so a row with only the first pass's ALPHA
+              // cannot say whether it matches the hardware.
+              .addHexDigits("malpha", mesh.multi.alpha, 2)
               .addReal("x0", lo[0]).addReal("y0", lo[1]).addReal("z0", lo[2])
               .addReal("x1", hi[0]).addReal("y1", hi[1]).addReal("z1", hi[2])
               .addReal("u0", uvLo[0]).addReal("v0", uvLo[1])
@@ -258,12 +381,30 @@ void Trace::onMesh(const DrawMesh& mesh, const Matrix4& screenTm, u32 frame) {
                             u64(mesh.ambient.r) | (u64(mesh.ambient.g) << 8) |
                                 (u64(mesh.ambient.b) << 16) | (u64(mesh.ambient.a) << 24),
                             8)
+              // The draw color the node or root gave this mesh. Its alpha is half of what VU1
+              // multiplies into the vertex alpha, so a row without it cannot be checked against
+              // the GS's own per-batch alpha.
+              .addHexDigits("drawColor",
+                            u64(mesh.color.r) | (u64(mesh.color.g) << 8) |
+                                (u64(mesh.color.b) << 16) | (u64(mesh.color.a) << 24),
+                            8)
+              // Which association gave this mesh its GS state: a chain address for world geometry,
+              // else position among the generated links. A wrong table lands on one or the other.
+              .addHexDigits("link", mesh.linkAddr, 8)
+              .addUint("linkIndex", u64(mesh.linkIndex))
+              .addBool("linked", mesh.linked)
+              .addBool("streamColors", mesh.streamColors)
+              .addUint("litcase", u64(litCase(mesh)))
+              .addReals("litLo", {litLo[0], litLo[1], litLo[2]}, 4)
+              .addReals("litHi", {litHi[0], litHi[1], litHi[2]}, 4)
               .addUint("ot", mesh.otIndex)
               .addReal("sortZ", mesh.sortZ)
               .addReal("w0", clipLo)
               .addReal("w1", clipHi)
               .addBool("onScreen", anyOnScreen)
               .addReals("ndc", {ndcLo[0], ndcLo[1], ndcHi[0], ndcHi[1]}, 4)
+              .addReals("ndcMid", {ndcCount ? ndcSum[0] / ndcCount : 0.0,
+                                   ndcCount ? ndcSum[1] / ndcCount : 0.0}, 4)
               .take());
 }
 

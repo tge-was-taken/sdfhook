@@ -56,9 +56,37 @@ constexpr PadBinding kPadBindings[] = {
 
 }  // namespace
 
+// What a picked mesh is, so a shape found by eye can be looked up in a trace.
+void RenderThread::describeMesh(const Frame& frame, int index) {
+    if (index < 0 || usize(index) >= frame.meshes.size()) {
+        log.info("mesh highlight off");
+        return;
+    }
+    const DrawMesh& mesh = frame.meshes[usize(index)];
+    log.info("mesh {} of {}: type {} attr {:04X} packet {:04X} tbp {} verts {} tris {} bones {} "
+             "ot {} lit {} streamColors {} mtex {}",
+             index, frame.meshes.size(), mesh.packetType, mesh.attrBits, mesh.packetBits,
+             sdfDecodeTex0(mesh.tex0).tbp, mesh.vertices.size(), mesh.indices.size() / 3,
+             mesh.bones.size(), mesh.otIndex, mesh.lit, mesh.streamColors, mesh.multi.on);
+}
+
 void RenderThread::onKey(u32 scancode, bool pressed) {
     // The capture runs on the CPU thread, where the savestate and the frame buffer are safe to
     // take, so the key only raises the request.
+    if (pressed && SDL_Scancode(scancode) == SDL_SCANCODE_LEFTBRACKET) {
+        mHighlightStep.store(-1, std::memory_order_release);
+        return;
+    }
+    if (pressed && SDL_Scancode(scancode) == SDL_SCANCODE_RIGHTBRACKET) {
+        mHighlightStep.store(1, std::memory_order_release);
+        return;
+    }
+    if (pressed && SDL_Scancode(scancode) == SDL_SCANCODE_BACKSLASH) {
+        mHighlight.store(-1, std::memory_order_relaxed);
+        mRenderer.setHighlight(-1);
+        log.info("mesh highlight off");
+        return;
+    }
     if (pressed && SDL_Scancode(scancode) == SDL_SCANCODE_F9) {
         mCaptureWanted.store(true, std::memory_order_release);
         return;
@@ -89,11 +117,8 @@ void RenderThread::close() {
 }
 
 void RenderThread::run(int width, int height) {
-    // Before SDL_Init, since the driver choice is read there. The window is for watching a run, not
-    // driving one, so it must never take the keyboard away from the terminal that started it.
-    //
-    // X11 because a Wayland toplevel cannot refuse focus at all. A list, so a host without X11 still
-    // comes up, and at DEFAULT priority so SDL_VIDEO_DRIVER in the environment still wins.
+    // Before SDL_Init, which reads the driver choice. X11 because a Wayland toplevel cannot refuse
+    // focus at all; a list so a host without X11 still comes up, at DEFAULT so the environment wins.
     SDL_SetHintWithPriority(SDL_HINT_VIDEO_DRIVER, "x11,wayland", SDL_HINT_DEFAULT);
     SDL_SetHint(SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0");
     SDL_SetHint(SDL_HINT_WINDOW_ACTIVATE_WHEN_RAISED, "0");
@@ -109,11 +134,8 @@ void RenderThread::run(int width, int height) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
 
-    // Created hidden and only shown on request: an automated run needs the GL context, not a
-    // window, and mapping one takes the keyboard from the terminal that started it. UTILITY on top
-    // of that, because under WSLg WM_HINTS input=False is set correctly and ignored.
-    // Shown means driven, so it takes focus and the keyboard like any other window. Hidden runs
-    // keep the flags that stop it stealing focus from the terminal that started them.
+    // Hidden unless asked for: an automated run needs the GL context, not a window, and mapping
+    // one takes the keyboard from the terminal. Shown means driven, so it takes focus normally.
     const SDL_WindowFlags interactive = mConfig->window
         ? SDL_WindowFlags(0)
         : SDL_WINDOW_NOT_FOCUSABLE | SDL_WINDOW_UTILITY;
@@ -165,6 +187,32 @@ void RenderThread::run(int width, int height) {
                 !event.key.repeat) {
                 onKey(event.key.scancode, event.type == SDL_EVENT_KEY_DOWN);
             }
+            if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+                // The window is scaled independently of the render target, so the click is mapped
+                // into target pixels rather than taken as it comes.
+                int ww = 0, wh = 0;
+                SDL_GetWindowSize(window, &ww, &wh);
+                const f32 sx = ww ? f32(width) / f32(ww) : 1.0f;
+                const f32 sy = wh ? f32(height) / f32(wh) : 1.0f;
+                mPickX.store(int(event.button.x * sx), std::memory_order_relaxed);
+                mPickY.store(int(event.button.y * sy), std::memory_order_relaxed);
+                mPickWanted.store(true, std::memory_order_release);
+            }
+        }
+        if (const int step = mHighlightStep.exchange(0, std::memory_order_acq_rel); step && held) {
+            const int count = int(held->meshes.size());
+            int pick = mHighlight.load(std::memory_order_relaxed);
+            pick = count ? (pick + step + count + 1) % (count + 1) - 1 : -1;
+            mHighlight.store(pick, std::memory_order_relaxed);
+            mRenderer.setHighlight(pick);
+            describeMesh(*held, pick);
+        }
+        if (mPickWanted.exchange(false, std::memory_order_acq_rel) && held) {
+            const int pick = mRenderer.pickMesh(*held, mPickX.load(std::memory_order_relaxed),
+                                                mPickY.load(std::memory_order_relaxed));
+            mHighlight.store(pick, std::memory_order_relaxed);
+            mRenderer.setHighlight(pick);
+            describeMesh(*held, pick);
         }
         const Frame* next = mFrames.takePending();
         if (next) {

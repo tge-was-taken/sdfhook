@@ -1,5 +1,8 @@
 #include "gif.h"
 
+#include <algorithm>
+#include <vector>
+
 #include <cstring>
 
 #include "unsupported.h"
@@ -28,9 +31,19 @@ public:
         if (value == mTex0) return;
         close();
         mTex0 = value;
+        const u32 tbp = sdfDecodeTex0(value).tbp;
+        if (std::find(mTbps.begin(), mTbps.end(), tbp) == mTbps.end()) mTbps.push_back(tbp);
     }
 
+    const std::vector<u32>& getTbps() const { return mTbps; }
+    void clearTbps() { mTbps.clear(); }
+
     void rgbaq(const sdfGifRgbaq_t&) {}
+
+private:
+    std::vector<u32> mTbps;
+
+public:
     void uv(const sdfGifUv_t&) {}
 
     void position(const sdfGifXyz2_t& xyz) {
@@ -168,8 +181,11 @@ GifParser::GifParser(GifCounts* counts) : mState(std::make_unique<State>(counts)
 
 GifParser::~GifParser() = default;
 
+const std::vector<u32>& GifParser::getParsedTbps() const { return mState->walk.getTbps(); }
+
 void GifParser::parse(u32 packetAddr) {
     GeometryWalk& walk = mState->walk;
+    walk.clearTbps();
     GifCounts& counts = *mState->counts;
     DmaTag tag{};
     if (!readDmaTag(packetAddr, tag) || !tag.qwc) return;

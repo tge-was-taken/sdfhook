@@ -1,6 +1,12 @@
 find_package(SDL3 3.2.6 REQUIRED)   # the same package the emulator uses
 find_package(PNG REQUIRED)          # texture dumps
 
+# The lighting is one text compiled twice: as GLSL here and as C++ by shading_cpu.h, so a CPU check
+# cannot drift from the shader it checks.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/render/shading.inc" SDF_SHADING_SOURCE)
+configure_file(render/shading_glsl.h.in "${CMAKE_CURRENT_BINARY_DIR}/shading_glsl.h" @ONLY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS render/shading.inc)
+
 add_executable(sdfhook
 	main.cpp
 	render/frame.cpp
@@ -22,6 +28,7 @@ add_executable(sdfhook
 
 target_include_directories(sdfhook PRIVATE
 	"${CMAKE_CURRENT_SOURCE_DIR}"
+	"${CMAKE_CURRENT_BINARY_DIR}"
 	"${PCSX2HOOK_TREE}/pcsx2-hook/include"
 	"${CMAKE_SOURCE_DIR}/thirdparty/glad/include")
 

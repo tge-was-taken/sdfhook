@@ -9,12 +9,8 @@
 
 namespace sdfhook {
 
-/// One JSON object per row, built straight into a string rather than as a document: a row is
-/// written per mesh and per packet, so nothing here allocates a tree.
-///
-/// Naming each field beside its value is the point. The printf this replaces carried sixty
-/// specifiers and seventy positional arguments, where one insertion silently shifts every field
-/// after it into the wrong column.
+/// One JSON object per row, built straight into a string: a row is written per mesh and per
+/// packet, so nothing here allocates a tree. Each field is named beside its value.
 class JsonObject {
 public:
     JsonObject() { mText = "{"; }
@@ -34,9 +30,9 @@ public:
 
     /// Rounded rather than written at full precision: these read as measurements, and a reader
     /// diffing two traces should not see a difference that is only float noise.
-    JsonObject& addReal(const char* key, double value, int decimals = 6) {
+    JsonObject& addReal(const char* key, double value, int digits = 6) {
         key_(key);
-        mText += real(value, decimals);
+        mText += real(value, digits);
         return *this;
     }
 
@@ -64,9 +60,10 @@ public:
     }
 
 
-    JsonObject& addReals(const char* key, std::initializer_list<double> values, int decimals = 6) {
+    /// `digits` is significant digits, not decimal places: %g, so 1 renders 255 as 3e+02.
+    JsonObject& addReals(const char* key, std::initializer_list<double> values, int digits = 6) {
         beginArray(key);
-        for (double v : values) pushReal(v, decimals);
+        for (double v : values) pushReal(v, digits);
         return endArray();
     }
 
@@ -106,9 +103,9 @@ public:
     }
 
 
-    JsonObject& pushReal(double value, int decimals = 6) {
+    JsonObject& pushReal(double value, int digits = 6) {
         comma();
-        mText += real(value, decimals);
+        mText += real(value, digits);
         return *this;
     }
 
@@ -169,9 +166,9 @@ private:
         return buf;
     }
 
-    static std::string real(double value, int decimals) {
+    static std::string real(double value, int digits) {
         char buf[64];
-        std::snprintf(buf, sizeof(buf), "%.*g", decimals, value);
+        std::snprintf(buf, sizeof(buf), "%.*g", digits, value);
         return buf;
     }
 

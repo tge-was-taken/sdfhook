@@ -245,7 +245,7 @@ SDF_STATIC_ASSERT_OFFSETOF(sdfModelPacketHeader_t, memHandle, 0x0C);
 /// What sdfModelLinkOt reads out of a node's flags. Either hidden bit suppresses the node.
 enum sdfModelNodeFlag_t : u16 {
     sdfModelNodeHidden = 0x11,
-    sdfModelNodeOwnColour = 0x02,
+    sdfModelNodeOwnColor = 0x02,
 };
 
 struct sdfModelNode_t {
@@ -305,6 +305,10 @@ struct sdfModelTempPacket_t {
     sdfVoidPtr_t dataPtr;
 };
 SDF_STATIC_ASSERT_SIZE(sdfModelTempPacket_t, 12);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelTempPacket_t, type, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelTempPacket_t, qwc, 0x04);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelTempPacket_t, matIndex, 0x06);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelTempPacket_t, dataPtr, 0x08);
 using sdfModelTempPacketPtr_t = guest_ptr<sdfModelTempPacket_t>;
 
 /// One blend target's stream, as sdfModelLinkShapedDrawPacket chains them.
@@ -535,13 +539,32 @@ struct sdfBillBoardQuad_t {
     sdfVector2_t corner[4];
 };
 
-/// One batch of camera-facing quads, filled a quad at a time by dds3BillboardTagLink and handed to
-/// sdfBillBoardMakeN when it is full. The arrays are one allocation, which is why that call takes
-/// four pointers 240, 300 and 540 bytes apart.
+using sdfSprite3DPtr_t = guest_ptr<struct sdfSprite3D_t>;
+
+/// One camera-facing quad with its orientation, which sdfBillBoardMake1 never sees: drawSprite3D
+/// feeds the rotation to SetRotateMatrixZ and only the centre, uvs and offsets go on.
+/// @fn drawSprite3D
+/// @note SLUS-20911 0x0012A2D0
+struct sdfSprite3D_t {
+    sdfVector3_t centre;
+    f32 pad;
+    sdfBillBoardUv_t uv;
+    sdfBillBoardQuad_t offset;
+    u32 color;
+    f32 rotation;
+};
+SDF_STATIC_ASSERT_SIZE(sdfSprite3D_t, 0x48);
+SDF_STATIC_ASSERT_OFFSETOF(sdfSprite3D_t, uv, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfSprite3D_t, offset, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdfSprite3D_t, color, 0x40);
+SDF_STATIC_ASSERT_OFFSETOF(sdfSprite3D_t, rotation, 0x44);
+
+/// One batch of camera-facing quads, filled a quad at a time by dds3BillboardTagLink. The arrays
+/// are one allocation, which is why sdfBillBoardMakeN takes four pointers into it.
 /// @note SLUS-20911, filled at 0x0015B320
 struct sdfBillBoardBatch_t {
     sdfVector4_t centre[15];
-    u32 colour[15];
+    u32 color[15];
     sdfBillBoardUv_t uv[15];
     sdfBillBoardQuad_t offset[15];
     s32 count;
@@ -549,13 +572,57 @@ struct sdfBillBoardBatch_t {
 
 SDF_STATIC_ASSERT_SIZE(sdfBillBoardBatch_t, 1024);
 
+using sdf3DPolyPtr_t = guest_ptr<struct sdf3DPoly_t>;
+
+/// A polygon as its counts, PRIM word and one array per attribute, which is what the packet it
+/// builds is derived from rather than read back.
+/// @fn sdf3DPrimMakePoly
+/// @note SLUS-20911 0x002BAAB8
+struct sdf3DPoly_t {
+    s16 extraQwords;
+    s16 vertexCount;
+
+    /// The GS PRIM word, or'd with 0x68, and gaining 0x10 for UVs, 0x1000 for a second UV set and
+    /// 0x800 for colors as each array below turns out non-null.
+    u16 prim;
+    u16 mask;
+
+    /// Measured 0x8080F080 and 0x408080F0, so a packed color rather than the pointer the packet
+    /// write at +20 suggested.
+    u32 colorWord;
+
+    /// Both hold guest pointers on every call measured, where the arrays below are null, so this
+    /// is where the 96-stride default path keeps its data. Which is which is not yet established.
+    u32 unk0C;
+    u32 unk10;
+
+    /// Non-null takes the per-vertex stride from 96 to 224 and the base PRIM from 18 to 19. Null on
+    /// every call measured on the field scenes, so the extended mode is not what fldSdwDraw uses.
+    sdfVector3Ptr_t position;
+    sdfVector2Ptr_t uv;
+    sdfVector2Ptr_t uv2;
+    guest_ptr<u32> color;
+
+    /// Called instead of sdfGrAllocPacketBuff when it is set.
+    u32 allocator;
+    f32 depth;
+};
+SDF_STATIC_ASSERT_SIZE(sdf3DPoly_t, 0x2C);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPoly_t, position, 0x14);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPoly_t, color, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPoly_t, depth, 0x28);
+
 enum sdfCoreAttrBit_t : u16 {
     sdfCoreAttrRefMapPass = 0x0001,
+
+    /// A second textured pass through sdf3DSpecularTex, a texture handle where sdf3DRefMapParam
+    /// holds a raw TEX0. Drawn in GS context 2, writing color and never depth. See TODO V7.
+    sdfCoreAttrSpecularPass = 0x0002,
     sdfCoreAttrGouraud = 0x0008,
     sdfCoreAttrTextured = 0x0010,
     sdfCoreAttrFog = 0x0020,
     sdfCoreAttrBlend = 0x0040,
-    sdfCoreAttrColour = 0x0800,
+    sdfCoreAttrColor = 0x0800,
     /// A second UV set travels with the mesh and a second textured pass draws through it.
     sdfCoreAttrMultiTexPass = 0x1000,
     sdfCoreAttrTwoSided = 0x4000,
@@ -593,13 +660,13 @@ struct sdfGsState_t {
     u64 test = 0x717FB;
 
     /// FRAME's write mask, one bit per masked bit of the pixel. The frame-mask pair sets it to
-    /// 0x00FFFFFF so a pass writes alpha and no colour, which is how the game builds its bloom mask.
+    /// 0x00FFFFFF so a pass writes alpha and no color, which is how the game builds its bloom mask.
     u64 frameMask = 0;
 };
 
 constexpr u64 sdfFrameMask(u64 frame) { return (frame >> 32) & 0xFFFFFFFF; }
 
-/// What sdfGrSetFrameMaskRGB writes: colour masked, alpha writable.
+/// What sdfGrSetFrameMaskRGB writes: color masked, alpha writable.
 constexpr u64 sdfFrameMaskRgb = 0x00FFFFFF;
 
 /// sdfModelDrawEnvLinkOt links one env set per ordering table, 96 bytes apart, and puts the
@@ -681,6 +748,32 @@ SDF_STATIC_ASSERT_OFFSETOF(sdfMatPacket_t, tex0Data, 0x40);
 SDF_STATIC_ASSERT_OFFSETOF(sdfMatPacket_t, clampData, 0x48);
 SDF_STATIC_ASSERT_OFFSETOF(sdfMatPacket_t, texTm, 0x68);
 
+using sdfCorePacketCbPtr_t = guest_ptr<struct sdfCorePacketCb_t>;
+
+// This build carries 64 bytes ahead of faceCount where the reconstructed HD header has only
+// tmSave, so every field from matPacketPtr on sits 0x3C past its HD offset.
+struct sdfCorePacketCb_t {
+    u8 header[0x40];
+    s16 faceCount;
+    s16 pointCount;
+    s32 attrBits;
+    s32 packetBits;
+    s32 orgAttrBits;
+    s16 drawFaceCount;
+    s16 backfaceCount;
+    sdfMatPacketPtr_t matPacketPtr;
+    u32 color;
+    f32 fdSoften;
+    f32 fdBias;
+    u32 pointBuff;
+};
+SDF_STATIC_ASSERT_OFFSETOF(sdfCorePacketCb_t, pointCount, 0x42);
+SDF_STATIC_ASSERT_OFFSETOF(sdfCorePacketCb_t, matPacketPtr, 0x54);
+SDF_STATIC_ASSERT_OFFSETOF(sdfCorePacketCb_t, color, 0x58);
+SDF_STATIC_ASSERT_OFFSETOF(sdfCorePacketCb_t, fdSoften, 0x5C);
+SDF_STATIC_ASSERT_OFFSETOF(sdfCorePacketCb_t, fdBias, 0x60);
+SDF_STATIC_ASSERT_OFFSETOF(sdfCorePacketCb_t, pointBuff, 0x64);
+
 // TEX0's texture function and whether the texture carries alpha.
 constexpr u32 sdfTex0Tfx(u64 r) { return u32((r >> 35) & 3); }
 constexpr u32 sdfTex0Tcc(u64 r) { return u32((r >> 34) & 1); }
@@ -710,9 +803,9 @@ enum sdfVifCommand_t : u32 {
 
 // One blend shape a morph controller drives, and how far towards it the model currently is.
 
-// The parallel-light packet VU1 shades with: three directions, a base term and a colour each, all
+// The parallel-light packet VU1 shades with: three directions, a base term and a color each, all
 // in the GS's own 0..255 units.
-//
+
 /// sdfCorePacketGen's own threshold for a blend shape being worth applying.
 constexpr f32 sdfMorphEpsilon = 0.000001f;
 
@@ -745,7 +838,7 @@ struct sdf3DFogPacket_t {
 
     u64 giftag[2];
 
-    /// One GIF A+D pair: the colour, then the GS register it names.
+    /// One GIF A+D pair: the color, then the GS register it names.
     u64 fogColor;
     u64 fogColorReg;
 
@@ -918,7 +1011,7 @@ struct sdfTex0_t {
     u32 width;
     u32 height;
     u32 tcc;   // 0 = RGB, 1 = RGBA
-    u32 tfx;   // how the texel combines with the vertex colour
+    u32 tfx;   // how the texel combines with the vertex color
     u32 cbp;   // CLUT base pointer
     u32 cpsm;  // CLUT pixel storage mode
     u32 csm;   // CLUT storage mode
@@ -1078,7 +1171,7 @@ SDF_STATIC_ASSERT_SIZE(sdfImageSetParm_t, 24);
 SDF_STATIC_ASSERT_OFFSETOF(sdfImageSetParm_t, gsAddr, 0x0C);
 SDF_STATIC_ASSERT_OFFSETOF(sdfImageSetParm_t, width, 0x14);
 
-// What fclDrawSpriteCore draws: a texture, a UV rectangle packed two per word, and a colour.
+// What fclDrawSpriteCore draws: a texture, a UV rectangle packed two per word, and a color.
 using fclSprite_PTR_t = guest_ptr<struct fclSprite_t>;
 
 struct fclSprite_t {

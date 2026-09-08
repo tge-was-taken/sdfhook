@@ -21,8 +21,9 @@ class Trace;
 class RenderThread;
 
 // Read only once the frame stops growing: a packet is linked before its contents are written.
-/// Which entry point linked a packet. sdfModelLinkOt uses all three, so nothing else tells a node's
-/// transform packet from the geometry beside it, and the world geometry arrives only as a Call.
+
+/// sdfModelLinkOt uses all three, so nothing else tells a node's transform packet from the
+/// geometry beside it, and world geometry arrives only as a Call.
 enum class LinkKind : u8 { Packet, Ref, Call };
 
 struct LinkedPacket {
@@ -57,8 +58,8 @@ struct Context {
 
 using Handler = void (*)(Context&);
 
-// Arguments a post-handler needs are only in registers at entry, so a pre-handler records them and
-// its post-handler takes them back. Keyed by pc and stacked, so recursion and reentrancy hold.
+// Arguments live in registers only at entry, so a pre-handler records them for its post-handler.
+// Keyed by pc and stacked, so recursion and reentrancy hold.
 class CallStack {
 public:
     void enter(const Context& c) {
@@ -80,8 +81,7 @@ private:
     std::unordered_map<u32, std::vector<Context::Args>> mByFunction;
 };
 
-// Who called what, for functions hooked only to be watched. An edge from outside the module a
-// function belongs to is a path the hooks do not capture.
+// For functions hooked only to be watched: an edge from outside the module is an uncaptured path.
 class CallGraph {
 public:
     void record(const char* callee, const char* caller) {
@@ -109,7 +109,7 @@ private:
 };
 
 // Owned by main.
-/// Memoised, because resolving a symbol per call would cost more than the hook it serves.
+/// Memoised: resolving per call costs more than the hook it serves.
 class SymbolCache {
 public:
     void attach(pcsx2hook_ctx* runtime) { mRuntime = runtime; }
@@ -137,9 +137,8 @@ public:
     Frame* getFrame();
 
     void link(const LinkedPacket& packet) {
-        // The engine links a generated packet immediately after generating it, and that is the only
-        // thing tying our nth generated packet to the address the engine linked: it builds its own
-        // output buffer, so nothing about the source packet names it.
+        // The engine links a generated packet straight after generating it, which is the only
+        // thing tying our nth to its address: it builds its own output buffer.
         if (mGenerating && packet.kind == LinkKind::Packet) {
             mGeneratedLinks.back() = packet.addr;
             mGenerating = false;
@@ -147,7 +146,7 @@ public:
         mPending.push_back(packet);
     }
 
-    /// Closes any generated packet that linked nothing, so the nth entry stays the nth generation.
+    /// Closes a generation that linked nothing, keeping the nth entry the nth generation.
     void beginGenerated() {
         mGeneratedLinks.push_back(0);
         mGenerating = true;
@@ -182,7 +181,7 @@ struct Coverage {
     GifCounts gif;
     CallGraph graph;
     u64 apiDraws = 0;
-    // Vertices the GS will draw from a render function nothing here submits natively, by producer.
+    // By producer: vertices the GS draws that nothing here submits natively.
     std::map<std::string, u64> unhandledVerts;
 
     /// Packets from an unhandled producer that carry no GIF geometry, which is what a billboard or
@@ -190,8 +189,17 @@ struct Coverage {
     /// the specters' producer linked 998 packets a run and ranked nowhere.
     std::map<std::string, u64> unhandledPackets;
 
+    /// Every texture a producer's packets bind, so a draw sampling something the renderer never
+    /// does names the function responsible instead of leaving it to be guessed.
+    std::map<std::string, std::map<u32, u64>> tbpByProducer;
+
     /// Producers that named a texture the cache had nothing for.
     std::map<std::string, u64> unresolvedTextures;
+
+    /// fldSdwDraw's inline VIF streams, read and refused, so a shadow pass that decodes short says
+    /// so rather than rendering fewer shadows in silence.
+    u64 shadowMeshes = 0;
+    u64 shadowRejects = 0;
 };
 
 

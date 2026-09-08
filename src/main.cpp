@@ -226,6 +226,19 @@ void reportRun(const sdfhook::HookContext& hooks) {
                      packets);
     }
 
+    if (hooks.coverage.shadowMeshes || hooks.coverage.shadowRejects) {
+        todoLog.info("fldSdwDraw shadow streams: {} read, {} refused", hooks.coverage.shadowMeshes,
+                     hooks.coverage.shadowRejects);
+    }
+
+    for (const auto& [producer, tbps] : hooks.coverage.tbpByProducer) {
+        std::string list;
+        for (const auto& [tbp, count] : tbps) {
+            list += std::format("{}x{} ", tbp, count);
+        }
+        texLog.info("{:<30} binds {}", producer, list);
+    }
+
     for (const auto& [callee, seen] : hooks.coverage.graph.getReturns()) {
         texLog.info("{} returned {} times, {} distinct", callee, seen.count, seen.distinct.size());
     }
@@ -294,7 +307,7 @@ int main(int argc, char** argv) {
     if (cfg.gsTrace) pcsx2hook_enable_trace(g_app.runtime, PCSX2HOOK_TRACE_GS);
 
     // The VU1 microprograms are ground truth for what the hardware does to a vertex: the lighting,
-    // the colour scale and the fog term are all in there rather than in any struct we can read.
+    // the color scale and the fog term are all in there rather than in any struct we can read.
     if (cfg.vuTrace) pcsx2hook_enable_trace(g_app.runtime, PCSX2HOOK_TRACE_VU);
 
     // The runner's own cap, so a capped run still reaches the writes it does at shutdown.

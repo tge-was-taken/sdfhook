@@ -1,0 +1,11 @@
+#pragma once
+
+namespace sdfhook {
+
+/// render/shading.inc verbatim, prepended to the mesh shaders. Generated at configure time;
+/// edit the .inc, not this.
+constexpr const char* kShadingSource = R"SDFGLSL(
+@SDF_SHADING_SOURCE@
+)SDFGLSL";
+
+}  // namespace sdfhook

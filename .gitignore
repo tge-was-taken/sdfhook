@@ -1,7 +1,9 @@
 build/
 vendor/
 dumps/
-states/*.p2s
+captures/
+# Savestates are user-supplied and large, and one in history cannot be taken back out cheaply.
+*.p2s
 experiments/
 *.pyc
 __pycache__/

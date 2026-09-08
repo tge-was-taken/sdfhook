@@ -6,10 +6,10 @@
 
 namespace sdfhook {
 
-/// Everything the environment can change about a run, read once at startup. A getenv buried in a
-/// draw call is invisible, and its function-local static lets the first call decide for all later ones.
+/// Read once at startup: a getenv buried in a draw call is invisible, and its function-local
+/// static lets the first call decide for every later one.
 struct Config {
-    /// Reads the whole environment once. The only place getenv is called.
+    /// The only place getenv is called.
     static Config fromEnvironment();
 
     // What the run is.
@@ -24,8 +24,7 @@ struct Config {
     std::string frames;
     u32 shotFrame = 0;
     int scale = 2;
-    /// Show the window. The renderer runs either way: a hidden window still carries a GL context,
-    /// and an automated run that maps one steals the keyboard from whatever started it.
+    /// Hidden still carries a GL context; mapping one steals the keyboard from the terminal.
     bool window = false;
     bool gsTrace = false;
     bool vuTrace = false;
@@ -45,47 +44,65 @@ struct Config {
     bool describeFrame = false;
     bool debugDepth = false;
 
-    /// Paints each mesh with its shaded normal, so a flat character can be told from a flat light.
+    /// Tells a flat character from a flat light.
     bool debugNormal = false;
+
+    /// How every sdf3DPrim producer reaches the screen.
+    bool drawPrimPoly = true;
+
+    /// Fitted, not read: $f16 into sdfCorePacketGen, never shown assigned in the decompilation.
+    f32 faceDivSoften = 7.0f;
+
+    /// Moves the terminator rather than sharpening it. $f17, also fitted.
+    f32 faceDivBias = 0.0f;
+
+    /// GL rasterises at pixel centres, the GS covers every pixel an edge reaches; and the target
+    /// is twice the guest's height, so the two axes differ.
+    f32 pixelOffsetX = 0.0f;
+    f32 pixelOffsetY = 0.0f;
 
     // Which parts of a frame to draw, for isolating one against the reference.
     usize meshFirst = 0;
     usize meshLast = ~usize(0);
-    /// Highest ordering table to draw meshes from, for isolating one table's pass.
     u32 otMax = 3;
     bool noSprites = false;
+
+    /// PCSX2HOOK_GS_ONLY's grammar, so a frame cuts to the same draw on both sides and diffs with
+    /// no matching: "i=N", "i=A-B", "tbp=N". Empty draws everything.
+    std::string drawOnly;
     bool noFeedback = false;
     bool noFog = false;
     bool noSpecular = false;
-    /// Draws aDrawBoxF_Direct's line pairs. Off because the GS rasterizes no line primitive in any
-    /// sample scene, so whatever it files is never transmitted.
+
+    /// Off: invisible in the reference, RGBA 0 against a blend resolving to the destination.
+    /// A switch so that stays re-checkable.
+    bool drawSpecularOverlay = false;
+
+    /// aDrawBoxF_Direct's line pairs. Off: the GS rasterizes no line in any sample scene.
     bool drawDirectBox = false;
 
-    /// Leaves every mesh on its ordering table's default GS state instead of the one its packet
-    /// transmitted under.
+    /// Off: the geometry decodes but the color and blend are guessed, not read from the material
+    /// packet, and cost 24 points as opaque grey.
+    bool drawShadows = false;
+
     bool noTransmitState = false;
 
-    /// The ordering table below which a 2D draw is behind the 3D. The engine files its 2D tables
-    /// either side of the model ones and transmits them in index order.
+    /// The engine files its 2D tables either side of the model ones, in index order.
     s32 spriteOtCut = 0;
 
-    /// Captures a scene at this frame without a keypress, for scripting and for checking that the
-    /// savestate a capture writes can actually be resumed.
+    /// Without a keypress, for scripting and for checking a capture resumes.
     u32 captureFrame = 0;
 
-    /// Where F9 writes a captured scene: a savestate beside the two shots it should reproduce.
+    /// A savestate beside the two shots it should reproduce.
     std::string captureDir = "captures";
 
-    /// Draws the camera-facing quads dds3BillboardLinkOt batches, which is what the battle specters
-    /// are.
+    /// The camera-facing quads dds3BillboardLinkOt batches: the battle specters.
     bool noBillboards = false;
 
-    /// Draws fldDrawPoly3's gouraud triangles. Off: they decode and land on screen but do not
-    /// rasterise, and an inert pass should not look enabled.
+    /// fldDrawPoly3's gouraud triangles. Off: they land on screen but never rasterise.
     bool poly = false;
 
-    /// Draws meshes whose packet the engine generated and then linked nothing for. The hardware
-    /// never drew them.
+    /// Generated but never linked, so the hardware never drew them.
     bool drawUnlinkedMeshes = true;
     bool recoverTexturesFromGs = true;
 

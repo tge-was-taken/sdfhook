@@ -227,11 +227,11 @@ TexHandle TextureCache::getFontSheet(u32 sheetWidth, Frame* frame) {
     upload.height = sheet.height;
     upload.rgba.resize(sheet.index.size() * 4);
     for (usize i = 0; i < sheet.index.size(); i++) {
-        const Rgba colour = mFontClut[sheet.index[i] & 0xF];
-        upload.rgba[i * 4 + 0] = colour.r;
-        upload.rgba[i * 4 + 1] = colour.g;
-        upload.rgba[i * 4 + 2] = colour.b;
-        upload.rgba[i * 4 + 3] = colour.a;
+        const Rgba color = mFontClut[sheet.index[i] & 0xF];
+        upload.rgba[i * 4 + 0] = color.r;
+        upload.rgba[i * 4 + 1] = color.g;
+        upload.rgba[i * 4 + 2] = color.b;
+        upload.rgba[i * 4 + 3] = color.a;
     }
     mUploaded.insert(handle);
     frame->textureUploads.push_back(std::move(upload));
@@ -259,6 +259,16 @@ void TextureCache::onFree(TexHandle handle) {
         it = (it->first == handle || it->second == handle) ? mAlias.erase(it) : std::next(it);
     }
     if (known) mFreed++;
+}
+
+TexHandle TextureCache::getHandleForTex0(TexHandle key, u64 tex0) {
+    if (!key.addr || !tex0 || !mConfig->recoverTexturesFromGs) return {};
+    if (mUploaded.count(key)) return key;
+    const auto alias = mAlias.find(key);
+    if (alias != mAlias.end()) return alias->second;
+    // The read is not safe from inside a hook, so it waits for the frame boundary as handles do.
+    mWantedTex0.emplace(key, tex0);
+    return {};
 }
 
 TexHandle TextureCache::getHandle(TexHandle wanted, Frame*) {
@@ -315,6 +325,18 @@ void TextureCache::recoverQueued() {
     if (mWantedSheet.addr && mFontSheet.index.empty()) recoverFontSheet();
     if (mWanted.empty()) return;
 
+    // A material that named a TEX0 with no handle: the register is in hand, so no packet is read.
+    for (auto it = mWantedTex0.begin(); it != mWantedTex0.end();) {
+        if (recoverTex0(it->first, it->second)) {
+            mUploaded.insert(it->first);
+            mRecovered++;
+        } else {
+            mAlias.emplace(it->first, TexHandle{});
+        }
+        mRecoveryAttempts++;
+        it = mWantedTex0.erase(it);
+    }
+
     for (auto it = mWanted.begin(); it != mWanted.end();) {
         const TexHandle handle = *it;
         if (recoverFromGs(handle)) {
@@ -336,6 +358,21 @@ void TextureCache::drainRecovered(Frame& frame) {
 }
 
 bool TextureCache::recoverFromGs(TexHandle handle) {
+    const TexHandle entry{handle.addr};
+    if (!entry || !entry->packet) {
+        if (mConfig->dumpRecover) {
+            JsonObject row;
+            row.addString("dump", "recover").addHexDigits("handle", handle.addr, 8);
+            log.dump(row.addString("why", "no upload packet").take());
+        }
+        return false;
+    }
+
+    // sdfTexGetTex0Reg reads the register out of the packet the texture was uploaded with.
+    return recoverTex0(handle, u64Ptr_t{entry->packet.addr + kTex0InPacket}.valueOr());
+}
+
+bool TextureCache::recoverTex0(TexHandle handle, u64 reg) {
     const auto note = [&](const char* why, u64 tex0) {
         if (!mConfig->dumpRecover) return;
         JsonObject row;
@@ -344,14 +381,6 @@ bool TextureCache::recoverFromGs(TexHandle handle) {
         log.dump(row.take());
     };
 
-    const TexHandle entry{handle.addr};
-    if (!entry || !entry->packet) {
-        note("no upload packet", 0);
-        return false;
-    }
-
-    // sdfTexGetTex0Reg reads the register out of the packet the texture was uploaded with.
-    const u64 reg = u64Ptr_t{entry->packet.addr + kTex0InPacket}.valueOr();
     if (!reg) {
         note("packet has no TEX0", 0);
         return false;

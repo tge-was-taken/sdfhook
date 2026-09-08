@@ -34,6 +34,10 @@ public:
 
     void parse(u32 packetAddr);
 
+    /// TBP0 of every texture the last parse bound, so a draw that samples something we never do can
+    /// be attributed to the producer that linked its packet.
+    const std::vector<u32>& getParsedTbps() const;
+
 private:
     class State;
     std::unique_ptr<State> mState;
@@ -42,13 +46,9 @@ private:
 /// Exposed so a trace can say what shape a packet was when it yielded nothing.
 bool readDmaTag(u32 packetAddr, DmaTag& out);
 
-/// Applies a linked packet's A+D register writes to a running GS state.
-/// @todo Nothing calls this yet, which is why every mesh is still stamped from the
-///       sdfGsStateForOt table and AREF is wrong on two thirds of the batches. See TODO.md E1. ALPHA and TEST reach a 3D
-/// draw this way, so the state in force is whatever the packets linked before it left behind.
-/// Applies a packet's A+D register writes to the running state.
-/// @return Whether the packet was one: a packet of pure register writes draws nothing, which is what
-///         separates a state setter from a producer whose geometry VU1 builds.
+/// Applies a packet's A+D register writes to the running GS state.
+/// @todo Nothing calls this yet, so every mesh is still stamped from sdfGsStateForOt. See TODO.md E1.
+/// @return Whether the packet was one: pure register writes draw nothing.
 bool applyGsRegisterWrites(u32 packetAddr, sdfGsState_t& state);
 
 }  // namespace sdfhook

@@ -14,7 +14,7 @@
 
 namespace sdfhook {
 
-/// Each texture is sent to the render thread once, the first frame it is drawn with.
+/// Sent to the render thread once, the first frame it is drawn with.
 class TextureCache {
 public:
     void attach(pcsx2hook_ctx* runtime, const Config& config) {
@@ -22,53 +22,49 @@ public:
         mConfig = &config;
     }
 
-    /// The handle to draw a texture with, empty when nothing was registered for it. One uploaded
-    /// before the capture window is queued for recovery out of GS memory, the only copy left by
-    /// then, and resolves from the next frame on.
+    /// Empty when nothing was registered. Uploaded before the capture window means GS memory is
+    /// the only copy left, so it is queued and resolves from the next frame.
     TexHandle getHandle(TexHandle wanted, Frame* frame = nullptr);
 
-    /// Reads the queued handles out of GS memory. Call only from the runner's frame callback:
-    /// the read runs on the GS thread and blocks for it, which is not safe from inside a hook.
+    /// For a material naming a TEX0 with no handle, which would otherwise draw untextured.
+    /// `key` files the upload and is never dereferenced.
+    TexHandle getHandleForTex0(TexHandle key, u64 tex0);
+
+    /// Call only from the frame callback: the read blocks on the GS thread, unsafe from a hook.
     void recoverQueued();
 
     /// Moves anything recoverQueued read into the frame being built.
     void drainRecovered(Frame& frame);
 
-    /// Records a frame buffer's region in GS memory. A texture uploaded before the capture window
-    /// can have had its slot handed to the display since, and recovering it then returns the screen.
+    /// A texture's GS slot can since have gone to the display, and recovering it returns the
+    /// screen instead.
     /// @fn sdfGsAllocFrameBuff
     /// @note SLUS-20911 0x002AA8D0
     void onFrameBuffer(sdfGsMemSlicePtr_t aSlice);
 
-    /// Forgets a handle the engine released, so the address can be registered again. The texture
-    /// itself is replaced at its next upload rather than dropped here: a copy made by sdfTexDup
-    /// outlives its source, and a frame already submitted still draws with it.
+    /// Replaced at its next upload rather than dropped: a submitted frame still draws with it.
     /// @fn sdfTexFree
     /// @note SLUS-20911 0x002AB860
     void onFree(TexHandle handle);
 
-    /// Links a copy made by sdfTexDup to its source: the copy never reaches sdfTexSetEx, so
-    /// nothing is uploaded for it.
+    /// A copy never reaches sdfTexSetEx, so nothing is uploaded for it.
     void onDuplicate(TexHandle source, TexHandle copy);
 
     /// Only callable during a load: afterwards the engine keeps the GS allocation alone.
     void add(TMX_HEADER_PTR_t aTex, TexHandle handle, Frame* frame);
 
-    /// Glyphs are uploaded one at a time into a sheet shared in GS memory, so the sheet is
-    /// assembled here from those same uploads and identified by the address it lives at.
+    /// Glyphs upload one at a time, so the sheet is assembled here and keyed by its address.
     void onGlyph(u32 dstX, u32 dstY, u32 width, u32 height, u32 dataAddr);
     void onFontClut(u32 dataAddr);
 
-    /// Asks for the glyph sheet to be read out of GS memory. A savestate begins past the uploads
-    /// that built it, so frTranslateUserData never runs and every string draws as a blank bar.
+    /// A savestate begins past the uploads, so frTranslateUserData never runs and every string
+    /// would draw as a blank bar.
     void wantFontSheet(u32 addr, u32 bufWidth, u32 width, u32 height);
 
-    /// The palettes are static data, so they can be read whether or not frSetFontClut ran inside
-    /// the capture window.
+    /// Static data, so readable whether or not frSetFontClut ran in the capture window.
     void loadFontClut(u32 tableAddr);
 
-    /// The handle to draw the glyph sheet with, sized as the engine sees it and re-uploaded when
-    /// glyphs have changed. There is one sheet, so it needs no address to tell it apart.
+    /// Re-uploaded when glyphs change. One sheet, so no address is needed.
     TexHandle getFontSheet(u32 sheetWidth, Frame* frame);
 
     void dumpTo(const std::string& directory) { mDumpDir = directory; }
@@ -83,7 +79,7 @@ public:
     bool hasFontClut() const { return !mFontClut.empty(); }
 
 private:
-    // A sheet many uploads share, kept as the indices the game wrote so a palette can change.
+    // Kept as the indices the game wrote, so a palette can change under it.
     struct Sheet {
         u32 width = 0;
         u32 height = 0;
@@ -95,11 +91,14 @@ private:
     std::vector<Rgba> mFontClut;
     u64 mGlyphUploads = 0;
     std::unordered_set<TexHandle> mUploaded;
-    // Duplicated handles share their origin's pixels, resolved once and remembered.
+    // Duplicates share their origin's pixels; resolved once.
     std::unordered_map<TexHandle, TexHandle> mAlias;
 
     /// Reads the texture the handle names out of GS memory, through its own TEX0.
     bool recoverFromGs(TexHandle handle);
+
+    /// The half needing only the register. `key` files the upload and is never dereferenced.
+    bool recoverTex0(TexHandle key, u64 reg);
 
     bool recoverFontSheet();
 
@@ -119,8 +118,12 @@ private:
 
     std::vector<GsRegion> mFrameBuffers;
 
-    /// Handles a draw asked for that nothing had registered, waiting for the frame boundary.
+    /// Asked for by a draw, registered by nothing; drained at the frame boundary.
     std::unordered_set<TexHandle> mWanted;
+
+    /// The same with no upload packet to read. Keyed by material packet address, unique per
+    /// material.
+    std::unordered_map<TexHandle, u64> mWantedTex0;
     std::vector<TextureUpload> mRecoveredUploads;
 
     pcsx2hook_ctx* mRuntime = nullptr;

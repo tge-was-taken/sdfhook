@@ -11,12 +11,10 @@
 
 namespace sdfhook {
 
-// Draws a frame with GL. Every call must be on the thread holding the context, which is
-// RenderThread's; it owns no window, no thread and no synchronisation of its own.
+// Every call must be on the thread holding the context. Owns no window, thread or locking.
 class Renderer {
 public:
-    // Says whether the assumed display rect is the real one: vertices outside it mean the XYOFFSET
-    // the decode subtracts is wrong.
+    // Vertices outside it mean the XYOFFSET the decode subtracts is wrong.
     struct Bounds {
         bool seen = false;
         f32 minX = 0, minY = 0, maxX = 0, maxY = 0;
@@ -28,14 +26,19 @@ public:
     void shutdown();
     void draw(const Frame& frame);
 
-    /// Puts the finished frame on screen and keeps it as the one the next may sample.
+    /// Picks a mesh by eye in a window run instead of by index out of a trace. -1 picks none.
+    void setHighlight(int index) { mHighlight = index; }
+
+    /// By painting every mesh with its index and reading the pixel back. -1 for none.
+    int pickMesh(const Frame& frame, int x, int y);
+
+    /// Kept as the one the next frame may sample.
     void present();
 
-    /// Puts the last finished frame up again without redrawing it. Redrawing would run the frame
-    /// feedback a second time over a frame the game never produced, compounding the tap.
+    /// Without redrawing: that would run the feedback tap again over a frame the game never
+    /// produced.
     void represent();
-    // Top-down RGB, which is the order an image file wants and the reverse of GL's.
-    /// The frame just presented, at the size it was rendered, whatever the window is showing.
+    /// Top-down RGB, at the size rendered whatever the window shows.
     std::vector<u8> readPixels(int* width, int* height) const;
 
     const Bounds& getBounds() const { return mBounds; }
@@ -44,7 +47,7 @@ public:
     void describeNextFrame(bool on) { mDescribe = on; }
 
 private:
-    // One GL texture per engine texture id, uploaded the first frame that carries it.
+    // Uploaded the first frame that carries it.
     struct Texture {
         u32 name;
         f32 width;
@@ -54,10 +57,8 @@ private:
     void uploadTextures(const Frame& frame);
     void drawMeshes(const Frame& frame);
 
-    /// 2D and 3D share one ordering table, so sprites submitted before a mesh are drawn before it:
-    /// a character's shadow quads go down first and he covers them.
-    /// Sprites whose ordering table falls in [fromOt, toOt). The 2D tables transmit in index
-    /// order, so the ones the engine files before the model tables belong behind the meshes.
+    /// [fromOt, toOt). The 2D tables transmit in index order, so those filed before the model
+    /// tables belong behind the meshes.
     void drawSprites(const Frame& frame, s32 fromOt, s32 toOt);
 
     /// Null when nothing was uploaded for the handle.
@@ -65,9 +66,11 @@ private:
 
     Bounds mBounds;
     const Config* mConfig = nullptr;
+    int mHighlight = -1;
+    bool mPickPass = false;
     bool mDescribe = false;
     std::vector<ScreenVertex> mVerts;
-    // Draw order, which the ordering tables decide rather than submission.
+    // Decided by the ordering tables, not submission.
     std::vector<usize> mOrder;
     std::vector<usize> mSpriteOrder;
     std::unordered_map<TexHandle, Texture> mTextures;

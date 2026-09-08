@@ -1,0 +1,203 @@
+# Names for VU1 data addresses, read by `vu2c.py --names`.  Every entry restates a row of
+# memory-map.md, which carries the instruction that proves it; an address described there only as
+# part of a group is left out.  `<quadword>[.lane] <name>`, or `<quadword>+ <name>` for a base an
+# index is added to, so `mem[vi04 + 848]` prints as `texcoord[vi04]`.
+
+# Per-vertex arrays, indexed by vertex number
+704+  position          # view space, .w the clip w
+800+  vertexColor      # floats until emit's FTOI0
+848+  texcoord          # .xy the coordinate, .z the projection reciprocal, .w a per-vertex scalar
+
+# Counts and source pointers, unpacked at 0x00A9
+896.w faceCount
+897.w vertexCount
+898.w indexList
+900.w srcNormals
+901.w srcTexcoords
+902.w srcColors
+907.w primFlags         # attrBits & 0x78, written at 0x0381
+908.w lastPrim          # the last PRIM a builder wrote
+
+# Per-draw
+903.w drawFlags         # & 0x80 the lit path, & 0x800 the direction matrix
+904.w drawMode          # 0x4000 back faces, 0x0010 the texture-matrix path, 0x1000 a further pass
+910.w flatten           # lerps the base toward 1.0 and scales the light colors by 1 - t
+914.w texcoordMode      # 3 makes texcoordSecond fill one color instead of relighting
+917.w materialChanged   # set when a material is unpacked, cleared by the rebase that consumes it
+
+# The light packet at 920..928, struct names, its DMA and VIF header consumed
+920   lightDir0
+921   lightDir1
+922   lightDir2
+923   colorBase
+924   color0            # scratch: 0x01C5 overwrites it with colorBase - color3
+925   color1
+926   color2
+927   color3            # the ambient, the sum's base
+928   color4            # colorBase + color3, what a mesh with no normals takes
+
+# Per-material, written by the unpack at 0x0090
+1002  matDiffuse
+1003  lightBase         # ambient * color3, computed at 0x01C4
+1004  matAmbient
+1005  drawColor        # already multiplied by diffuse at 0x009E
+
+# Camera and object, written by setup.c
+934   screenScale       # also kept in vf30
+964   objectCamera0
+965   objectCamera1
+966   objectCamera2
+967   objectCamera3
+968   lightNormal0      # the second direction matrix, taken when drawFlags & 0x800 is clear
+969   lightNormal1
+970   lightNormal2
+971   tintScale         # times drawTint is the flat tint the texcoord loops write
+1007  drawTint          # a color, itof0 of packed bytes. Every use multiplies a color by it
+                        # (0x009E, 0x00F4, 0x0113, 0x0445, 0x05E2); nothing scales a UV by it
+1006  drawTint2         # a second one, read only by texcoordSecond at 0x02ED
+1011  windingRef        # the reference point emit's winding test is taken against
+1023  cursors           # .y the emit output cursor, .z and .w two more
+
+# The texture matrix sdfMatSetUvwParm files, applied at 0x0205
+974   uvMatrix0
+975   uvMatrix1
+976   uvMatrix2
+
+# Fog, and the scratch the clipper and the sprites use
+919   fogParams         # .x minimum, .y maximum, .z offset, .w scale
+973   reflectColor     # the reflection pass's own flat color
+1020.y spriteTop        # the VIF TOP a sprite program was entered with
+1021.w retryHead        # the head of the retry list the emitters thread clipped triangles onto
+1021.y clipBufA         # the clipper's two scratch buffers, swapped every plane
+1021.z clipBufB
+
+# Routines, from the `Ranges covered here` headers of the transcriptions beside this
+# file.  `@<entry>` is a micro address, not a quadword.  vu2c prints these at the call
+# sites, the entry banners and the routine map; an address the routine walk does not
+# find as an entry is a section inside one, and only the map ignores it.
+@0000 dispatch            # dispatch.c
+@0039 loadCamera          # setup.c
+@004F composeMatrices     # setup.c
+@0081 copyBlock           # setup.c
+@008F lightSetup          # lighting.c
+@00A9 unpackCounts        # state.c
+@00C2 unpackTexture       # state.c
+@00D3 unpackTwo           # state.c
+@00DA readFlags           # state.c
+@00E6 texcoordPlain       # texcoord.c
+@0100 returnPlain         # texcoord.c
+@0103 texcoordReflect     # texcoord.c
+@012F returnReflect       # texcoord.c
+@0132 lightVertex         # lighting.c
+@0173 lightVertexColor   # lighting_color.c
+@0188 lightVertexFlat     # lighting.c
+@0195 fillFour            # lighting_color.c
+@019D lightFlatColor     # lighting_color.c
+@01B1 fillOne             # lighting_color.c
+@01B9 drawEntry           # drawbatch.c
+@01BB lightRebase         # lighting.c
+@01C6 drawBatch           # drawbatch.c
+@01DF negateNormals       # drawbatch.c
+@01F3 swapIndices         # drawbatch.c
+@01FE texcoordMatrix      # drawbatch.c
+@0210 drawFront           # drawbatch.c
+@021A drawEmit            # drawbatch.c
+@021E texcoordJump        # drawbatch.c
+@0224 drawSecond          # drawbatch.c
+@022F drawReturn          # drawbatch.c
+@0235 emitTriangles       # emit.c
+@0271 drainClip           # emit_tex.c
+@027A emitClipped         # emit_tex.c
+@028A emitTexTriangles    # emit_tex.c
+@02CF drainClipTex        # emit_tex.c
+@02D8 emitClippedTex      # emit_tex.c
+@02EA texcoordSecond      # packet.c
+@031C packetOne           # packet.c
+@0329 packetThree         # packet.c
+@033C packetClipped       # packet.c
+@034D normalizeVectors    # packet.c
+@035D unpackPointers      # geometry.c
+@0382 skinFirstBone       # geometry.c
+@03A3 skinAddBone         # geometry.c
+@03BE skinLastBone        # geometry.c
+@03E0 morphFirst          # geometry.c
+@03F7 morphAdd            # geometry.c
+@0403 morphSum            # geometry.c
+@041A loadObjectMatrix    # geometry.c
+@041F drawEntry2          # drawbatch2.c
+@043A lightRamp           # drawbatch2.c
+@047B drawFront2          # drawbatch2.c
+@0485 drawEmit2           # drawbatch2.c
+@0489 texcoordJump2       # drawbatch2.c
+@048D drawSecond2         # drawbatch2.c
+@049C kick                # drawbatch2.c
+@04A4 kickAndEnd          # drawbatch2.c
+@04A8 clipReject          # drawbatch2.c
+@04B7 packetSix           # drawbatch2.c
+@04D1 transformVertices   # transform.c
+@04F6 transformVerticesUv # transform.c
+@0525 loadClipTriangle    # transform.c
+@052F clipTriangle        # clip.c
+@056E clipPlane           # clip.c
+@05CA reflectPass         # reflect.c
+@05F1 spriteDispatch      # sprite.c
+@05FB matrixScale         # sprite.c
+@0609 spriteOne           # sprite.c
+@0632 spriteTwo           # sprite.c
+@0667 spriteProject       # sprite.c
+@0682 spriteThree         # sprite.c
+@06AD spriteFour          # sprite.c
+@06EB spriteProjectQ      # sprite.c
+@0708 copyHeader          # direct.c
+@0712 directSetup         # direct.c
+@071B directTextured      # direct.c
+@073F directUntextured    # direct.c
+
+# Records: `!<entry> <register> <name>` says a routine is handed a pointer in that register, and
+# `<name>.<offset> <field>` names a quadword of it.  Only fields this file's own reads prove.
+
+!00C2 vi02 matPacket        # unpackTexture's argument
+matPacket.2 tint            # itof0 at 0x00C6, filed as drawTint at 0x00CD
+matPacket.3 screenZOffset   # 0x00CC adds .x to screenScale.z
+matPacket.4 rampGainAdd     # 0x00CF files .x at mem[1014], added to rampGain at 0x0446
+matPacket.5 rampBiasAdd     # 0x00D0 files .x at mem[1015], added to rampBias at 0x0447
+
+!004F vi02 objectMatrix     # composeMatrices' argument, the four rows it multiplies by camera
+!00D3 vi02 twoPacket        # unpackTwo's argument
+twoPacket.0 first           # 0x00D5 files .x at mem[912].w
+twoPacket.1 second          # 0x00D6 files .x at mem[913].w
+
+# Named from vu1_image.c's own reads; memory-map.md carries the instruction that proves each.
+899.w outPosition       # reset to 704 at 0x03D8 and 0x0412, walked as a cursor at 0x03E4, 0x0387
+915.w savedPointer      # 0x00CB files vi04 here, 0x036F reads it back
+981   tagTriangles      # 0x0236 loads it and 0x023B copies .yz as emitTriangles' GIF tag
+982   tagTexTriangles   # the same for emitTexTriangles at 0x028C and 0x02DA
+980.w rampGain          # 0x0446 adds rampGainAdd, 0x044A clamps to >= 1, 0x0451 scales the lights
+981.w rampBias          # 0x0447 adds rampBiasAdd, 0x0452 scales it by rampGain
+1014.x rampGainAdd      # filed by unpackTexture at 0x00CF
+1015.x rampBiasAdd      # filed by unpackTexture at 0x00D0
+
+# The matrices setup.c files, named for what composeMatrices and the normal rows do with them.
+988   cameraNormal0     # 0x0044..0x0047 file them; 0x0060..0x0062 read 988..990 as the 3x3 that
+989   cameraNormal1     # turns the object normal rows into view normal rows at 0x0066
+990   cameraNormal2
+991   cameraNormal3
+992   camera0           # 0x0048..0x004B file them; composeMatrices loads them at 0x0050..0x0053
+993   camera1           # and multiplies every object row by them at 0x0057, 0x005B, 0x005F, 0x0063
+994   camera2
+995   camera3
+996   viewNormal0       # 0x006E..0x0070, objectNormal through cameraNormal (0x0066, 0x0069, 0x006C)
+997   viewNormal1       # read by the reflection pass at 0x05D8..0x05DB
+998   viewNormal2
+999   objectNormal0     # 0x0064..0x0066 file them, 0x010B..0x010D read them
+1000  objectNormal1
+1001  objectNormal2
+
+# The second texture matrix, filed beside uvMatrix0..2 by the same unpack.
+977   uvMatrixB0        # 0x00BE..0x00C0 file .xy right after uvMatrix0..2 at 0x00BB..0x00BD
+978   uvMatrixB1        # 0x02FA..0x02FC read them and 0x0300 applies them as the same 2x3 affine
+979   uvMatrixB2
+
+752+  normal            # normalizeVectors files one a vertex at 0x035C, and the skinning and
+                        # morph loops at 0x03A6, 0x03BC, 0x03D2; vi08 counts from 1, so the
+                        # listing shows the offset as +751

@@ -17,16 +17,14 @@ namespace sdfhook {
 class TextureCache;
 class Trace;
 
-/// Every branch sdfModelLinkOt takes, counted. A scene that renders short names the branch that
-/// swallowed it instead of leaving it to be guessed.
+/// Counted so a scene that renders short names the branch that swallowed it.
 class ModelTrace {
 public:
     enum class Node : u8 { Drawn, NoChain, Hidden, BoundsCulled, Unreadable, Count };
     enum class Packet : u8 { Generated, DmaCall, Shaped, Suppressed, Unknown, Count };
     enum class Reject : u8 { NoMaterial, Empty, BadBatch, BadElems, NoMorph, Count };
 
-    /// A chain address that carried neither a material nor a mesh, and one that opened like a
-    /// mesh and then would not decode.
+    /// Carried neither a material nor a mesh, and opened like a mesh but would not decode.
     void countSetupRef() { mSetupRefs++; }
 
     void countSettledMesh() { mSettledMeshes++; }
@@ -36,15 +34,13 @@ public:
     void countRoot(bool tempPackets);
     void countNode(Node outcome) { mNodes[usize(outcome)]++; }
     void countPacket(Packet outcome) { mPackets[usize(outcome)]++; }
-    /// Bodies a generated packet carries, bucketed by the engine's own packet type. The parser
-    /// dispatches on that type; how it is reported is this class's business alone.
+    /// The parser dispatches on the engine's type; the bucketing is this class's alone.
     void countGeom(sdfCorePacketType_t type, u32 elems);
     void countMesh(sdfCorePacketType_t type, u32 elems);
     void countReject(sdfCorePacketType_t type, Reject why) { mRejects[usize(geomFor(type))][usize(why)]++; }
 
     /// A body inside a type 1 DMA call chain, which has no packet type of its own.
-    /// A branch that is modelled but has never run, so a scene that reaches it says so rather than
-    /// rendering short in silence.
+    /// Modelled but never run, so a scene reaching it says so.
     void countTempPacketWalk() { mTempPacketWalks++; }
     void countShapedWalk() { mShapedWalks++; }
 
@@ -53,8 +49,7 @@ public:
 
     void countPacketType(u8 type, u16 attrBits, u16 packetBits);
 
-    /// How many bones a mesh blends, and how many of them one vertex actually uses, so the
-    /// palette size and the influence cap are measured rather than assumed.
+    /// So the palette size and the influence cap are measured rather than assumed.
     void countBones(u32 bones) { mBones[bones]++; }
 
     /// What survives the node's own attr mask, which is what the shader branches on.
@@ -65,22 +60,20 @@ public:
     void countOt(u8 otIndex) { mOt[otIndex]++; }
     void countMultiTexture(bool on) { (on ? mMultiTextured : mSingleTextured)++; }
     void countTexMatrix(bool present) { (present ? mTexMatrix : mNoTexMatrix)++; }
-    void countSpecular(u16 attrBits, u32 colour) {
-        if (attrBits & 0x1) mSpecular[colour]++;
+    void countSpecular(u16 attrBits, u32 color) {
+        if (attrBits & 0x1) mSpecular[color]++;
     }
     void countSampler(u64 tex0, u64 tex1, u64 clamp) {
         mSampler[(tex0 >> 34) & 7][(tex1 >> 5) & 0x3F][clamp & 0xF]++;
     }
 
-    /// Our walk runs at sdfModelLinkOt's entry, before its own sdfMatListUpdatePacket, so a
-    /// material whose duty bit for this frame is set has a packet we are reading one generation
-    /// stale. Counted rather than assumed: for a static material the two are identical.
+    /// Our walk runs before sdfMatListUpdatePacket, so a duty bit set this frame means one
+    /// generation stale. Counted, since a static material reads the same either way.
     void countMatDuty(u8 duty, u32 frameId) {
         ((duty >> frameId) & 1 ? mStaleMatPackets : mFreshMatPackets)++;
     }
 
-    /// A mesh whose material names a texture the cache has nothing for draws flat, so the two are
-    /// counted apart: an untextured scene reads as a lighting problem otherwise.
+    /// Counted apart from untextured, or a scene missing its textures reads as a lighting bug.
     void countTexture(bool named, bool found) {
         if (!named) mUntexturedMeshes++;
         else if (found) mTexturedMeshes++;
@@ -96,20 +89,28 @@ public:
     }
     void countInfluences(u32 used) { mInfluences[used]++; }
 
-    /// The engine's own calls into the two functions only sdfModelLinkOt makes, so equal counts
-    /// mean our traversal reached exactly what it reached.
+    /// One material packet, two meshes: disagreement means a field kept its struct default, which
+    /// shades plausibly and shows only as a seam.
+    void countMaterialShading(u32 packetAddr, u64 shading) {
+        const auto known = mMaterialShading.find(packetAddr);
+        if (known == mMaterialShading.end()) {
+            mMaterialShading.emplace(packetAddr, shading);
+        } else if (known->second != shading) {
+            mSplitMaterials++;
+        }
+    }
+
     void countGuestGenerated() { mGuestGenerated++; }
     void countGuestShaped() { mGuestShaped++; }
 
-    /// The summary a human reads after a run.
+    /// For a human.
     void report() const;
 
-    /// The same counters as one JSON object, so two runs can be diffed rather than eyeballed. Every
-    /// counter is written, including the zeros the text suppresses: a reader wants the absence too.
+    /// The same counters as one JSON object so two runs diff. Zeros included: absence counts.
     void addTo(JsonObject& row) const;
 
 private:
-    /// How a body is bucketed for the report. Not the parser's concern, so it never leaves here.
+    /// Reporting only, never the parser's concern, so it does not leave here.
     enum class Geom : u8 { Rigid, Weighted, BlendShape, VifStream, Unknown, Count };
 
     static constexpr Geom geomFor(sdfCorePacketType_t type) {
@@ -166,10 +167,11 @@ private:
     u64 mUnsettledMeshes = 0;
     u64 mGuestGenerated = 0;
     u64 mGuestShaped = 0;
+    std::map<u32, u64> mMaterialShading;
+    u64 mSplitMaterials = 0;
 };
 
-/// The engine's own scene walk, on our side: same node list, same culling, same packet chains, so
-/// what it files into an ordering table we turn into meshes instead.
+/// Same node list, culling and chains as sdfModelLinkOt, into meshes rather than table entries.
 /// @fn sdfModelLinkOt
 /// @note SLUS-20911 0x002B1DB8
 class ModelParser {
@@ -179,37 +181,56 @@ public:
 
     void sdfModelLinkOt(sdfModelRootNodePtr_t aRoot, Frame* frame);
 
-    /// The link counter spans the frame, not one root: the engine links every root into the same
-    /// chain, and that chain's order is what a mesh is matched against.
+    /// Says whether a producer hands world or projected coordinates. Magnitude alone cannot.
+    /// @todo TODO.md V19: nothing calls it while that entry's remaining producers are unhooked.
+    bool isWorldSpace(const sdfVector3_t& point, f32 out[3]) const;
+
+    /// Spans the frame, not one root: every root links into the chain a mesh is matched against.
     void beginFrame(u32 frame) {
         mLinkIndex = 0;
         mDecodeFrame = frame;
     }
 
-    /// Written once the frame's chain exists, since that is what says which GS state each mesh ran
-    /// under, and a row recorded at decode carries the ordering table's default instead.
+    /// Needs the frame's chain: a row recorded at decode carries the table's default instead.
     void traceMeshes(const Frame& frame);
+
+    /// So the ramp's coordinate is read from the guest rather than fitted.
+    /// @fn corePktSetFaceDivParm
+    /// @note SLUS-20911 0x002B6A30
+    void setFaceDivTerms(f32 soften, f32 bias);
+
+    /// Reads the ramp corePktMakeFaceDivParm left on the caller's stack, keyed by the material
+    /// packet the cb names.
+    /// @fn corePktApplyFaceDivColor
+    /// @note SLUS-20911 0x002B72D8
+    void readFaceDivParm(sdfCorePacketCbPtr_t aCb, sdfVector4Ptr_t aParm);
 
     ModelTrace& getTrace() { return mTrace; }
     const ModelTrace& getTrace() const { return mTrace; }
 
-    /// One batch of camera-facing quads, as dds3BillboardLinkOt hands them over. The offsets are a
-    /// rotated pair of view-space axes per corner, so the quad carries its own size and spin.
+    /// Offsets are a rotated pair of view-space axes per corner, so a quad carries size and spin.
     /// @fn sdfBillBoardMakeN
     /// @note SLUS-20911 0x002BB0F0
     void sdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Frame* frame);
 
     void setBillboardTexture(sdfTexHandlePtr_t aTex) { mBillboardTexture = aTex; }
 
-    /// Records which ordering table each pending billboard batch links into, since
-    /// sdfBillBoardMakeN is handed the batch alone and the index lives on the node above it.
+    /// sdfBillBoardMakeN is handed the batch alone, and the table index lives on the node above.
     void readBillboardTables();
 
-    /// One gouraud triangle in world space, which is all fldDrawPoly3 is handed: three positions and
-    /// three colours, no texture and no UVs.
+    /// Three world positions and three colors, no texture and no UVs.
     /// @fn fldDrawPoly3
     /// @note SLUS-20911 0x0012A5E0
-    void fldDrawPoly3(const sdfVector3_t point[3], const u32 colour[3], Frame* frame);
+    void fldDrawPoly3(const sdfVector3_t point[3], const u32 color[3], Frame* frame);
+
+    /// A world-space VIF stream whose header sits past a color unpack, not at the target.
+    /// @fn fldSdwDraw
+    /// @note SLUS-20911 0x001193E8
+    bool fldSdwDraw(u32 aPacket, u32 aEnd, const sdfGsState_t& aState, Frame* frame);
+
+    void sdf3DPrimMakePoly(sdf3DPolyPtr_t aPoly, Frame* frame);
+
+    void drawSprite3D(TexHandle aTexHandle, sdfSprite3DPtr_t aSprite, Frame* frame);
 
     /// The GS state the linked packets have left in force, tracked across a frame's whole chain.
     sdfGsState_t& getGsState() { return mGsState; }
@@ -219,8 +240,9 @@ private:
         Matrix4 model;
         Matrix4 clip;
         f32 sortZ;
-        f32 zBias;
-        u32 colour;
+        f32 faceDivSoften;
+        f32 faceDivBias;
+        u32 color;
         bool reverse;
         u16 attrMask;
         u8 otIndex;
@@ -230,6 +252,11 @@ private:
     /// @note SLUS-20911 0x002B3558
     void readMaterialPacket(const sdfMat_t& material, DrawMesh& mesh,
                             Frame* frame);
+
+    /// @fn corePktEmitMultiTexPass
+    /// @note SLUS-20911 0x002B8C30
+    void readMultiTexturePacket(const sdfMat_t& material, sdfMatPacketPtr_t packet, DrawMesh& mesh,
+                                Frame* frame);
 
     void readLighting(sdf3DLightParallelPacketPtr_t aLight);
     void readFog(sdf3DFogPacketPtr_t aFog);
@@ -250,8 +277,7 @@ private:
     void dumpWords(const char* what, u32 at);
     void dumpPayload(sdfCorePacketPtr_t aPacket);
 
-    /// One batch at a time, until the mesh's own vertex count is met. A batch caps at what fits
-    /// in VU0 memory, so anything larger arrives split and the triangles index the whole.
+    /// A batch caps at VU0 memory, so a larger mesh arrives split, triangles indexing the whole.
     bool readRigidBatches(u32 at, const sdfCorePacket_t& packet, DrawMesh& mesh);
 
     /// @fn corePktSkinVertFirst
@@ -259,24 +285,19 @@ private:
     bool readWeightedBatches(u32 at, const sdfCorePacket_t& packet,
                              u32 nodesAddr, DrawMesh& mesh);
 
-    /// Blend shapes are plain arrays rather than VIF-tagged, and the shapes past the first are
-    /// deltas onto it, weighted by the root's own morph controller.
+    /// Plain arrays, not VIF-tagged. Shapes past the first are deltas, weighted by the root's
+    /// morph controller.
     bool readBlendShapes(u32 at, const sdfCorePacket_t& packet,
                          guest_ref<sdfModelRootNode_t> root, DrawMesh& mesh);
 
-    /// A DMA call packet holds a chain of material and mesh pairs, each mesh a VIF stream the
-    /// hardware would run directly. Its arrays are tagged the same way a batch's are.
-    /// The root's temporary packet list, walked over the same nodes. Never seen in any sample
-    /// scene, which is a fact about the savestates, not about the engine.
+    /// Over the same nodes. Unseen in every sample scene, which is about the savestates.
     /// @fn sdfModelTempPacketLinkOt
     /// @note SLUS-20911 0x002B1950
-    /// Neither face-division term is modelled, so a scene that sets one says so in the summary.
     void reportFaceDiv(const char* what, f32 value);
 
     void sdfModelTempPacketLinkOt(guest_ref<sdfModelRootNode_t> root, Frame* frame);
 
-    /// The type 2 path: the morph list picks up to two blend targets and their streams are chained
-    /// behind the mesh's own. Also unseen in every sample scene.
+    /// Type 2: up to two blend targets, their streams chained behind the mesh's. Also unseen.
     /// @fn sdfModelLinkShapedDrawPacket
     /// @note SLUS-20911 0x002B0CB0
     void sdfModelLinkShapedDrawPacket(guest_ref<sdfModelRootNode_t> root, const NodeDraw& draw,
@@ -307,19 +328,31 @@ private:
     const RenderState* mState = nullptr;
     // The engine's own globals, resolved once from the symbol map and named for it.
     Matrix4Ptr_t mSdf3DScreenTm;
+    guest_ptr<u32> mSdf3DSpecularTex;
+    guest_ptr<sdfVector4_t> mSdf3DScreenParam;
+    f32 mProjectionScale[2] = {1.0f, 1.0f};
     u32Ptr_t mSdfFrameId;
     f32Ptr_t mSdfFaceDivBias;
     f32Ptr_t mSdfFaceDivSoften;
     u8Ptr_t mCorePktSoftenBias;
+    u64Ptr_t mSdf3DRefMapParam;
     sdf3DLightDefaultPtr_t mSdf3DLightDefault;
     sdf3DFogDefaultPtr_t mSdf3DFogDefault;
+
+    // $f12 and $f13 into sdfCorePacketGen. The walk runs ahead of generation, so a frame uses
+    // the previous frame's pair and only the first falls back to the fitted config values.
+    f32 mFaceDivSoftenTerm = 0.0f;
+    f32 mFaceDivBiasTerm = 0.0f;
+    bool mFaceDivTermsSeen = false;
+    bool mFaceDivParmSeen = false;
+    // Per material packet, so the second pass interpolates the engine's endpoints, not ours.
+    std::unordered_map<u32, MeshRamp> mFaceDivRamps;
 
     u32 mNodeListAddr = 0;
     MeshLighting mLighting{};
     MeshFog mFog{};
     sdfGsState_t mGsState{};
-    /// The texture dds3BillboardTagLink last bound to a billboard batch: sdfBillBoardMakeN is handed
-    /// the geometry alone, so the handle has to come from the call that fills the batch.
+    /// sdfBillBoardMakeN gets the geometry alone, so the handle comes from the call that fills.
     sdfTexHandlePtr_t mBillboardTexture;
     dds3BillboardNodePtr_t mDds3BillboardTag;
     std::unordered_map<u32, u32> mBillboardOt;
@@ -328,8 +361,7 @@ private:
     u32 mDecodeFrame = 0;
     u32 mCurrentLink = 0;
 
-    /// Every material's own DMA packet this frame, so a chain address names the material that
-    /// built it rather than being guessed at from its size.
+    /// So a chain address names its material rather than being guessed from its size.
     std::unordered_map<u32, u32> mMatByPacket;
     Matrix4 mScreenTm{};
     ModelTrace mTrace;
