@@ -163,25 +163,33 @@ PacketType classifySelf(u32 aData, u32 aQwc) {
 /// handed the packet, its data, or an interior offset of either, so all four are probed.
 PacketType classify(u32 aPacket, u32 aData, u32 aQwc, const char* aProducer,
                     const std::unordered_map<u32, PacketType>& aTypes, TypedBy* aHow) {
-    *aHow = TypedBy::Payload;
-    const PacketType told = classifySelf(aData, aQwc);
-    if (told != PacketType::Unknown) return told;
-
+    // What the engine said it built is the only thing that identifies a packet outright.
     *aHow = TypedBy::Builder;
     for (const u32 probe : {aPacket, aData, aPacket + 16, aData + 16}) {
         const auto found = aTypes.find(probe);
         if (found != aTypes.end()) return found->second;
     }
 
-    *aHow = TypedBy::Producer;
-    const PacketType byProducer = packetTypeForProducer(aProducer);
-    if (byProducer != PacketType::Unknown) return byProducer;
+    // The producer and the shape rules only apply where the payload is opaque. A producer links
+    // several kinds of packet, so letting it name a VIF stream would type the stream as whatever
+    // else that producer also builds.
+    const PacketType encoding = classifySelf(aData, aQwc);
+    if (encoding == PacketType::Unknown) {
+        *aHow = TypedBy::Producer;
+        const PacketType byProducer = packetTypeForProducer(aProducer);
+        if (byProducer != PacketType::Unknown) return byProducer;
 
-    // Last, and inference rather than a fact the engine stated: a packet built before the hooks
-    // attached, which is every one a savestate inherits.
-    *aHow = TypedBy::Shape;
-    const PacketType byShape = packetTypeForShape(aData, aQwc);
-    if (byShape != PacketType::Unknown) return byShape;
+        *aHow = TypedBy::Shape;
+        const PacketType byShape = packetTypeForShape(aData, aQwc);
+        if (byShape != PacketType::Unknown) return byShape;
+    } else if (encoding != PacketType::Empty) {
+        // Described, not identified: the encoding is known and the meaning is not.
+        *aHow = TypedBy::Payload;
+        return encoding;
+    } else {
+        *aHow = TypedBy::Payload;
+        return encoding;
+    }
 
     *aHow = TypedBy::Nothing;
     return PacketType::Unknown;

@@ -9,32 +9,44 @@
 
 namespace sdfhook {
 
-PacketType packetTypeForBuilder(const char* symbol) {
+PacketBuilder packetBuilderFor(const char* symbol) {
     struct Entry {
         const char* symbol;
         PacketType type;
+        u8 argument;
     };
-    // Every builder the hook table installs. A symbol reaching here without an entry is a hook
-    // added without deciding what it produces, which is why the default reports.
+    // The argument holding the packet, from each function's own declaration. A Set*RefPacket
+    // writes a DMA REF tag into its buffer, so the buffer is the chain entry and the reference is
+    // the data.
     static constexpr Entry kBuilders[] = {
-        {"sdf3DPrimSetTmPacket", PacketType::Transform},
-        {"sdfModelAllocTmPacket", PacketType::Transform},
-        {"sdfModelSetTmRefPacket", PacketType::Transform},
-        {"sdf3DMakeViewportPacket", PacketType::Viewport},
-        {"sdf3DMakeLightParallelPacket", PacketType::LightParallel},
-        {"MakeLightPacket", PacketType::LightParallel},
-        {"sdf3DMakeFogPacket", PacketType::Fog},
-        {"sdfMatMakePacket", PacketType::Material},
-        {"sdfTexMakeGIFPacket", PacketType::TextureUpload},
-        {"sdfGrSetClearPacket", PacketType::Clear},
-        {"sdfGrSetFramePacket", PacketType::FrameBuffer},
-        {"sdf3DMakeDirectRefPacket", PacketType::DirectRef},
+        {"sdf3DPrimSetTmPacket", PacketType::Transform, 0},
+        {"sdf3DMakeViewportPacket", PacketType::Viewport, 0},
+        {"sdf3DMakeLightParallelPacket", PacketType::LightParallel, 0},
+        {"sdf3DMakeFogPacket", PacketType::Fog, 0},
+        {"sdf3DMakeDirectRefPacket", PacketType::DirectRef, 0},
+        {"sdfGrSetClearPacket", PacketType::Clear, 0},
+        {"sdfGrSetFramePacket", PacketType::FrameBuffer, 0},
+        {"sdfGrSetDrawFramePacket", PacketType::DrawFrame, 0},
+        {"sdfGrSetDrawDefParmPacket", PacketType::DrawDefParm, 0},
+        {"sdfGrSetStdDrawEnv", PacketType::DrawEnv, 0},
+        {"sdfModelSetTermPacket", PacketType::Terminator, 0},
+        {"sdfMatMakePacket", PacketType::Material, 1},
+        {"sdfModelSetTmRefPacket", PacketType::TransformRef, 1},
+        {"sdfGrSetFrameMaskRGB", PacketType::FrameMask, 1},
+        {"sdfGrSetFrameMaskReset", PacketType::FrameMask, 1},
+        {"sdfModelSetMatRefPacket", PacketType::MaterialRef, 2},
+        {"sdfModelSetNormalDrawPacket", PacketType::MeshNormal, 2},
+        {"sdfModelSetOneSkinDrawPacket", PacketType::MeshSkinned, 2},
+        {"sdfGrLinkDrawFrameTex", PacketType::FrameTex, 2},
     };
     for (const Entry& entry : kBuilders) {
-        if (std::strcmp(entry.symbol, symbol) == 0) return entry.type;
+        if (std::strcmp(entry.symbol, symbol) == 0) return {entry.type, entry.argument, true};
     }
-    reportUnsupported("packet builder without a type", 0);
-    return PacketType::Unknown;
+    // Hooked but handed no packet: sdfMatUpdatePacket takes the material, MakeLightPacket a unit
+    // handle, sdfTexMakeGIFPacket a texture handle, and sdf3DPrimLinkMat and sdf3DPrimLinkTm link
+    // rather than build. sdfModelAllocTmPacket and sdfModelNewPacketHeader return theirs, which
+    // needs a post-handler.
+    return {};
 }
 
 PacketType packetTypeForProducer(const char* symbol) {

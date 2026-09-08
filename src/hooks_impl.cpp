@@ -163,6 +163,13 @@ void settleMeshState(HookContext& h, u32 aTag) {
 void censusFrame(HookContext& h, u32 aTag) {
     if (!h.config->dumpChainCensus) return;
     censusChain(aTag, h.frames.getPackets(), h.symbols, h.trace->getFrame(), h.packetTypes);
+    for (const auto& [builder, calls] : h.builderCalls) {
+        log.dump(JsonObject()
+                     .addString("dump", "builder")
+                     .addString("name", builder)
+                     .addUint("calls", calls)
+                     .take());
+    }
 }
 
 void chainFrameSend(HookContext& h, u32 aRa, u32 aAddr) {

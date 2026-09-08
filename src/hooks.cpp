@@ -696,18 +696,6 @@ void observePost(pcsx2hook_regs* regs, void* user) {
     h.coverage.graph.recordReturn(h.symbols.getFunction(c.getPc()), c.getResult());
 }
 
-/// Records what a packet is, at the builder that makes it. Argument 0 is the packet in every
-/// builder measured; where it is an interior pointer the walk probes the offsets rather than guess.
-int packetTypeHook(pcsx2hook_regs* regs, void* user) {
-    Context c{regs};
-    HookContext& h = *static_cast<HookContext*>(user);
-
-    const u32 aPacket = c.getArg(0);
-
-    if (aPacket) h.packetTypes[aPacket] = packetTypeForBuilder(h.symbols.getFunction(c.getPc()));
-    return PCSX2HOOK_CONTINUE;
-}
-
 /// Every DMA send, with the caller and the engine's own display-thread flag, to judge whether
 /// either identifies the one send that carries the frame's chain.
 int dmaSendHook(pcsx2hook_regs* regs, void* user) {
@@ -729,6 +717,22 @@ int dmaSendHook(pcsx2hook_regs* regs, void* user) {
                      .addUint("dispThreadFlag", flag ? u8Ptr_t{flag}.valueOr() : 0xFFu)
                      .take());
     }
+    return PCSX2HOOK_CONTINUE;
+}
+
+/// Records what a packet is, at the builder that makes it. Which argument holds the packet comes
+/// from the engine's own declaration, since it is argument 0 for some and argument 2 for others.
+int packetTypeHook(pcsx2hook_regs* regs, void* user) {
+    Context c{regs};
+    HookContext& h = *static_cast<HookContext*>(user);
+
+    const char* builder = h.symbols.getFunction(c.getPc());
+    const PacketBuilder made = packetBuilderFor(builder);
+
+    h.builderCalls[builder]++;
+    if (!made.takesPacket) return PCSX2HOOK_CONTINUE;
+    const u32 aPacket = c.getArg(made.argument);
+    if (aPacket) h.packetTypes[aPacket] = made.type;
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -849,6 +853,20 @@ constexpr Entry kGameEntries[] = {
     {"sdfMatMakePacket", &packetTypeHook, nullptr},
     {"sdfGrSetFramePacket", &packetTypeHook, nullptr},
     {"MakeLightPacket", &packetTypeHook, nullptr},
+    {"sdfModelSetMatRefPacket", &packetTypeHook, nullptr},
+    {"sdfModelSetOneSkinDrawPacket", &packetTypeHook, nullptr},
+    {"sdfModelNewPacketHeader", &packetTypeHook, nullptr},
+    {"sdfModelSetTermPacket", &packetTypeHook, nullptr},
+    {"sdfGrSetStdDrawEnv", &packetTypeHook, nullptr},
+    {"sdfGrSetFrameMaskRGB", &packetTypeHook, nullptr},
+    {"sdfGrSetFrameMaskReset", &packetTypeHook, nullptr},
+    {"sdfGrLinkDrawFrameTex", &packetTypeHook, nullptr},
+    {"sdfGrSetDrawFramePacket", &packetTypeHook, nullptr},
+    {"sdfGrSetDrawDefParmPacket", &packetTypeHook, nullptr},
+    {"sdfGrSetRefGifPacket", &packetTypeHook, nullptr},
+    {"sdf3DPrimLinkTm", &packetTypeHook, nullptr},
+    {"sdf3DPrimLinkMat", &packetTypeHook, nullptr},
+    {"sdfMatUpdatePacket", &packetTypeHook, nullptr},
     {"dds3LinkZClearDrawTag", &dds3LinkZClearDrawTagHook, nullptr},
     {"aDrawBoxF", &aDrawBoxFHook, nullptr},
     {"aDrawBoxF_Direct", &aDrawBoxF_DirectHook, nullptr},

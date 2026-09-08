@@ -11,10 +11,23 @@ enum class PacketType : u8 {
 
     // Named by the builder that made them.
     Transform,
+    TransformRef,
     Viewport,
     LightParallel,
     Fog,
     Material,
+    MaterialRef,
+    MeshNormal,
+    MeshSkinned,
+    MeshShaped,
+    PacketHeader,
+    Terminator,
+    DrawEnv,
+    FrameMask,
+    FrameTex,
+    DrawFrame,
+    DrawDefParm,
+    RefGif,
     TextureUpload,
     Clear,
     FrameBuffer,
@@ -35,6 +48,19 @@ constexpr const char* packetTypeName(PacketType type) {
     switch (type) {
         case PacketType::Unknown: return "unknown";
         case PacketType::Transform: return "transform";
+        case PacketType::TransformRef: return "transformRef";
+        case PacketType::MaterialRef: return "materialRef";
+        case PacketType::MeshNormal: return "meshNormal";
+        case PacketType::MeshSkinned: return "meshSkinned";
+        case PacketType::MeshShaped: return "meshShaped";
+        case PacketType::PacketHeader: return "packetHeader";
+        case PacketType::Terminator: return "terminator";
+        case PacketType::DrawEnv: return "drawEnv";
+        case PacketType::FrameMask: return "frameMask";
+        case PacketType::FrameTex: return "frameTex";
+        case PacketType::DrawFrame: return "drawFrame";
+        case PacketType::DrawDefParm: return "drawDefParm";
+        case PacketType::RefGif: return "refGif";
         case PacketType::Viewport: return "viewport";
         case PacketType::LightParallel: return "light";
         case PacketType::Fog: return "fog";
@@ -53,9 +79,16 @@ constexpr const char* packetTypeName(PacketType type) {
     return "invalid";
 }
 
-/// The builder a hook fired on, as the type it produces. Named for the engine symbol so the hook
-/// table and this stay greppable together.
-PacketType packetTypeForBuilder(const char* symbol);
+/// What a builder produces, and which of its arguments names the packet. The argument is the
+/// engine's own, read off the declaration: the packet is argument 0 for some and argument 2 for
+/// others, and a few take no packet at all.
+struct PacketBuilder {
+    PacketType type = PacketType::Unknown;
+    u8 argument = 0;
+    bool takesPacket = false;
+};
+
+PacketBuilder packetBuilderFor(const char* symbol);
 
 /// Producers that build their packet inline, so no builder function exists to hook and the call
 /// that linked it is what names it. Unknown for everything else.
@@ -66,8 +99,9 @@ PacketType packetTypeForProducer(const char* symbol);
 /// census counts it apart from what the engine told us.
 PacketType packetTypeForShape(u32 aData, u32 aQwc);
 
-/// How a packet's type was settled, so what the engine stated stays distinguishable from what we
-/// inferred.
+/// How a packet's type was settled. Only Builder, Producer and Shape identify a packet; Payload
+/// merely describes its encoding, which says nothing about what the packet means, so census.py
+/// counts it as unidentified.
 enum class TypedBy : u8 { Nothing, Payload, Builder, Producer, Shape };
 
 constexpr const char* typedByName(TypedBy how) {
@@ -80,5 +114,6 @@ constexpr const char* typedByName(TypedBy how) {
     }
     return "invalid";
 }
+
 
 }  // namespace sdfhook

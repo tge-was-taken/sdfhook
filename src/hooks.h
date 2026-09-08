@@ -223,8 +223,13 @@ struct HookContext {
     /// processed without running the hardware that consumes it, so this has to be exhaustive.
     std::unordered_map<u32, PacketType> packetTypes;
 
+
     /// The chain the last frame send carried, so the engine's second draw of it is not walked
     /// twice.
+    /// How often each builder ran, so a hook that claims nothing can be told from one that never
+    /// fires.
+    std::unordered_map<const char*, u32> builderCalls;
+
     u32 lastChainHead = 0;
 
     /// So a chain frame's sprite count is against the API draws of that frame, not the run.
