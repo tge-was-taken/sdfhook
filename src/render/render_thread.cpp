@@ -137,7 +137,7 @@ void RenderThread::run(int width, int height) {
     // Hidden unless asked for: an automated run needs the GL context, not a window, and mapping
     // one takes the keyboard from the terminal. Shown means driven, so it takes focus normally.
     const SDL_WindowFlags interactive = mConfig->window
-        ? SDL_WindowFlags(0)
+        ? SDL_WINDOW_RESIZABLE
         : SDL_WINDOW_NOT_FOCUSABLE | SDL_WINDOW_UTILITY;
     SDL_Window* window = SDL_CreateWindow(
         "sdfhook", width, height, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN | interactive);
@@ -190,14 +190,17 @@ void RenderThread::run(int width, int height) {
             if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
                 // The window is scaled independently of the render target, so the click is mapped
                 // into target pixels rather than taken as it comes.
-                int ww = 0, wh = 0;
-                SDL_GetWindowSize(window, &ww, &wh);
-                const f32 sx = ww ? f32(width) / f32(ww) : 1.0f;
-                const f32 sy = wh ? f32(height) / f32(wh) : 1.0f;
-                mPickX.store(int(event.button.x * sx), std::memory_order_relaxed);
-                mPickY.store(int(event.button.y * sy), std::memory_order_relaxed);
+                int pickX = 0, pickY = 0;
+                mRenderer.mapToTarget(int(event.button.x), int(event.button.y), &pickX, &pickY);
+                mPickX.store(pickX, std::memory_order_relaxed);
+                mPickY.store(pickY, std::memory_order_relaxed);
                 mPickWanted.store(true, std::memory_order_release);
             }
+        }
+        {
+            int drawableWidth = 0, drawableHeight = 0;
+            SDL_GetWindowSizeInPixels(window, &drawableWidth, &drawableHeight);
+            mRenderer.setScreenSize(drawableWidth, drawableHeight);
         }
         if (const int step = mHighlightStep.exchange(0, std::memory_order_acq_rel); step && held) {
             const int count = int(held->meshes.size());

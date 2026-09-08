@@ -32,6 +32,12 @@ public:
     /// By painting every mesh with its index and reading the pixel back. -1 for none.
     int pickMesh(const Frame& frame, int x, int y);
 
+    /// The window's drawable size in pixels. The picture is letterboxed into it.
+    void setScreenSize(int width, int height) { mScreenWidth = width; mScreenHeight = height; }
+
+    /// Maps a window pixel to a render-target pixel, undoing the letterbox.
+    void mapToTarget(int x, int y, int* outX, int* outY) const;
+
     /// Kept as the one the next frame may sample.
     void present();
 
@@ -76,6 +82,11 @@ private:
     std::unordered_map<TexHandle, Texture> mTextures;
     // Two, so a frame can sample the one before it.
     RenderTexture mFrames[2];
+    int mScreenWidth = 0;
+    int mScreenHeight = 0;
+
+    /// Aspect-preserving destination rectangle for the blit, in window pixels.
+    void screenRect(int* x, int* y, int* width, int* height) const;
     int mCurrent = 0;
     u32 mProgram = 0;
     u32 mVao = 0;
