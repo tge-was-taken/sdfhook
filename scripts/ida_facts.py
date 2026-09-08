@@ -15,11 +15,29 @@ import idc
 OUT = r"\\wsl.localhost\Debian\home\wsl\projects\sdfhook\assets\SLUS-20911.facts"
 
 TARGETS = [
+    "sdfTexSetEx", "sdfTexFree", "sdfTexDup", "sdfGsAllocFrameBuff", "frTranslateUserData",
+    "frCopyFontClutToVram", "sdfTexAlloc",
     "MultMatrixRev", "corePktEmitMultiTexPass", "sdfModelCheckBounds", "sdfModelLinkOt",
+    "sdfMatMakePacket", "corePktSkinVertFirst", "corePktSetFaceDivParm", "corePktApplyFaceDivColor",
     "sdfCorePacketGen", "sdfModelTempPacketLinkOt", "sdfModelLinkShapedDrawPacket",
-    "drawSprite3D", "sdf3DPrimMakePoly", "fldSdwDraw", "dds3BillboardLinkOt", "sdfBillBoardMakeN",
+    "drawSprite3D", "sdf3DPrimMakePoly", "dds3BillboardLinkOt", "sdfBillBoardMakeN",
     "sdfModelSetNormalDrawPacket", "corePktBuildFaceList", "rsetFrameMaskRgbOn",
     "dds3BillboardTagLink", "fldDrawPoly3",
+    # 2D producers, reimplemented in libsdf_2d.cpp
+    "DrwSprite2D", "DrwSprite2DF", "aDrawBoxG", "aDrawBoxF", "aDrawBoxF_Direct",
+    "frCreateDrawFontPacket_20550848", "sdfPrimLinkFt4", "sdfPrimLinkG4", "fclDrawSpriteCore",
+    "dds3DrawFade", "cmpDrawBoxG", "cmpDrawTriG", "fldDrawFrameSprite",
+    "fldDrawFrameSpriteAlpha",
+    # engine state and the texture layer
+    "rsetAlpha", "rsetOtOfs", "rsetTest", "rsetFrameMaskRgbOn", "rsetFrameMaskRgbOff", "sdfGrSetFrameMaskRGB",
+    "sdf2DLinkTexPacket", "sdfGrInitExPacket", "sdfGrOtNormalCallback", "sdfPrimAllocDrawTag",
+    "sdfGrLinkDispFrameTex", "sdf2DGetPrimPacketSize", "sdf2DMakePrimPacketHeader",
+    "sdf2DGetPrimPtr", "sdf2DAllocSprite", "sdfPrimSetFt4Elem", "sdfPrimSetG4Elem",
+    "sdfTexSetFilter", "sdfDrawTagLink", "sdfGrAllocPacketBuff", "dds3GetFrameID",
+    "dds3FontReqAllocDrawTag", "fclDrawPanelSprite2",
+    # the command queue, reimplemented in libsdf_ot.cpp
+    "frSwapColor", "cmpExpandColor", "sdfDrawTagInit", "sdfGrOtInit", "sdfGrOtNormalReg",
+    "sdfGrSortOtReg", "sdfGrOtClose", "sdfGrJoinDrawTag",
 ]
 
 
@@ -52,10 +70,47 @@ class Members(ida_hexrays.ctree_parentee_t):
         return 0
 
 
+RESTORE = ("ld", "lw", "lq", "lwc1", "lqc2", "addiu", "jr", "nop", "daddu", "move")
+
+
+def epilogue(fn, lo, hi):
+    """A block that only unwinds the frame is the calling convention, not the guest's semantics.
+
+    Our reimplementation has an epilogue too, emitted by the compiler. There is nothing to model
+    and nothing to decline, so it is not a fact.
+    """
+    saw_return = False
+    for ea in idautils.Heads(lo, hi):
+        mnem = idc.print_insn_mnem(ea)
+        if mnem not in RESTORE:
+            return False
+        if mnem == "jr" and idc.print_operand(ea, 0) == "$ra":
+            saw_return = True
+        if mnem in ("ld", "lw", "lq", "lwc1") and "$sp" not in idc.print_operand(ea, 1):
+            return False
+    return saw_return
+
+
+def depths(chart, order):
+    """Loop nesting depth per block, from the back edges.
+
+    A back edge is a successor at or before its own block, and the blocks between the two are the
+    loop body. Compiled MIPS keeps a loop's blocks contiguous, so the address interval is the body
+    and nesting is how many intervals a block falls in.
+    """
+    loops = []
+    for b in chart:
+        for succ in b.succs():
+            if succ.start_ea <= b.start_ea:
+                loops.append((succ.start_ea, b.end_ea))
+    return {lo: sum(1 for a, z in loops if a <= lo < z) for lo, _hi in order}
+
+
 def blocks(fn):
     """Only the blocks of the function's own range: FlowChart also walks tail chunks."""
     out = [(b.start_ea, min(b.end_ea, fn.end_ea)) for b in ida_gdl.FlowChart(fn, flags=ida_gdl.FC_PREDS)]
-    return sorted(b for b in out if fn.start_ea <= b[0] < fn.end_ea and b[1] > b[0])
+    return sorted(b for b in out if fn.start_ea <= b[0] < fn.end_ea and b[1] > b[0]
+                  and not epilogue(fn, b[0], b[1]))
 
 
 def calls_and_globals(fn):
@@ -68,6 +123,17 @@ def calls_and_globals(fn):
             target = None
             for ref in idautils.CodeRefsFrom(ea, 0):
                 target = idc.get_func_name(ref) or target
+            if not target and mnem == "jalr":
+                # The member the pointer came from, so the call can be matched rather than excused.
+                # jalr names the link register first and the target second.
+                reg = idc.print_operand(ea, 1)
+                back = ea
+                for _ in range(8):
+                    back = idc.prev_head(back)
+                    if idc.print_insn_mnem(back) == "lw" and idc.print_operand(back, 0) == reg:
+                        disp = idc.get_operand_value(back, 1)
+                        target = "indirect+0x%X" % disp
+                        break
             calls.setdefault(target or "indirect", []).append(ea)
             continue
         for ref in idautils.DataRefsFrom(ea):
@@ -119,8 +185,12 @@ def emit(out, name):
         out.write("  glob  0x%X %s%s\n" % (at[0], sym, addrs(at)))
     for sym, at in sorted(calls.items(), key=lambda kv: kv[1][0]):
         out.write("  call  0x%X %s%s\n" % (at[0], sym, addrs(at)))
-    for lo, hi in blocks(fn):
-        out.write("  blk   0x%X..0x%X\n" % (lo, hi - 1))
+    chart = ida_gdl.FlowChart(fn, flags=ida_gdl.FC_PREDS)
+    order = blocks(fn)
+    deep = depths(chart, order)
+    for lo, hi in order:
+        # A block inside a loop must be transcribed inside one, not cited from the top.
+        out.write("  blk   0x%X..0x%X  depth=%d\n" % (lo, hi - 1, deep.get(lo, 0)))
     for at, text in cop2(fn):
         out.write("  # cop2 0x%X %s\n" % (at, text))
 

@@ -1,8 +1,7 @@
 #pragma once
 
-#include "guest_ptr.h"
 #include "types.h"
-
+#include "guest_ptr.h"
 // Names and offsets are the game's own, from the SLUS_209.11 IDB, so a field compares against the
 // database directly.
 
@@ -170,8 +169,12 @@ struct sdfModelNodeList_t {
     s16 capacity;
     s16 elemSize;
     s16 growStep;
+    /// A pointer to the item array, not the array: readListItem takes both hops.
+    sdfVoidPtr_t items;
 };
-SDF_STATIC_ASSERT_SIZE(sdfModelNodeList_t, 12);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelNodeList_t, count, 0x04);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelNodeList_t, items, 0x0C);
+// The header is 12 bytes and the node pointers follow it, which is what +0x0C reads.
 SDF_STATIC_ASSERT_OFFSETOF(sdfModelNodeList_t, memHandle, 0x00);
 SDF_STATIC_ASSERT_OFFSETOF(sdfModelNodeList_t, count, 0x04);
 SDF_STATIC_ASSERT_OFFSETOF(sdfModelNodeList_t, capacity, 0x06);
@@ -185,8 +188,12 @@ struct sdfMatList_t {
     s16 capacity;
     s16 elemSize;
     s16 growStep;
+    /// A pointer to the item array, not the array.
+    sdfVoidPtr_t items;
 };
-SDF_STATIC_ASSERT_SIZE(sdfMatList_t, 12);
+SDF_STATIC_ASSERT_OFFSETOF(sdfMatList_t, count, 0x04);
+SDF_STATIC_ASSERT_OFFSETOF(sdfMatList_t, items, 0x0C);
+// The header is 12 bytes and the material pointers follow it, which is what +0x0C reads.
 
 constexpr u32 sdfListItems = 0x0C;
 
@@ -225,6 +232,54 @@ SDF_STATIC_ASSERT_OFFSETOF(sdfDrawTag_t, z, 0x0C);
 SDF_STATIC_ASSERT_OFFSETOF(sdfDrawTag_t, lightPacket, 0x10);
 SDF_STATIC_ASSERT_OFFSETOF(sdfDrawTag_t, fogPacket, 0x14);
 SDF_STATIC_ASSERT_OFFSETOF(sdfDrawTag_t, texPacket, 0x18);
+
+// sdfGrOtInit installs 85 of these at sdfGrOtTable. regFunc is what a producer calls to register
+// its tag; noSortTag holds the ones sdfGrSortOtReg diverts on the 0xFFFF sentinel.
+struct sdfGrOt_t {
+    sdfGrOtPtr_t next;
+    sdfDrawTagPtr_t tagHead;
+    sdfDrawTagPtr_t tagTail;
+    sdfDrawTagPtr_t noSortTag;
+    sdfVoidPtr_t regFunc;
+    sdfVoidPtr_t callbackFunc;
+    sdfVoidPtr_t data;
+    u32 pad;
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrOt_t, 32);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrOt_t, next, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrOt_t, tagHead, 0x04);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrOt_t, tagTail, 0x08);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrOt_t, noSortTag, 0x0C);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrOt_t, regFunc, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrOt_t, callbackFunc, 0x14);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrOt_t, data, 0x18);
+
+// The per-layer GS state dds3InitDrawEnvSub fills. Every field is a packet pointer, so the
+// mirror is offsets: nothing here is dereferenced on our side.
+struct sdfGrStdDrawEnv_t {
+    sdfVoidPtr_t worker;
+    sdfGrPacketHeaderPtr_t header;
+    sdfVoidPtr_t defParm;
+    sdfVoidPtr_t frame1;
+    sdfVoidPtr_t frame2;
+    sdfVoidPtr_t clear;
+    sdfVoidPtr_t test1;
+    sdfVoidPtr_t alpha1;
+    sdfVoidPtr_t test2;
+    sdfVoidPtr_t alpha2;
+    sdfVoidPtr_t ext;
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrStdDrawEnv_t, 44);
+
+// Two of these, stride 7136. Only stdDrawEnv is modelled: it is the one field the frame-sprite
+// producers read, and the spans either side are unreferenced here.
+struct dds3DrawEnv_t {
+    u8 beforeStdDrawEnv[0x1300];
+    sdfGrStdDrawEnv_t stdDrawEnv;
+    u8 afterStdDrawEnv[7136 - 0x1300 - 44];
+};
+SDF_STATIC_ASSERT_SIZE(dds3DrawEnv_t, 7136);
+SDF_STATIC_ASSERT_OFFSETOF(dds3DrawEnv_t, stdDrawEnv, 0x1300);
 
 struct sdfModelPacketHeader_t {
     sdfModelPacketHeaderPtr_t next;
@@ -325,6 +380,8 @@ struct sdfModelShapeList_t {
     u16 pad;
     sdfModelShapeEntry_t entry[1];
 };
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelShapeList_t, count, 0x04);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelShapeList_t, entry, 0x08);
 using sdfModelShapeListPtr_t = guest_ptr<sdfModelShapeList_t>;
 
 struct sdfModelNodeDef_t {
@@ -539,6 +596,7 @@ struct sdfBillBoardQuad_t {
     sdfVector2_t corner[4];
 };
 
+
 using sdfSprite3DPtr_t = guest_ptr<struct sdfSprite3D_t>;
 
 /// One camera-facing quad with its orientation, which sdfBillBoardMake1 never sees: drawSprite3D
@@ -546,8 +604,8 @@ using sdfSprite3DPtr_t = guest_ptr<struct sdfSprite3D_t>;
 /// @fn drawSprite3D
 /// @note SLUS-20911 0x0012A2D0
 struct sdfSprite3D_t {
-    sdfVector3_t centre;
-    f32 pad;
+    // A quadword, the way drawSprite3D reads it.
+    sdfVector4_t centre;
     sdfBillBoardUv_t uv;
     sdfBillBoardQuad_t offset;
     u32 color;
@@ -748,11 +806,11 @@ SDF_STATIC_ASSERT_OFFSETOF(sdfMatPacket_t, tex0Data, 0x40);
 SDF_STATIC_ASSERT_OFFSETOF(sdfMatPacket_t, clampData, 0x48);
 SDF_STATIC_ASSERT_OFFSETOF(sdfMatPacket_t, texTm, 0x68);
 
-using sdfCorePacketCbPtr_t = guest_ptr<struct sdfCorePacketCb_t>;
+using corePktCbPtr_t = guest_ptr<struct corePktCb_t>;
 
 // This build carries 64 bytes ahead of faceCount where the reconstructed HD header has only
 // tmSave, so every field from matPacketPtr on sits 0x3C past its HD offset.
-struct sdfCorePacketCb_t {
+struct corePktCb_t {
     u8 header[0x40];
     s16 faceCount;
     s16 pointCount;
@@ -765,14 +823,50 @@ struct sdfCorePacketCb_t {
     u32 color;
     f32 fdSoften;
     f32 fdBias;
-    u32 pointBuff;
+    u32 pointBuf0;
+    u32 pointBuf1;
+    u32 pointBuf2;
+    u32 pointCount0;
+    u32 pointCount1;
+    u32 unk120;
+    u32 unk124;
+    u32 unk128;
+    u32 unk132;
+    u32 unk136;
+    u32 unk140;
+    u32 payload;
+    u32 unk148;
+    u8 unk152[20];
+    f32 unk172;
+    u32 unk176;
+    sdfMatPacketPtr_t matPacket2;
+    u8 unk184[136];
 };
-SDF_STATIC_ASSERT_OFFSETOF(sdfCorePacketCb_t, pointCount, 0x42);
-SDF_STATIC_ASSERT_OFFSETOF(sdfCorePacketCb_t, matPacketPtr, 0x54);
-SDF_STATIC_ASSERT_OFFSETOF(sdfCorePacketCb_t, color, 0x58);
-SDF_STATIC_ASSERT_OFFSETOF(sdfCorePacketCb_t, fdSoften, 0x5C);
-SDF_STATIC_ASSERT_OFFSETOF(sdfCorePacketCb_t, fdBias, 0x60);
-SDF_STATIC_ASSERT_OFFSETOF(sdfCorePacketCb_t, pointBuff, 0x64);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, faceCount, 0x40);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, pointCount, 0x42);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, attrBits, 0x44);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, packetBits, 0x48);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, orgAttrBits, 0x4C);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, drawFaceCount, 0x50);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, matPacketPtr, 0x54);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, color, 0x58);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, fdSoften, 0x5C);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, fdBias, 0x60);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, pointBuf0, 0x64);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, pointBuf1, 0x68);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, pointBuf2, 0x6C);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, pointCount0, 0x70);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, pointCount1, 0x74);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, unk120, 0x78);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, unk124, 0x7C);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, payload, 0x90);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, unk148, 0x94);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, unk152, 0x98);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, unk172, 0xAC);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, unk176, 0xB0);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, matPacket2, 0xB4);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, unk184, 0xB8);
+static_assert(sizeof(corePktCb_t) == 0x140, "corePktCb_t is 0x140 in the database");
 
 // TEX0's texture function and whether the texture carries alpha.
 constexpr u32 sdfTex0Tfx(u64 r) { return u32((r >> 35) & 3); }
@@ -807,7 +901,6 @@ enum sdfVifCommand_t : u32 {
 // in the GS's own 0..255 units.
 
 /// sdfCorePacketGen's own threshold for a blend shape being worth applying.
-constexpr f32 sdfMorphEpsilon = 0.000001f;
 
 struct sdf3DLightParallelPacket_t {
     u64 dmatag;
@@ -872,8 +965,10 @@ struct sdfModelMorphList_t {
     s16 capacity;
     s16 elemSize;
     s16 growStep;
+    guest_ptr<struct sdfModelMorph_t> items;
 };
-SDF_STATIC_ASSERT_SIZE(sdfModelMorphList_t, 12);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelMorphList_t, count, 0x04);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelMorphList_t, items, 0x0C);
 
 // What sdfModelLinkOt switches on to pick a geometry path.
 enum sdfPacketKind_t : u8 {
@@ -1096,15 +1191,15 @@ SDF_STATIC_ASSERT_OFFSETOF(sdfTexHandle_t, image, 0x44);
 
 // The texture asset sdfTexSetEx is handed, and never writes to. It describes itself, so nothing has
 // to be read back out of the handle the call returns.
-using TMX_HEADER_PTR_t = guest_ptr<struct TMX_HEADER_t>;
+using sdfTexFilePtr_t = guest_ptr<struct sdfTexFile_t>;
 
-struct TMX_HEADER_t {
-    u8 fileType;
-    u8 compression;  // the low nibble is unused; the high nibble is where the data starts
-    s16 userId;
-    s32 fileSize;
-    u32 formatId;
-    s32 realSize;
+struct sdfTexFile_t {
+    u8 version;
+    u8 dataOffset;  // the low nibble is unused; the high nibble is where the data starts
+    u16 userId;
+    u32 fileSize;
+    u32 magic;
+    u32 reserved;
     u8 numOfCLUT;
     u8 CLUTFormat;
     s16 width;
@@ -1114,15 +1209,27 @@ struct TMX_HEADER_t {
     u16 mipmapParam;
     u8 flags;
     u8 texWrapMode;
-    u8 userArea[1];
-    u8 comment[1];
-    u8 pad[2];
+    u32 texId;
+    u32 clutId;
 };
-SDF_STATIC_ASSERT_SIZE(TMX_HEADER_t, 32);
-SDF_STATIC_ASSERT_OFFSETOF(TMX_HEADER_t, userArea, 0x1C);
-SDF_STATIC_ASSERT_OFFSETOF(TMX_HEADER_t, numOfCLUT, 0x10);
-SDF_STATIC_ASSERT_OFFSETOF(TMX_HEADER_t, width, 0x12);
-SDF_STATIC_ASSERT_OFFSETOF(TMX_HEADER_t, pixelFormat, 0x16);
+SDF_STATIC_ASSERT_SIZE(sdfTexFile_t, 0x24);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexFile_t, version, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexFile_t, dataOffset, 0x01);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexFile_t, userId, 0x02);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexFile_t, fileSize, 0x04);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexFile_t, magic, 0x08);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexFile_t, reserved, 0x0C);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexFile_t, numOfCLUT, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexFile_t, CLUTFormat, 0x11);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexFile_t, width, 0x12);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexFile_t, height, 0x14);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexFile_t, pixelFormat, 0x16);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexFile_t, numOfMipmap, 0x17);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexFile_t, mipmapParam, 0x18);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexFile_t, flags, 0x1A);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexFile_t, texWrapMode, 0x1B);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexFile_t, texId, 0x1C);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexFile_t, clutId, 0x20);
 
 // The engine skips this much past the header's own data offset before the CLUT.
 constexpr u32 sdfTmxDataGap = 64;
@@ -1191,11 +1298,12 @@ SDF_STATIC_ASSERT_OFFSETOF(fclSprite_t, Col, 0x14);
 // What a font glyph is drawn from, in place of a texture handle.
 using frGsTex_PTR_t = guest_ptr<struct frGsTex_t>;
 
+// Width2 and Height2 are TEX0's TW and TH, the log2 of the two above: measured 0x200 against 9.
 struct frGsTex_t {
     u32 Width;
-    u32 Width2;
+    u32 WidthLog2;
     u32 Height;
-    u32 Height2;
+    u32 HeightLog2;
     u32 Addr;
     u32 BufWidth;
 };

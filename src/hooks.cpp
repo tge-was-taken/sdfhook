@@ -16,6 +16,8 @@
 #include "gif.h"
 #include "unsupported.h"
 #include "libsdf.h"
+#include "libsdf_impl.h"
+#include "sink.h"
 #include "render/render_thread.h"
 #include "trace.h"
 
@@ -25,6 +27,43 @@ namespace sdfhook {
 namespace {
 
 LogChannel log("hooks");
+
+/// Points the sink at this call's frame and names the producer, for the length of one hook.
+struct SinkScope {
+    explicit SinkScope(HookContext& aHost, const char* aProducer) {
+        gSink.frame = aHost.frames.getFrame();
+        gSink.textures = &aHost.textures;
+        gSink.producer = aProducer;
+        gSink.apiDraws = &aHost.coverage.apiDraws;
+        gSink.unresolvedTextures = &aHost.coverage.unresolvedTextures;
+    }
+
+    ~SinkScope() {
+        gSink.frame = nullptr;
+        gSink.producer = "";
+    }
+
+    SinkScope(const SinkScope&) = delete;
+    SinkScope& operator=(const SinkScope&) = delete;
+};
+
+// The chain is finished here, so this is where a frame is done being built. sdfGrOtClose walks the
+// 85 tables and concatenates their tag lists; that order is the frame's.
+/// @fn sdfGrOtClose
+/// @note SLUS-20911 0x002AD010
+void closeShadowQueue(HookContext& h) {
+    Frame* frame = h.frames.getBuilding();
+    std::vector<xsdfDrawTag_t*> tags;
+    xsdfGrOtClose(tags);
+    if (!frame) return;
+    frame->order.clear();
+    frame->order.reserve(tags.size());
+    for (const xsdfDrawTag_t* tag : tags) {
+        frame->order.push_back({tag->kind == xsdfDrawTag_t::Kind::Mesh, tag->draw});
+    }
+}
+
+
 
 // Reading a packet that yielded nothing, rather than guessing at it.
 void dumpPacket(const LinkedPacket& packet, const char* by, const DmaTag& tag) {
@@ -155,7 +194,7 @@ void settleMeshState(HookContext& h, u32 aTag) {
 
 void collectPackets(HookContext& h) {
     GifParser parser(&h.coverage.gif);
-    sdfGsState_t& gs = h.model.getGsState();
+    sdfGsState_t& gs = gModel.gsState;
 
     for (const LinkedPacket& packet : h.frames.getPackets()) {
         const GifCounts before = h.coverage.gif;
@@ -187,7 +226,7 @@ void collectPackets(HookContext& h) {
         // Shadows arrive as an inline VIF stream, not a REF chain, so the type 1 path misses them.
         if (h.config->drawShadows && !verts && !stateOnly && std::strstr(by, "fldSdwDraw")) {
             const u32 qwc = tag.qwc;
-            if (h.model.fldSdwDraw(packet.addr + 16, packet.addr + 16 + 16 * qwc, gs,
+            if (readShadowStream(packet.addr + 16, packet.addr + 16 + 16 * qwc, gs,
                                    h.frames.getFrame())) {
                 h.coverage.shadowMeshes++;
             } else {
@@ -207,24 +246,10 @@ void collectPackets(HookContext& h) {
 }
 
 // Y is in half-height units, the same scale the draw space uses vertically.
-void submitSprite(HookContext& h, const char* producer, f32 x, f32 y, f32 w, f32 height, f32 u, f32 v,
-                f32 uw, f32 vh, Rgba color, u32 texFileHandle) {
-    Frame* frame = h.frames.getFrame();
-    // A producer naming no texture draws with the one sdf2DLinkTexPacket bound ahead of it.
-    const TexHandle named{texFileHandle ? texFileHandle : h.state.texture};
-    const TexHandle texHandle = h.textures.getHandle(named, frame);
-    // A named texture we never decoded draws flat. Counted by producer, so the gap names it.
-    if (named.addr && !texHandle.addr) h.coverage.unresolvedTextures[producer]++;
-    h.coverage.apiDraws++;
-    if (!frame) return;
-    DrawSprite sprite = DrawSprite::fromRect(x, y * 0.5f, w, height * 0.5f, u, v, u + uw, v + vh);
-    sprite.test = h.state.test;
-    sprite.otOffset = h.state.otOffset;
-    sprite.producer = producer;
-    sprite.setColor(color);
-    sprite.texHandle = texHandle;
-    sprite.alpha = h.state.alpha;
-    frame->addSprite(sprite);
+void submitSprite(HookContext& h, const char* producer, f32 x, f32 y, f32 w, f32 height, f32 u,
+                  f32 v, f32 uw, f32 vh, Rgba color, u32 texFileHandle) {
+    SinkScope scope(h, producer);
+    xDrwSprite2D(x, y, w, height, u, v, uw, vh, color, texFileHandle);
 }
 
 // (x, y, w, h, u, v, uw, vh, rgba, texHandle), the last two in stack slots. nbPnlSprite has the
@@ -272,44 +297,53 @@ int spriteFloatHook(pcsx2hook_regs* regs, void* user) {
 }
 
 // rsetAlpha takes a mode rather than a register, and resolves it through this table.
-GsAlpha alphaForMode(u32 mode) {
-    switch (mode) {
-        case 1: return GsAlpha::Additive;
-        case 2:
-        case 6: return GsAlpha::ReverseSubtract;
-        case 3: return GsAlpha(0x84);
-        case 4: return GsAlpha(0x06);
-        case 5: return GsAlpha(0x89);
-        case 10: return GsAlpha(0x2A);
-        case 20: return GsAlpha(0x4A);
-        case 0:
-        case 7:
-        case 8:
-        case 9:
-        case 11:
-        case 12:
-        case 13:
-        case 14:
-        case 15:
-        case 16:
-        case 17:
-        case 18:
-        case 19: return GsAlpha::Blend;
-        default: reportUnsupported("rsetAlpha mode", mode); return GsAlpha::Blend;
-    }
-}
 
 int sdf2DLinkTexPacketHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     const u32 texFileHandle = c.getArg(1);
-    static_cast<HookContext*>(user)->state.texture = texFileHandle;
+    gState.texture = texFileHandle;
     return PCSX2HOOK_CONTINUE;
 }
 
-int rsetAlphaHook(pcsx2hook_regs* regs, void* user) {
+/// Installs the registrar on all 85 tables. The guest runs this once at boot, which the
+/// savestates are past, so ours installs at attach as well.
+int sdfGrOtInitHook(pcsx2hook_regs*, void*) {
+    xsdfGrOtInit();
+    return PCSX2HOOK_CONTINUE;
+}
+
+int sdfGrOtCloseHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
-    const u32 mode = c.getArg(0);
-    static_cast<HookContext*>(user)->state.alpha = alphaForMode(mode);
+    HookContext& h = *static_cast<HookContext*>(user);
+    h.trace->onPrimEntry(h.symbols.getFunction(c.getPc()), c.getArg(0));
+    h.coverage.otCloseCalls++;
+    return PCSX2HOOK_CONTINUE;
+}
+
+/// The two registrars a table can carry: FIFO, and the AVL sort sdfModelSetOtCallbacks installs.
+/// Reached only through regFunc, so seeing one called is how our table learns which it is.
+int sdfGrOtNormalRegHook(pcsx2hook_regs* regs, void*) {
+    Context c{regs};
+
+    const u32 index = xsdfGrOtIndexOf(c.getArg(0));
+    if (xsdfGrOt_t* ot = xsdfGrOtGet(index)) ot->regFunc = &xsdfGrOtNormalReg;
+    return PCSX2HOOK_CONTINUE;
+}
+
+int sdfGrSortOtRegHook(pcsx2hook_regs* regs, void*) {
+    Context c{regs};
+
+    const u32 index = xsdfGrOtIndexOf(c.getArg(0));
+    if (xsdfGrOt_t* ot = xsdfGrOtGet(index)) ot->regFunc = &xsdfGrSortOtReg;
+    return PCSX2HOOK_CONTINUE;
+}
+
+int rsetAlphaHook(pcsx2hook_regs* regs, void*) {
+    Context c{regs};
+
+    const u32 aAlpha = c.getArg(0);
+    // No SinkScope: a state packet adds no draw, and getFrame() would acquire one.
+    xrsetAlpha(aAlpha);
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -320,7 +354,7 @@ int rsetOtOfsHook(pcsx2hook_regs* regs, void* user) {
 
     const s32 otofs = s32(c.getArg(0));
 
-    static_cast<HookContext*>(user)->state.otOffset = otofs;
+    xrsetOtOfs(u32(otofs));
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -328,13 +362,14 @@ int rsetOtOfsHook(pcsx2hook_regs* regs, void* user) {
 /// pass in call order, where our walk runs, so the flag needs no transmit-order settling.
 /// @fn rsetFrameMaskRgbOn
 /// @note SLUS-20911 0x0012A3F0
-int frameMaskOnHook(pcsx2hook_regs*, void* user) {
-    static_cast<HookContext*>(user)->state.frameMask = sdfFrameMaskRgb;
+int frameMaskOnHook(pcsx2hook_regs*, void*) {
+    // No SinkScope: a state packet adds no draw, and getFrame() would acquire one.
+    xrsetFrameMaskRgbOn();
     return PCSX2HOOK_CONTINUE;
 }
 
-int frameMaskOffHook(pcsx2hook_regs*, void* user) {
-    static_cast<HookContext*>(user)->state.frameMask = 0;
+int frameMaskOffHook(pcsx2hook_regs*, void*) {
+    xrsetFrameMaskRgbOff();
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -349,9 +384,7 @@ int rsetTestHook(pcsx2hook_regs* regs, void* user) {
     const u32 datm = c.getArg(5);
     const u32 ztst = c.getArg(7);
 
-    const u32 test = ate | (atst << 1) | (aref << 4) | (afail << 12) | (date << 14) |
-                     (datm << 15) | 0x10000u | (ztst << 17);
-    static_cast<HookContext*>(user)->state.test = test;
+    xrsetTest(ate, atst, aref, afail, date, datm, ztst);
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -385,20 +418,10 @@ int aDrawBoxGHook(pcsx2hook_regs* regs, void* user) {
     const u32 b3 = stack(18);
     const u32 a3 = stack(19);
 
-    h.coverage.apiDraws++;
-    Frame* frame = h.frames.getFrame();
-    if (!frame) return PCSX2HOOK_CONTINUE;
+    const u32 rgba[16] = {r0, g0, b0, a0, r1, g1, b1, a1, r2, g2, b2, a2, r3, g3, b3, a3};
 
-    DrawSprite sprite = DrawSprite::fromRect(f32(x), f32(y), f32(w), f32(height), 0, 0, 0, 0);
-    sprite.corner[0].color = Rgba{u8(r0), u8(g0), u8(b0), u8(a0)};
-    sprite.corner[1].color = Rgba{u8(r1), u8(g1), u8(b1), u8(a1)};
-    sprite.corner[2].color = Rgba{u8(r2), u8(g2), u8(b2), u8(a2)};
-    sprite.corner[3].color = Rgba{u8(r3), u8(g3), u8(b3), u8(a3)};
-    sprite.alpha = h.state.alpha;
-    sprite.test = h.state.test;
-    sprite.otOffset = h.state.otOffset;
-    sprite.producer = "aDrawBoxG";
-    frame->addSprite(sprite);
+    SinkScope scope(h, "aDrawBoxG");
+    xaDrawBoxG(x, y, w, height, rgba);
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -416,15 +439,8 @@ int aDrawBoxFHook(pcsx2hook_regs* regs, void* user) {
     const u32 b = c.getArg(6);
     const u32 a = c.getArg(7);
 
-    h.coverage.apiDraws++;
-    Frame* frame = h.frames.getFrame();
-    if (!frame) return PCSX2HOOK_CONTINUE;
-
-    DrawSprite sprite = DrawSprite::fromRect(f32(x), f32(y), f32(w), f32(height), 0, 0, 0, 0);
-    sprite.setColor(Rgba{u8(r), u8(g), u8(b), u8(a)});
-    sprite.alpha = h.state.alpha;
-    sprite.producer = "aDrawBoxF";
-    frame->addSprite(sprite);
+    SinkScope scope(h, "aDrawBoxF");
+    xaDrawBoxF(x, y, w, height, r, g, b, a);
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -443,23 +459,10 @@ int aDrawBoxF_DirectHook(pcsx2hook_regs* regs, void* user) {
     const u32 b = c.getArg(6);
     const u32 a = c.getArg(7);
 
-    h.coverage.apiDraws++;
-    Frame* frame = h.frames.getFrame();
-    if (!frame) return PCSX2HOOK_CONTINUE;
-
-    const f32 left = f32(x0) / 16.0f - kOffsetX;
-    const f32 right = f32(x1) / 16.0f - kOffsetX;
-    const f32 edge[2] = {f32(y0) / 16.0f - kOffsetY, f32(y1) / 16.0f - kOffsetY};
     if (!h.config->drawDirectBox) return PCSX2HOOK_CONTINUE;
-    for (f32 y : edge) {
-        DrawSprite sprite = DrawSprite::fromRect(left, y, right - left, 1.0f, 0, 0, 0, 0);
-        sprite.setColor(Rgba{u8(r), u8(g), u8(b), u8(a)});
-        sprite.alpha = h.state.alpha;
-        sprite.test = h.state.test;
-        sprite.otOffset = h.state.otOffset;
-        sprite.producer = "aDrawBoxF_Direct";
-        frame->addSprite(sprite);
-    }
+
+    SinkScope scope(h, "aDrawBoxF_Direct");
+    xaDrawBoxF_Direct(x0, y0, x1, y1, r, g, b, a);
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -477,116 +480,18 @@ int frCreateDrawFontPacketHook(pcsx2hook_regs* regs, void* user) {
     const u32 pUv = u32Ptr_t{c.getStackArgAddr(8)}.valueOr();
     const u32 pGsTex = u32Ptr_t{c.getStackArgAddr(9)}.valueOr();
 
-    h.coverage.apiDraws++;
-    Frame* frame = h.frames.getFrame();
-    if (!frame) return PCSX2HOOK_CONTINUE;
+    f32 uv[4] = {};
+    for (int i = 0; i < 4; i++) uv[i] = f32Ptr_t{pUv + u32(i) * 4}.valueOr();
+    frGsTex_PTR_t gsTex{pGsTex};
+    if (!gsTex) return PCSX2HOOK_CONTINUE;
+    frGsTex_t tex = *gsTex;
 
-    // frSwapColor reverses the bytes, which lands on the same order a DrawSprite color uses.
-    const Rgba color = Rgba::fromColorWord(Col);
-    const auto uv = [&](usize i) { return f32(s32(u32Ptr_t{pUv + u32(i) * 4}.valueOr())) / 16.0f; };
-
-    const frGsTex_t sheet = frGsTex_PTR_t{pGsTex}.valueOr();
-    // The palettes are static data, so they read whether or not the glyph uploads ran in the window.
-    h.textures.loadFontClut(pcsx2hook_find_symbol(h.runtime, "frFontClutTable"));
-    h.textures.wantFontSheet(sheet.Addr, sheet.BufWidth, sheet.Width, sheet.Height);
-    DrawSprite sprite = DrawSprite::fromRect(f32(X) / 16.0f, f32(Y) / 16.0f, f32(Width),
-                                             f32(Height), uv(0), uv(1), uv(2), uv(3));
-    sprite.setColor(color);
-    sprite.texHandle = h.textures.getFontSheet(sheet.Width, frame);
-    sprite.alpha = h.state.alpha;
-    sprite.producer = "frCreateDrawFontPacket";
-    frame->addSprite(sprite);
+    SinkScope scope(h, "frCreateDrawFontPacket");
+    xfrCreateDrawFontPacket(X, Y, Width, Height, Col, uv, &tex);
     return PCSX2HOOK_CONTINUE;
 }
 
-// A strip (TL, TR, BL, BR) into a cycle, so the third and fourth corners swap.
-/// sdfPrimLinkFt4(tag, color, prim, x0, y0, u0, v0, ... x3, y3, u3, v3, z, allocator).
-int sdfPrimLinkFt4Hook(pcsx2hook_regs* regs, void* user) {
-    Context c{regs};
-    HookContext& h = *static_cast<HookContext*>(user);
-    const auto stack = [&](usize i) { return u32Ptr_t{c.getStackArgAddr(i)}.valueOr(); };
-
-    const u32 aColor = c.getArg(1);
-    const u32 aPrim = c.getArg(2);
-    const s32 aX0 = s32(c.getArg(3));
-    const s32 aY0 = s32(c.getArg(4));
-    const s32 aU0 = s32(c.getArg(5));
-    const s32 aV0 = s32(c.getArg(6));
-    const s32 aX1 = s32(c.getArg(7));
-    const s32 aY1 = s32(stack(8));
-    const s32 aU1 = s32(stack(9));
-    const s32 aV1 = s32(stack(10));
-    const s32 aX2 = s32(stack(11));
-    const s32 aY2 = s32(stack(12));
-    const s32 aU2 = s32(stack(13));
-    const s32 aV2 = s32(stack(14));
-    const s32 aX3 = s32(stack(15));
-    const s32 aY3 = s32(stack(16));
-    const s32 aU3 = s32(stack(17));
-    const s32 aV3 = s32(stack(18));
-
-    h.coverage.apiDraws++;
-    Frame* frame = h.frames.getFrame();
-    if (!frame) return PCSX2HOOK_CONTINUE;
-
-    const Rgba color = Rgba::fromPacked(aColor);
-    DrawSprite sprite{};
-    const auto place = [&](int corner, s32 x, s32 y, s32 u, s32 v) {
-        sprite.corner[corner] = SpriteCorner{f32(x) / 16.0f - kOffsetX, f32(y) / 16.0f - kOffsetY,
-                                             f32(u) / 16.0f, f32(v) / 16.0f, color};
-    };
-    place(0, aX0, aY0, aU0, aV0);
-    place(1, aX1, aY1, aU1, aV1);
-    place(3, aX2, aY2, aU2, aV2);
-    place(2, aX3, aY3, aU3, aV3);
-    sprite.texHandle = h.textures.getHandle(TexHandle{h.state.texture}, frame);
-    sprite.alpha = sdfPrimAbe(aPrim) ? h.state.alpha : GsAlpha::Opaque;
-    sprite.producer = "sdfPrimLinkFt4";
-    frame->addSprite(sprite);
-    return PCSX2HOOK_CONTINUE;
-}
-
-/// sdfPrimLinkG4(tag, prim, x0, y0, color0, ... x3, y3, color3, z, allocator).
-int sdfPrimLinkG4Hook(pcsx2hook_regs* regs, void* user) {
-    Context c{regs};
-    HookContext& h = *static_cast<HookContext*>(user);
-    const auto stack = [&](usize i) { return u32Ptr_t{c.getStackArgAddr(i)}.valueOr(); };
-
-    const u32 aPrim = c.getArg(1);
-    const s32 aX0 = s32(c.getArg(2));
-    const s32 aY0 = s32(c.getArg(3));
-    const u32 aColor0 = c.getArg(4);
-    const s32 aX1 = s32(c.getArg(5));
-    const s32 aY1 = s32(c.getArg(6));
-    const u32 aColor1 = c.getArg(7);
-    const s32 aX2 = s32(stack(8));
-    const s32 aY2 = s32(stack(9));
-    const u32 aColor2 = stack(10);
-    const s32 aX3 = s32(stack(11));
-    const s32 aY3 = s32(stack(12));
-    const u32 aColor3 = stack(13);
-
-    h.coverage.apiDraws++;
-    Frame* frame = h.frames.getFrame();
-    if (!frame) return PCSX2HOOK_CONTINUE;
-
-    DrawSprite sprite{};
-    const auto place = [&](int corner, s32 x, s32 y, u32 rgba) {
-        sprite.corner[corner] = SpriteCorner{f32(x) / 16.0f - kOffsetX, f32(y) / 16.0f - kOffsetY,
-                                             0.0f, 0.0f, Rgba::fromPacked(rgba)};
-    };
-    place(0, aX0, aY0, aColor0);
-    place(1, aX1, aY1, aColor1);
-    place(3, aX2, aY2, aColor2);
-    place(2, aX3, aY3, aColor3);
-    sprite.alpha = sdfPrimAbe(aPrim) ? h.state.alpha : GsAlpha::Opaque;
-    sprite.producer = "sdfPrimLinkG4";
-    frame->addSprite(sprite);
-    return PCSX2HOOK_CONTINUE;
-}
-
-// fclDrawSpriteCore(...). X and Y are 12.4 in the draw space; extents are pixels, H in the
-// doubled vertical scale.
+// fclDrawSpriteCore(X, Y, W, H, pCol, pSprite, FlipFlag, AlphaFlag, FilterFlag, OtNo).
 int fclDrawSpriteCoreHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
@@ -596,105 +501,98 @@ int fclDrawSpriteCoreHook(pcsx2hook_regs* regs, void* user) {
     const s32 W = s32(c.getArg(2));
     const s32 H = s32(c.getArg(3));
     const u32 pCol = c.getArg(4);
-    const u32 pSprite = c.getArg(5);
+    const fclSprite_PTR_t pSprite{c.getArg(5)};
     const u32 FlipFlag = c.getArg(6);
     const u32 AlphaFlag = c.getArg(7);
 
-    h.coverage.apiDraws++;
-    Frame* frame = h.frames.getFrame();
-    if (!frame) return PCSX2HOOK_CONTINUE;
-
-    const fclSprite_PTR_t sprite2d{pSprite};
-    if (!sprite2d) return PCSX2HOOK_CONTINUE;
-
-    // Half a texel in, on every edge, the way the engine offsets them.
-    const f32 u0 = f32(u16(sprite2d->X) + 8) / 16.0f;
-    const f32 u1 = f32(u16(u32(sprite2d->X) >> 16) + 8) / 16.0f;
-    const f32 v0 = f32(u16(sprite2d->Y) + 8) / 16.0f;
-    const f32 v1 = f32(u16(u32(sprite2d->Y) >> 16) + 8) / 16.0f;
-
-    const f32 left = f32(X) / 16.0f - 0.5f;
-    const f32 top = f32(Y) / 16.0f - 0.25f;
-    DrawSprite sprite = DrawSprite::fromRect(left, top, f32(W), f32(H) * 0.5f,
-                                             (FlipFlag & 1) ? u1 : u0, (FlipFlag & 2) ? v1 : v0,
-                                             (FlipFlag & 1) ? u0 : u1, (FlipFlag & 2) ? v0 : v1);
-    const u32 colorWord =
-        pCol ? u32Ptr_t{pCol}.valueOr() : u32Ptr_t{pSprite + u32(offsetof(fclSprite_t, Col))}.valueOr();
-    sprite.setColor(Rgba::fromColorWord(colorWord));
-    sprite.texHandle = h.textures.getHandle(sprite2d->TexHandle, frame);
-    sprite.alpha = AlphaFlag == 1   ? GsAlpha::Additive
-                   : AlphaFlag == 2 ? GsAlpha::ReverseSubtract
-                                    : GsAlpha::Blend;
-    sprite.producer = "fclDrawSpriteCore";
-    frame->addSprite(sprite);
+    SinkScope scope(h, "fclDrawSpriteCore");
+    xfclDrawSpriteCore(X, Y, W, H, pCol, pSprite, FlipFlag, AlphaFlag);
     return PCSX2HOOK_CONTINUE;
 }
 
-// The frame already presented, put back over the screen at a fixed alpha or the caller's.
-void submitFrameFeedback(HookContext& h, u8 alpha) {
-    h.coverage.apiDraws++;
-    Frame* frame = h.frames.getFrame();
-    if (!frame) return;
-
-    DrawSprite sprite = DrawSprite::fromRect(-0.5f, -0.3125f, 512.0f, 224.0f, 0.0f, 0.0f,
-                                             kGuestWidth, kGuestHeight);
-    sprite.setColor(Rgba{0x80, 0x80, 0x80, alpha});
-    sprite.texHandle = TexHandle{kPreviousFrameHandle};
-    sprite.alpha = GsAlpha::Blend;
-    sprite.producer = "submitFrameFeedback";
-    frame->addSprite(sprite);
-}
-
+// The previous frame, drawn back over this one. Sampling it is what the feedback pass is for.
 int fldDrawFrameSpriteHook(pcsx2hook_regs*, void* user) {
-    submitFrameFeedback(*static_cast<HookContext*>(user), 48);
+    HookContext& h = *static_cast<HookContext*>(user);
+
+    SinkScope scope(h, "fldDrawFrameSprite");
+    xfldDrawFrameSprite(0x80);
     return PCSX2HOOK_CONTINUE;
 }
 
 int fldDrawFrameSpriteAlphaHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
-    const u32 alpha = c.getArg(0);
-    submitFrameFeedback(*static_cast<HookContext*>(user), u8(alpha));
-    return PCSX2HOOK_CONTINUE;
-}
-
-// Its tag tests NEVER with AFAIL=ZB_ONLY, so it writes depth and no color. Drawing the quad
-// would paint the frame black.
-int dds3LinkZClearDrawTagHook(pcsx2hook_regs*, void* user) {
-    static_cast<HookContext*>(user)->coverage.apiDraws++;
-    return PCSX2HOOK_CONTINUE;
-}
-
-// dds3DrawFade(): the color and level are globals and the quad is the whole screen. Alpha counts
-// down from 128, and nothing draws once the fade is clear.
-int dds3DrawFadeHook(pcsx2hook_regs*, void* user) {
     HookContext& h = *static_cast<HookContext*>(user);
 
-    const u32 fade = pcsx2hook_find_symbol(h.runtime, "fadergba");
-    if (!fade) {
-        reportUnsupported("fade globals not in the symbol map", 0);
-        return PCSX2HOOK_CONTINUE;
-    }
-    const u8 r = u8Ptr_t{fade}.valueOr();
-    const u8 g = u8Ptr_t{fade + 1}.valueOr();
-    const u8 b = u8Ptr_t{fade + 2}.valueOr();
-    const u8 state = u8Ptr_t{fade + 3}.valueOr();
-    if (state == 0) return PCSX2HOOK_CONTINUE;
+    const u32 Alpha = c.getArg(0);
 
-    h.coverage.apiDraws++;
-    Frame* frame = h.frames.getFrame();
-    if (!frame) return PCSX2HOOK_CONTINUE;
-
-    DrawSprite sprite = DrawSprite::fromRect(0, 0, kGuestWidth, kGuestHeight, 0, 0, 0, 0);
-    sprite.setColor(Rgba{r, g, b, u8(128 - state)});
-    sprite.alpha = GsAlpha::Blend;
-    sprite.producer = "dds3DrawFade";
-    frame->addSprite(sprite);
+    SinkScope scope(h, "fldDrawFrameSpriteAlpha");
+    xfldDrawFrameSprite(u8(Alpha));
     return PCSX2HOOK_CONTINUE;
 }
 
-// cmpDrawBoxG(x, y, Z, w, h, pCol, Ctxt, OtNo): a gouraud quad. x and y are 12.4 in draw space.
-/// @todo TODO.md M2: correct and still costs 6.2 points, so the table traces it instead.
-// cppcheck-suppress unusedFunction
+// dds3DrawFade(R, G, B, State): a full screen quad at the fade's own alpha.
+int dds3DrawFadeHook(pcsx2hook_regs* regs, void* user) {
+    Context c{regs};
+    HookContext& h = *static_cast<HookContext*>(user);
+
+    const u32 R = c.getArg(0);
+    const u32 G = c.getArg(1);
+    const u32 B = c.getArg(2);
+    const u32 State = c.getArg(3);
+
+    SinkScope scope(h, "dds3DrawFade");
+    xdds3DrawFade(u8(R), u8(G), u8(B), u8(State));
+    return PCSX2HOOK_CONTINUE;
+}
+
+/// Watched only: the z clear is a GS state the renderer does itself.
+int dds3LinkZClearDrawTagHook(pcsx2hook_regs* regs, void* user) {
+    Context c{regs};
+    HookContext& h = *static_cast<HookContext*>(user);
+    h.coverage.graph.record(h.symbols.getFunction(c.getPc()), h.symbols.getSite(c.getRa()));
+    return PCSX2HOOK_CONTINUE;
+}
+
+// sdfPrimLinkFt4(aColor, aPrim, aVertex, aAllocator): argument 2 is a GS PRIM word, not an ALPHA.
+int sdfPrimLinkFt4Hook(pcsx2hook_regs* regs, void* user) {
+    Context c{regs};
+    HookContext& h = *static_cast<HookContext*>(user);
+
+    const u32 aColor = c.getArg(0);
+    const u32 aPrim = c.getArg(1);
+    const u32 pVertex = c.getArg(2);
+
+    PrimVertex vertex[4] = {};
+    for (int i = 0; i < 4; i++) {
+        const guest_ptr<PrimVertex> at{pVertex + u32(i) * u32(sizeof(PrimVertex))};
+        if (at) vertex[i] = *at;
+    }
+
+    SinkScope scope(h, "sdfPrimLinkFt4");
+    xsdfPrimLinkFt4(aColor, aPrim, vertex, nullptr);
+    return PCSX2HOOK_CONTINUE;
+}
+
+// sdfPrimLinkG4(aPrim, aVertex, aAllocator): argument 1 is the PRIM word here.
+int sdfPrimLinkG4Hook(pcsx2hook_regs* regs, void* user) {
+    Context c{regs};
+    HookContext& h = *static_cast<HookContext*>(user);
+
+    const u32 aPrim = c.getArg(0);
+    const u32 pVertex = c.getArg(1);
+
+    PrimVertex vertex[4] = {};
+    for (int i = 0; i < 4; i++) {
+        const guest_ptr<PrimVertex> at{pVertex + u32(i) * u32(sizeof(PrimVertex))};
+        if (at) vertex[i] = *at;
+    }
+
+    SinkScope scope(h, "sdfPrimLinkG4");
+    xsdfPrimLinkG4(aPrim, vertex, nullptr);
+    return PCSX2HOOK_CONTINUE;
+}
+
+// cmpDrawBoxG(X, Y, Z, W, H, pCol, OtNo): four corner colors read through a pointer.
 int cmpDrawBoxGHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
@@ -705,21 +603,8 @@ int cmpDrawBoxGHook(pcsx2hook_regs* regs, void* user) {
     const s32 height = s32(c.getArg(4));
     const u32 pCol = c.getArg(5);
 
-    h.coverage.apiDraws++;
-    Frame* frame = h.frames.getFrame();
-    if (!frame) return PCSX2HOOK_CONTINUE;
-
-    DrawSprite sprite =
-        DrawSprite::fromRect(f32(x) / 16.0f, f32(y) / 16.0f, f32(w), f32(height) * 0.5f, 0, 0, 0, 0);
-    // The engine's order is top left, top right, bottom left, bottom right.
-    static constexpr int kCorner[4] = {0, 1, 3, 2};
-    for (int i = 0; i < 4; i++) {
-        sprite.corner[kCorner[i]].color =
-            Rgba::fromColorWord(u32Ptr_t{pCol + u32(i) * 4}.valueOr());
-    }
-    sprite.alpha = h.state.alpha;
-    sprite.producer = "cmpDrawBoxG";
-    frame->addSprite(sprite);
+    SinkScope scope(h, "cmpDrawBoxG");
+    xcmpDrawBoxG(x, y, w, height, pCol);
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -732,24 +617,8 @@ int cmpDrawTriGHook(pcsx2hook_regs* regs, void* user) {
     const u32 pY = c.getArg(1);
     const u32 pCol = c.getArg(3);
 
-    h.coverage.apiDraws++;
-    Frame* frame = h.frames.getFrame();
-    if (!frame) return PCSX2HOOK_CONTINUE;
-
-    DrawSprite sprite{};
-    for (int i = 0; i < 3; i++) {
-        const s32 x = s32(u32Ptr_t{pX + u32(i) * 4}.valueOr());
-        const s32 y = s32(u32Ptr_t{pY + u32(i) * 4}.valueOr());
-        const u32 colorWord = u32Ptr_t{pCol + u32(i) * 4}.valueOr();
-        sprite.corner[i] =
-            SpriteCorner{f32(x) / 16.0f, f32(y) / 16.0f, 0.0f, 0.0f,
-                         Rgba::fromColorWord(colorWord)};
-    }
-    // A sprite carries four corners, so the last repeats and its triangle collapses.
-    sprite.corner[3] = sprite.corner[2];
-    sprite.alpha = h.state.alpha;
-    sprite.producer = "cmpDrawTriG";
-    frame->addSprite(sprite);
+    SinkScope scope(h, "cmpDrawTriG");
+    xcmpDrawTriG(pX, pY, pCol);
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -787,7 +656,7 @@ int frCopyFontClutToVramHook(pcsx2hook_regs* regs, void* user) {
 
     const u32 pData = c.getArg(1);
 
-    h.textures.onFontClut(pData);
+    xfrCopyFontClutToVram(pData);
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -826,11 +695,11 @@ int sdfModelLinkOtHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
 
-    const u32 aOt = c.getArg(0);
+    const sdfModelOtPtr_t aOt{c.getArg(0)};
     const sdfModelRootNodePtr_t aRoot{c.getArg(1)};
 
-    h.trace->onSdfModelLinkOt(aOt, aRoot.addr);
-    h.model.sdfModelLinkOt(aRoot, h.frames.getFrame());
+    h.trace->onSdfModelLinkOt(aOt.addr, aRoot.addr);
+    xsdfModelLinkOt(aOt, aRoot, h.frames.getFrame());
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -839,7 +708,7 @@ int sdfCorePacketGenHook(pcsx2hook_regs* regs, void* user) {
     HookContext& h = *static_cast<HookContext*>(user);
     h.trace->onSdfCorePacketGen(c.getArg(0), c.getArg(1), c.getArg(2), c.getArg(3));
     // 0x2B91A8/0x2B91B0: the face-division terms arrive here as $f12 and $f13.
-    h.model.setFaceDivTerms(regs->fpr[12], regs->fpr[13]);
+    xcorePktSetFaceDivParm(regs->fpr[12], regs->fpr[13]);
     h.frames.beginGenerated();
     h.model.getTrace().countGuestGenerated();
     return PCSX2HOOK_CONTINUE;
@@ -884,17 +753,18 @@ int sdfTexSetExHook(pcsx2hook_regs* regs, void* user) {
 void sdfTexSetExPost(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
-    h.textures.add(TMX_HEADER_PTR_t{h.calls.leave(c).a[0]}, TexHandle{c.getResult()},
-                   h.frames.getFrame());
+    const sdfTexFilePtr_t aTex{h.calls.leave(c).a[0]};
+    const sdfTexHandlePtr_t handle{c.getResult()};
+    xsdfTexSetEx(aTex, handle, h.frames.getFrame());
 }
 
 /// The ramp reaches here on the caller's stack, the only point where its endpoints exist.
 int corePktApplyFaceDivColorHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
-    const sdfCorePacketCbPtr_t cb{c.getArg(0)};
+    const corePktCbPtr_t cb{c.getArg(0)};
     const sdfVector4Ptr_t aParm{c.getArg(1)};
-    h.model.readFaceDivParm(cb, aParm);
+    xcorePktApplyFaceDivColor(cb, aParm);
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -918,6 +788,10 @@ int sdfGrReqDrawHook(pcsx2hook_regs* regs, void* user) {
     h.trace->onSdfGrReqDraw(aTag, c.getArg(1));
     settleMeshState(h, aTag);
     collectPackets(h);
+    // sdfGrOtClose is not reached in a savestate run, so the queue closes here, where the chain is
+    // handed to the DMA. The order it yields is the frame's.
+    closeShadowQueue(h);
+    xsdfGrOtReset();
     h.frames.submit();
     return PCSX2HOOK_CONTINUE;
 }
@@ -930,7 +804,7 @@ int dds3DrawProcessHook(pcsx2hook_regs* regs, void* user) {
     h.model.beginFrame(h.trace->getFrame());
     // The clear color is a global the game may change between frames, so it is read per frame.
     const u32 backColor = pcsx2hook_find_symbol(h.runtime, "dds3BackColor");
-    if (backColor) h.state.background = Rgba::fromColorWord(u32Ptr_t{backColor}.valueOr());
+    if (backColor) gState.background = Rgba::fromColorWord(u32Ptr_t{backColor}.valueOr());
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -975,7 +849,7 @@ int sdfDrawTagLinkCallHook(pcsx2hook_regs* regs, void* user) {
 
 void sdfGsAllocFrameBuffPost(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
-    static_cast<HookContext*>(user)->textures.onFrameBuffer(sdfGsMemSlicePtr_t{c.getResult()});
+    xsdfGsAllocFrameBuff(sdfGsMemSlicePtr_t{c.getResult()});
 }
 
 // The one release point: sdfTexFreeDelayed only queues this, and every game-side caller lands
@@ -984,8 +858,8 @@ int sdfTexFreeHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
 
-    const TexHandle aHandle{c.getArg(0)};
-    h.textures.onFree(aHandle);
+    const sdfTexHandlePtr_t aHandle{c.getArg(0)};
+    xsdfTexFree(aHandle);
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -1009,7 +883,7 @@ int dds3BillboardTagLinkHook(pcsx2hook_regs* regs, void* user) {
     HookContext& h = *static_cast<HookContext*>(user);
 
     const dds3BillResourcePtr_t hResource{c.getArg(1)};
-    if (hResource) h.model.setBillboardTexture(hResource->hTex);
+    if (hResource) gModel.billboardTexture = hResource->hTex;
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -1036,7 +910,7 @@ int sdfBillBoardMakeNHook(pcsx2hook_regs* regs, void* user) {
 
     h.coverage.apiDraws++;
     if (h.config->noBillboards) return PCSX2HOOK_CONTINUE;
-    h.model.sdfBillBoardMakeN(aCenter, aNum, h.frames.getFrame());
+    xsdfBillBoardMakeN(aCenter, aNum, h.frames.getFrame());
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -1053,7 +927,7 @@ int drawSprite3DHook(pcsx2hook_regs* regs, void* user) {
 
     h.coverage.apiDraws++;
     if (h.config->noBillboards) return PCSX2HOOK_CONTINUE;
-    h.model.drawSprite3D(aTexHandle, aSprite, h.frames.getFrame());
+    xdrawSprite3D(aTexHandle, aSprite, h.frames.getFrame());
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -1069,7 +943,7 @@ int sdf3DPrimMakePolyHook(pcsx2hook_regs* regs, void* user) {
     if (!aPoly) return PCSX2HOOK_CONTINUE;
 
     if (!h.config->drawPrimPoly) return PCSX2HOOK_CONTINUE;
-    h.model.sdf3DPrimMakePoly(aPoly, h.frames.getFrame());
+    xsdf3DPrimMakePoly(aPoly, h.frames.getFrame());
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -1091,7 +965,7 @@ int fldDrawPoly3Hook(pcsx2hook_regs* regs, void* user) {
 
     h.coverage.apiDraws++;
     if (!h.config->poly) return PCSX2HOOK_CONTINUE;
-    h.model.fldDrawPoly3(point, color, h.frames.getFrame());
+    xfldDrawPoly3(point, color, h.frames.getFrame());
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -1104,7 +978,9 @@ int sdfTexDupHook(pcsx2hook_regs* regs, void* user) {
 void sdfTexDupPost(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
-    h.textures.onDuplicate(TexHandle{h.calls.leave(c).a[0]}, TexHandle{c.getResult()});
+    const sdfTexHandlePtr_t aSource{h.calls.leave(c).a[0]};
+    const sdfTexHandlePtr_t copy{c.getResult()};
+    xsdfTexDup(aSource, copy);
 }
 
 int observeHook(pcsx2hook_regs* regs, void* user) {
@@ -1152,8 +1028,11 @@ constexpr Entry kEngineEntries[] = {
     {"sdfModelDrawEnvLinkOt", &sdfModelDrawEnvLinkOtHook, nullptr},
     // Watched only, to find out whether any sample scene reaches a render target or a movie.
     {"dds3AllocRenderTexture", &observeHook, nullptr},
-    {"sdfIpuSetChainSource", &observeHook, nullptr},
-    {"sdfGrOtClose", &traceEntryHook, nullptr},
+    {"sdfIpuMakeToIpuDmaTag", &observeHook, nullptr},
+    {"sdfGrOtInit", &sdfGrOtInitHook, nullptr},
+    {"sdfGrOtClose", &sdfGrOtCloseHook, nullptr},
+    {"sdfGrOtNormalReg", &sdfGrOtNormalRegHook, nullptr},
+    {"sdfGrSortOtReg", &sdfGrSortOtRegHook, nullptr},
     {"sdfPrimLinkSprite", &observeHook, nullptr},
     {"sdfPrimLinkRect", &observeHook, nullptr},
     {"sdfPrimLinkG4", &sdfPrimLinkG4Hook, nullptr},
@@ -1211,9 +1090,9 @@ constexpr Entry kGameEntries[] = {
     {"DrwSprite2D", &spriteHook, nullptr},
     {"rsetAlpha", &rsetAlphaHook, nullptr},
     {"rsetTest", &rsetTestHook, nullptr},
-    {"ooyTestPoly3", &fldDrawPoly3Hook, nullptr},
-    {"ooyTestRGBMaskOn", &frameMaskOnHook, nullptr},
-    {"ooyTestRGBMaskOff", &frameMaskOffHook, nullptr},
+    {"fldDrawPoly3", &fldDrawPoly3Hook, nullptr},
+    {"rsetFrameMaskRgbOn", &frameMaskOnHook, nullptr},
+    {"rsetFrameMaskRgbOff", &frameMaskOffHook, nullptr},
     {"rsetOtOfs", &rsetOtOfsHook, nullptr},
     {"rsetTexa", &traceEntryHook, nullptr},
     {"frCreateDrawFontPacket_20550848", &frCreateDrawFontPacketHook, nullptr},
@@ -1222,7 +1101,7 @@ constexpr Entry kGameEntries[] = {
     {"cmpDrawTriG", &cmpDrawTriGHook, nullptr},
     // Traced, not drawn: its full-screen gouraud wash and row boxes are real draws, but drawing
     // them costs 6.2 points on the menu. See TODO M2.
-    {"cmpDrawBoxG", &traceEntryHook, nullptr},
+    {"cmpDrawBoxG", &cmpDrawBoxGHook, nullptr},
     {"dds3DrawFade", &dds3DrawFadeHook, nullptr},
     {"dds3LinkZClearDrawTag", &dds3LinkZClearDrawTagHook, nullptr},
     {"aDrawBoxF", &aDrawBoxFHook, nullptr},
@@ -1264,6 +1143,8 @@ Frame* FrameBuilder::getFrame() {
 void FrameBuilder::submit() {
     mSubmitted = true;
     mSubmittedFrames++;
+    log.debug("submit sprites={} meshes={} order={}", mBuilding ? mBuilding->sprites.size() : 0,
+              mBuilding ? mBuilding->meshes.size() : 0, mBuilding ? mBuilding->order.size() : 0);
     if (!mBuilding || !mRenderer) return;
     // Every producer reaches the frame through addSprite, so one place stamps them all.
     if (mTrace && mTrace->isOpen()) {
@@ -1300,7 +1181,7 @@ void installHooks(HookContext& context, Trace& trace, RenderThread* render) {
     context.symbols.attach(runtime);
     context.frames.attach(render, &context.textures, &trace);
     context.textures.attach(runtime, *context.config);
-    context.model.attach(runtime, *context.config, &context.textures, &trace, &context.state);
+    context.model.attach(runtime, *context.config, &context.textures, &trace);
 
     usize installed = 0;
     usize unnamed = 0;

@@ -2292,6 +2292,211 @@ right.
 - [ ] **B4: residual on the field scenes, +5.40 and +1.31 on ~11.** The worst tiles are the HUD
       corners. What is left after the texture work is a shading difference, not a missing feature.
 
+- [ ] **Moving the rest of the hooks into the shadow.** The 2D producers, the ordering-table queue
+      and the engine state setters are done: `rsetAlpha` (12/12 blocks, its mode table moved out of
+      hooks.cpp), `rsetOtOfs`, `rsetTest`, `rsetFrameMaskRgbOn`/`Off`, `sdf2DLinkTexPacket`, all
+      with every fact accounted and no opt-outs. 39 functions attributed.
+
+      **Re-exporting the symbol map silently unhooked four functions.** The IDB had renamed
+      `ooyTestRGBMaskOn`/`Off` to `rsetFrameMaskRgbOn`/`Off`, `ooyTestPoly3` to `fldDrawPoly3` and
+      `sdfIpuSetChainSource` to `sdfIpuMakeToIpuDmaTag`, but `kEngineEntries` still named the old
+      ones, so they installed nothing: 63 engine hooks became 62 and 36 game became 33. The only
+      symptom was field unknown realm drifting 5.127 to 5.163 and one extra word in the run log.
+      `attrcheck.py` now fails on a hook name the map does not carry, which is the guard that was
+      missing.
+
+      **The 3D reimplementations have left `ModelParser`.** 21 functions and the engine globals
+      they read moved to `libsdf_impl.cpp` as free functions over `gModel`; the class keeps the
+      format decoders and the trace, which the shadow reaches through `gConvert`. `NodeDraw` and
+      the VIF readers came out of the class with them. model.cpp fell 1960 to 754 lines, the
+      shadow grew 856 to 2089, and every scene scored identically before and after, which is what
+      says the move changed nothing. `sdfMatMakePacket`, `corePktSkinVertFirst`,
+      `corePktSetFaceDivParm` and `corePktApplyFaceDivColor` gained their `x` names and
+      attribution; the first three are fully accounted.
+
+      `corePktCb_t` is mirrored whole (0x140), under the database's own name rather than our
+      `sdfCorePacketCb_t`. **It is not `sdfCorePacket_t`**: the packet is 0x18 with `prim` at 0x10,
+      the cb is the 0x140 control block the generator fills for VU0, and confusing the two cost a
+      detour. `xsdfCorePacketGen` now builds one the way `corePktInitCb` does, which is what let
+      that function and the three below it be accounted at all.
+
+      **Everything is moved and accounted except two.** 50 functions carry `@fn`/`@note`, lint and
+      attrcheck are clean, and every scene scores as it did before the work started, which is what
+      says none of it changed behaviour. Fully accounted this stretch: `sdfCorePacketGen` (66/66,
+      74/74), `sdfModelLinkOt` (50/50, 43/43), `sdfModelTempPacketLinkOt` (44/44, 37/37),
+      `sdfModelLinkShapedDrawPacket` (13/13, 18/18), `corePktBuildFaceList` (20/20, 48/48),
+      `corePktEmitMultiTexPass` (24/24, 8/8), `drawSprite3D`, `sdfBillBoardMakeN`, the whole
+      texture layer, and about twenty packet and prim helpers.
+
+      **`walkChain` was merged back into `xsdfModelLinkOt`.** It is that function's inner loop, so
+      as a separate function the checker never saw its facts: the packet header reads and the
+      three-way type dispatch counted against `sdfModelLinkOt` and had nothing to satisfy them.
+
+      **Two remain, both blocked on the same disagreement.** `fldDrawPoly3` (8 of 24 facts) and
+      `sdf3DPrimMakePoly` (0 of 23) read `sdf3DPrimPolyParm_t`, and our `sdf3DPoly_t` disagrees
+      with the database's typing: ours is 0x2C with pointers at 0x14 and up and carries measured
+      values in its comments, IDA's is 0x4C with inline one-element arrays at 0x10, 0x20, 0x30.
+      **`sdf3DPrimMakePoly` fires in none of the savestates**, so the layout cannot be re-measured
+      now; a scene that reaches it is what settles which is right. Mirroring IDA's guess over
+      measured evidence was tried and backed out.
+
+      **`fldSdwDraw` is no longer claimed.** `xfldSdwDraw` never reimplemented it: the guest builds
+      the shadow geometry and our function reads the VIF stream it linked, the way
+      `readVifStreamMesh` reads a model's. It is now `readShadowStream`, says so, and the symbol
+      left `ida_facts.py`'s targets, since nothing reimplements it.
+
+- [x] **A1 stage 3: every scene draws from the shadow queue.** `SDF_ORDER` defaults to `q`, and
+      the order is what `xsdfGrOtClose` concatenates out of the 85 tables rather than a sort of
+      ours. The queue is **exact**: ordered draws equal frame draws in every scene measured
+      (field 8109, battle 9795, menu 5586), so nothing is missed and nothing is counted twice.
+
+      | scene | sort | queue |
+      |---|---|---|
+      | field underground facility | 4.272 | **4.267** |
+      | field unknown realm | 5.125 | 5.127 |
+      | battle unknown realm | 5.354 | 5.354 |
+      | the other three | unchanged | unchanged |
+
+      **What the earlier boundary problem actually was.** Not a boundary: every draw was being
+      registered twice, once by the producer's own tag and once by the sink's. Menu main gave it
+      away at exactly 2x (11172 against 5586). The sink now stamps the producer's tag with the draw
+      index and the producer registers it, which is what the guest does; the sink registers nothing.
+
+      **The registration hooks pay for themselves.** `sdfGrOtInit` is called only from
+      `dds3FirstProcess`, which runs at boot, so a savestate run never observes it: the tables had
+      no registrar and every shadow registration was silently a no-op. We install them ourselves
+      now. `sdfGrOtClose` is called from `dds3DrawProcess` per the database and **never reaches our
+      hook in any sample scene**, so the queue is closed at `sdfGrReqDraw` instead, which is where
+      the frame is submitted anyway.
+
+      Hooking `sdfGrOtNormalReg` and `sdfGrSortOtReg` gives A1 stage 1's check, now a row of the run
+      summary: 29 tables take normal registrations and exactly one (table 40) is sorted, matching
+      `sdfModelSetOtCallbacks` overriding one table per model group. The base the game passes is
+      **0x2F5F18**, confirming the IDB correction from the running game rather than from the
+      disassembly.
+
+      Two more index bugs found by measuring rather than by eye: `sdfBillBoardMakeN` used the node's
+      0..3 as a global table index, which cost battle 5.354 to 7.462; and `otMax` (default 3) met a
+      global index of 34 and blanked every 3D scene.
+
+- [x] **A1 stages 1-2 landed as a shadow of SDF, and the hooks are now transport only.**
+      `src/libsdf_impl.{h,cpp}` reimplements the engine's own functions with an `x` prefix, so
+      `xsdfPrimLinkFt4` and `sdfPrimLinkFt4` never read as the same symbol. The hooks extract
+      arguments and call; `SinkScope` names the producer and counts the draw, so a reimplementation
+      counts nothing, traces nothing and never sees a `Frame`.
+
+      **18 functions, every fact accounted, zero opt-outs.** Allocation is modelled rather than
+      excused, though the model differs (a pool of `xsdfPacket_t` against the guest's bump allocator
+      over a recycled arena). The last two opt-outs were `dds3DrawEnv_t+0x1300`, closed by mirroring
+      `sdfGrStdDrawEnv_t` (44 bytes, all packet pointers) and `dds3DrawEnv_t` (stride 7136, only
+      `stdDrawEnv` modelled) rather than excusing them, which is what the skill asks for a missing
+      struct.
+
+      The queue is the engine's: `xsdfGrOtTable[85]`, `xsdfGrOtNormalReg` FIFO, `xsdfGrSortOtReg`
+      diverting the 0xFFFF sentinel to `noSortTag`, `xsdfDrawTagInit`, `xsdfGrJoinDrawTag`. It is
+      registered into but not yet emitted from: the renderer still draws `frame->sprites` in its own
+      order, which is why the score did not move. **Stage 3 is emitting from the tables.**
+
+      **Five checker defects this exposed**, each of which had been under-counting silently:
+
+      - `assets/SLUS-20911.facts` was **0 bytes**, so `guestcheck.py` passed vacuously for every
+        function in the tree. `ida_facts.py` was being run through `ida.py py`, which execs inside a
+        function scope, so its top-level `def`s became locals and `emit` died with a `NameError`,
+        truncating the file it holds open. The skill's own `mcp__ida__py_exec_file` is the fix.
+      - `guestcheck` bound a symbol to the **call site** in hooks.cpp rather than the definition,
+        because its `define` regex let leading whitespace through.
+      - `body()` collected from the brace, so a multi-line signature's parameters were invisible and
+        every field read through them went unaccounted.
+      - `DECL` did not recognise `T* name`, only `guest_ptr<T>` and bare `T name`.
+      - `ALIAS` did not allow `guest_ptr<struct T>`, which is how **20** of libsdf.h's aliases are
+        written, so those types resolved to nothing.
+
+      `attrcheck.py` now checks the `@note` address against the map. It caught **11** addresses I
+      had invented while writing these, one off by 0x11990.
+
+      **Four database corrections**, all with the evidence on the item:
+
+      - `dds3LightParam2` was declared 64 bytes and owned 56, overrunning `sdfGrOtTable`. This is
+        what made seven producers report a phantom `read sdf3DLight_t+0x30`; that count is now zero.
+      - `sdfGrOtTable` created as `sdfGrOt_t[85]` at **0x2F5F18**, which is `sdfGrOtInit`'s actual
+        argument and ends exactly at `pModelOt` (0x2F69B8). A1's note of 0x2F5F00 is wrong.
+      - `unk_515151` was never an address: it is the immediate 0x515151, the GIF REGS nibble list
+        `sdf2DMakePrimPacketHeader` takes with `aNumOfRegs` 6. Retyped as a number.
+      - `unk_5570C0`/`qword_5570C8` named `dds3FadePacket`, 0x160 bytes to `dds3LightColor`, with
+        `dds3DrawFade` its only referrer.
+
+      Sweep unchanged throughout, which is what stage 2 requires: battle 5.354, underground 4.272,
+      unknown realm 5.125, loading 2.080, menu 11.785, title 5.574.
+
+- [ ] **A1: the ordering tables are the engine's own command queue, and our two draw lists are an
+      approximation of it.** Surveyed against the IDB. SDF already has the structure, so the work is
+      to stop reconstructing it.
+
+      **The queue.** `dds3FirstProcess` calls `sdfGrOtInit(0x2F5F00, 0x55)` every frame: **85
+      ordering tables**, 32 bytes each, `next`-linked in address order. A `sdfDrawTag_t` is the
+      command list itself, a `head`/`tail` DMA chain plus a `z` key and side slots for
+      `lightPacket`, `fogPacket` and `texPacket[2]`. `sdfGrOtClose` walks all 85 in order and
+      concatenates every tag list into one chain; `sdfGrReqDraw` pushes it into the three-slot ring
+      and `sdfGrDrawFrame` sends it. `sdfModelOt_t` (11 groups at `0x2F69B8`) only names four of the
+      85 apiece.
+
+      **Registration is a closed set of two functions.** `sdfGrOtInit` installs `sdfGrOtNormalReg`
+      on all 85 (FIFO append); `sdfModelSetOtCallbacks`, reached only from `sdfModelOtInit`,
+      overrides `ot[1]` of each model group with `sdfGrSortOtReg` (AVL on `tag->z`, sentinel
+      `0xFFFF` diverted to `noSortTag`). Each is written from exactly one place, so hooking the two
+      catches every registration in the game with `(ot, tag)` in the arguments, and the global table
+      index is `(ot - 0x2F5F00) / 32`. This is the piece we have no equivalent of, and it is two
+      hooks rather than one per producer.
+
+      **`otIndex` and `otOffset` are the same number, and we hold two.** `DrwSprite2D` at
+      `0x1289E0` does `ot = 0x2F5F00 + (rsetFrameMaskOtOffset << 5)` then calls `regFunc` at `+0x10`,
+      so the 2D `otOffset` indexes the same 85. Ours is a group-local 0..3 on meshes and a separate
+      offset on sprites, which is why `sdfGsStateForOt` has to guess ALPHA and TEST from a
+      four-valued index with a `default:`.
+
+      **Emit order inside a sorted table is not a plain sort.** `sdfGrSortOtSetup` emits `noSortTag`
+      first, and that list is built by prepending, so it comes out in **reverse registration order**;
+      then the AVL walk, which by the comparison in `sdfSortOtAvlRegist` (`v10 >= z` goes right,
+      traversal is left-node-right) is **descending z**, with equal keys chained LIFO. The other 81
+      tables do not sort at all. The comment at `renderer.cpp:678` says the tables sort by the tag's
+      z, and that is true of eleven of them.
+
+      **Light and fog are a state diff, not a per-draw property.** `sdfGrJoinDrawTag` splices a light
+      or fog packet at a tag boundary only where the two tags disagree. `DrawMesh` carries a full
+      `MeshLighting` and `MeshFog` copy per mesh instead.
+
+      **Producers, for scale.** 247 static callers of the five `sdfDrawTagLink*` entry points, 25 of
+      them in `sdf*`; 213 static callers of `sdfGrAllocPacketBuff`; **29 producers observed** in
+      `dumps/trace.jsonl`. The queue rework does not touch that list, which is the point: producers
+      keep handing over arguments and the tables stop being ours to invent.
+
+      **Staging.** Each stage is measurable on its own and the first two must not move the score.
+
+      1. **Observe.** Hook `sdfGrOtNormalReg` and `sdfGrSortOtReg`, record `(table, tag, z, mode)`
+         per frame, add the counts to the summary row. Check the reconstructed concatenation against
+         the DMA chain `gif.cpp` already walks, which resolves 654 of 654 linked packets a frame. A
+         mismatch here says the model is wrong before anything depends on it. No render change.
+      2. **Key by the real table.** Stamp every `DrawMesh` and `DrawSprite` with the global 0..84
+         index and the tag address, replacing `otIndex` and `otOffset`. Keep the existing sort.
+         **A score change at this stage is a bug**, since nothing about drawing has changed yet.
+      3. **Adopt the engine's emit order.** Tables in index order; within a sorted table the
+         `noSortTag` run reversed, then descending z with LIFO ties; the other tables in
+         registration order. First stage that can move the score, and the first that can regress
+         2D against 3D interleaving.
+      4. **Key GS state off the table.** `sdfModelSetDrawEnv` builds one ALPHA/TEST pair per table,
+         so `sdfGsStateForOt` reads the env rather than switching on 0..3 with a default.
+      5. **Light and fog as state commands**, spliced by the `sdfGrJoinDrawTag` rule instead of
+         copied per mesh. Only after 1 through 4, since it depends on tag adjacency being right.
+
+      **What it costs.** The arena recycles: `sdfGrSetupPacketBuff` resets the bump pointer per frame
+      id and alternates two buffers, so a tag address is unique only within a frame and must be
+      scoped that way. A tag we build from a producer hook has no guest address until it is linked,
+      which is the problem `DrawMesh::linked` and `linkIndex` already work around; the new structure
+      inherits it rather than solving it.
+
+      **What not to do.** The tables must be read from the registration hooks, never rebuilt by
+      walking the DMA chain. That is `gif.cpp`'s job and it stays a coverage check.
+
 ## Done
 
 - **Every branch of `sdfModelLinkOt` is modelled**, including the ones no sample scene reaches, so

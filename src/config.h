@@ -109,8 +109,9 @@ struct Config {
     /// 'b' keeps back faces out, 'f' flips which side that is, 'n' draws both.
     char cull = 'b';
 
-    /// 'f' draws nearest first, 'b' farthest first, 'n' leaves submission order alone.
-    char meshOrder = 'b';
+    /// 'q' takes the shadow queue's order, 'f' nearest first, 'b' farthest first, 'n'
+    /// leaves submission order alone.
+    char meshOrder = 'q';
 };
 
 }  // namespace sdfhook

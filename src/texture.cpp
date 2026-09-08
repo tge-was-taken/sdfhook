@@ -54,30 +54,29 @@ void unswizzleClut(u8 (*clut)[4]) {
 }  // namespace
 
 // Keyed by handle because that is the pointer DrwSprite2D is later handed; texId is not unique.
-void TextureCache::add(TMX_HEADER_PTR_t aTex, TexHandle handle, Frame* frame) {
-    if (!handle.addr || !aTex) return;
+void TextureCache::add(const Asset& aAsset, TexHandle handle, Frame* frame) {
+    if (!handle.addr) return;
     if (mUploaded.count(handle)) return;
 
-    const TMX_HEADER_t& tmx = *aTex;
-    const u32 width = u32(tmx.width);
-    const u32 height = u32(tmx.height);
+    const u32 width = aAsset.width;
+    const u32 height = aAsset.height;
     if (!width || !height || width > kMaxDimension || height > kMaxDimension) {
         mFailed++;
         return;
     }
 
-    const bool fourBit = tmx.pixelFormat == sdfPsmt4;
-    const bool paletted = fourBit || tmx.pixelFormat == sdfPsmt8;
-    if (!paletted && tmx.pixelFormat != sdfPsmct32) {
-        reportUnsupported("TMX pixelFormat", tmx.pixelFormat);
+    const bool fourBit = aAsset.pixelFormat == sdfPsmt4;
+    const bool paletted = fourBit || aAsset.pixelFormat == sdfPsmt8;
+    if (!paletted && aAsset.pixelFormat != sdfPsmct32) {
+        reportUnsupported("TMX pixelFormat", aAsset.pixelFormat);
         mFailed++;
         return;
     }
-    const bool clut16 = tmx.CLUTFormat == sdfPsmct16 || tmx.CLUTFormat == sdfPsmct16s;
+    const bool clut16 = aAsset.clutFormat == sdfPsmct16 || aAsset.clutFormat == sdfPsmct16s;
     const u32 clutEntries = fourBit ? 16 : 256;
-    const u32 clutBytes = paletted ? tmx.numOfCLUT * clutEntries * (clut16 ? 2 : 4) : 0;
+    const u32 clutBytes = paletted ? aAsset.numOfCLUT * clutEntries * (clut16 ? 2 : 4) : 0;
 
-    const u32 dataStart = aTex.addr + (tmx.compression & 0xF0) + sdfTmxDataGap;
+    const u32 dataStart = aAsset.dataStart;
     const usize texels = usize(width) * height;
     const usize pixelBytes = fourBit ? texels / 2 : (paletted ? texels : texels * 4);
 
@@ -90,7 +89,7 @@ void TextureCache::add(TMX_HEADER_PTR_t aTex, TexHandle handle, Frame* frame) {
     }
 
     log.debug("tex {:08X} psm {:#x} clutFormat {:#x} numOfCLUT {} {}x{}", handle.addr,
-              tmx.pixelFormat, tmx.CLUTFormat, tmx.numOfCLUT, width, height);
+              aAsset.pixelFormat, aAsset.clutFormat, aAsset.numOfCLUT, width, height);
 
     // Rows, not tiles: the GS swizzles as the transfer lands.
     u8 clut[256][4] = {};
@@ -124,7 +123,7 @@ void TextureCache::add(TMX_HEADER_PTR_t aTex, TexHandle handle, Frame* frame) {
     mUploaded.insert(handle);
     if (!mDumpDir.empty()) {
         const std::string name = std::format("{}/tex_{:08X}_{}x{}_psm{:02X}.png", mDumpDir,
-                                             handle.addr, width, height, tmx.pixelFormat);
+                                             handle.addr, width, height, aAsset.pixelFormat);
         writePng(name.c_str(), width, height, upload.rgba.data(), true);
     }
     if (frame) frame->textureUploads.push_back(std::move(upload));

@@ -51,7 +51,17 @@ public:
     void onDuplicate(TexHandle source, TexHandle copy);
 
     /// Only callable during a load: afterwards the engine keeps the GS allocation alone.
-    void add(TMX_HEADER_PTR_t aTex, TexHandle handle, Frame* frame);
+    /// What the shadow read out of the asset header, so the cache only decodes.
+    struct Asset {
+        u32 width = 0;
+        u32 height = 0;
+        u8 pixelFormat = 0;
+        u8 clutFormat = 0;
+        u8 numOfCLUT = 0;
+        u32 dataStart = 0;
+    };
+
+    void add(const Asset& aAsset, TexHandle handle, Frame* frame);
 
     /// Glyphs upload one at a time, so the sheet is assembled here and keyed by its address.
     void onGlyph(u32 dstX, u32 dstY, u32 width, u32 height, u32 dataAddr);

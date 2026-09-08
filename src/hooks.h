@@ -136,6 +136,10 @@ public:
 
     Frame* getFrame();
 
+    /// The frame already under construction, never acquiring one. A hook that only wants to read
+    /// what has been built must use this: getFrame() takes a frame from the ring.
+    Frame* getBuilding() const { return mBuilding; }
+
     void link(const LinkedPacket& packet) {
         // The engine links a generated packet straight after generating it, which is the only
         // thing tying our nth to its address: it builds its own output buffer.
@@ -196,6 +200,18 @@ struct Coverage {
     /// Producers that named a texture the cache had nothing for.
     std::map<std::string, u64> unresolvedTextures;
 
+    /// Where sdfGrOtInit put the tables, and what the engine registered into each, so our own
+    /// assignment can be checked against the game's rather than assumed.
+    u32 otBase = 0;
+    std::map<u32, u64> guestRegistrations;
+    std::map<u32, u64> guestSortRegistrations;
+
+    /// Draws the shadow queue ordered, against the draws the frames actually carried, which is
+    /// what says the queue is complete rather than merely populated.
+    u64 otCloseCalls = 0;
+    u64 orderedDraws = 0;
+    u64 frameDraws = 0;
+
     /// fldSdwDraw's inline VIF streams, read and refused, so a shadow pass that decodes short says
     /// so rather than rendering fewer shadows in silence.
     u64 shadowMeshes = 0;
@@ -213,7 +229,6 @@ struct HookContext {
     TextureCache textures;
     CallStack calls;
     ModelParser model;
-    RenderState state;
     Coverage coverage;
 };
 // o32: the first four arguments are in registers, the rest on the stack.

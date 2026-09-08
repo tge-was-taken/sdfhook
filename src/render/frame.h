@@ -10,22 +10,6 @@
 
 namespace sdfhook {
 
-// A packed GS color. Alpha is in the PS2's own range, where 0x80 is opaque.
-struct Rgba {
-    u8 r, g, b, a;
-
-    /// 0xRRGGBBAA byte-reversed for the GS, as cmpExpandColor and frSwapColor do it.
-    static Rgba fromColorWord(u32 value) {
-        return Rgba{u8(value >> 24), u8(value >> 16), u8(value >> 8), u8(value)};
-    }
-
-    /// Already in GS order, red in the low byte.
-    static Rgba fromPacked(u32 value) {
-        return Rgba{u8(value & 0xFF), u8((value >> 8) & 0xFF), u8((value >> 16) & 0xFF),
-                    u8((value >> 24) & 0xFF)};
-    }
-};
-
 using TexHandle = guest_ptr<sdfTexHandle_t>;
 using Matrix4Ptr_t = guest_ptr<struct Matrix4>;
 
@@ -254,6 +238,10 @@ struct DrawMesh {
     bool reverseFacing = false;
     u8 otIndex = 0;
 
+    /// The packet's own 0..3, which sdfGsStateForOt still keys on. otIndex is the global 0..84
+    /// the queue registers into. See TODO.md A1 stage 4.
+    u8 otLocal = 0;
+
     bool isTwoSided() const { return (attrBits & sdfCoreAttrTwoSided) != 0; }
 };
 
@@ -281,6 +269,13 @@ struct Frame {
     std::vector<DrawMesh> meshes;
     std::vector<TextureUpload> textureUploads;
 
+    /// What xsdfGrOtClose concatenated out of the 85 tables: the frame's draw order.
+    struct Ordered {
+        bool mesh;
+        u32 index;
+    };
+    std::vector<Ordered> order;
+
 
     /// Adding through these keeps the two lists mergeable, so no caller remembers the sequence.
     void addSprite(DrawSprite sprite) {
@@ -299,6 +294,7 @@ struct Frame {
         sprites.clear();
         meshes.clear();
         textureUploads.clear();
+        order.clear();
     }
 };
 

@@ -123,6 +123,24 @@ void writeRunSummary(const sdfhook::HookContext& hooks) {
         .addUint("apiDraws", hooks.coverage.apiDraws)
         .addUint("unsupported", sdfhook::getUnsupportedCount());
 
+    // A1 stage 1: what the engine registered into each table, beside what we did, so the shadow
+    // queue is checked against the game rather than assumed to match it.
+    row.beginObject("orderingTables")
+        .addHexDigits("base", hooks.coverage.otBase, 8)
+        .addUint("otCloseCalls", hooks.coverage.otCloseCalls)
+        .addUint("orderedDraws", hooks.coverage.orderedDraws)
+        .addUint("frameDraws", hooks.coverage.frameDraws);
+    row.beginObject("guestRegistered");
+    for (const auto& [table, count] : hooks.coverage.guestRegistrations) {
+        row.addUint(std::to_string(table).c_str(), count);
+    }
+    row.endObject();
+    row.beginObject("guestSorted");
+    for (const auto& [table, count] : hooks.coverage.guestSortRegistrations) {
+        row.addUint(std::to_string(table).c_str(), count);
+    }
+    row.endObject().endObject();
+
     row.beginObject("gif");
     static const char* const kPrimNames[] = {"point",    "line",   "lineStrip", "tri",
                                              "triStrip", "triFan", "sprite",    "unknown"};

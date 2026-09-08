@@ -88,7 +88,7 @@ Config Config::fromEnvironment() {
     config.recoverTexturesFromGs = !flag("SDF_NO_GS_RECOVER");
 
     config.cull = text("SDF_CULL", "b")[0];
-    config.meshOrder = text("SDF_ORDER", "b")[0];
+    config.meshOrder = text("SDF_ORDER", "q")[0];
     return config;
 }
 

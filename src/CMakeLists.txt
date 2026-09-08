@@ -19,6 +19,8 @@ add_executable(sdfhook
 	guest_ptr.cpp
 	log.cpp
 	gif.cpp
+	libsdf_impl.cpp
+	sink.cpp
 	model.cpp
 	image.cpp
 	texture.cpp

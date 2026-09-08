@@ -677,22 +677,34 @@ void Renderer::drawMeshes(const Frame& frame) {
 
     // The tables sort by the tag's z before transmitting, so submission order is not draw order.
     // Stable, so equal depths keep their build order.
+    // The shadow queue is the engine's own: xsdfGrOtClose walked the 85 tables in index order and
+    // concatenated their tag lists, so this is the order the hardware would transmit.
     mOrder.clear();
     mOrder.reserve(frame.meshes.size());
-    for (usize index = firstMesh; index < frame.meshes.size() && index <= lastMesh; index++) {
+    const auto wanted = [&](usize index) {
+        if (index < firstMesh || index > lastMesh || index >= frame.meshes.size()) return false;
         if (!drawWanted(mConfig->drawOnly, index, sdfDecodeTex0(frame.meshes[index].tex0).tbp)) {
-            continue;
+            return false;
         }
-        if (frame.meshes[index].otIndex <= mConfig->otMax) mOrder.push_back(index);
-    }
-    if (mConfig->meshOrder != 'n') {
-        const bool nearFirst = mConfig->meshOrder == 'f';
-        std::stable_sort(mOrder.begin(), mOrder.end(), [&](usize a, usize b) {
-            const DrawMesh& x = frame.meshes[a];
-            const DrawMesh& y = frame.meshes[b];
-            if (x.otIndex != y.otIndex) return x.otIndex < y.otIndex;
-            return nearFirst ? x.sortZ < y.sortZ : x.sortZ > y.sortZ;
-        });
+        return frame.meshes[index].otLocal <= mConfig->otMax;
+    };
+    if (mConfig->meshOrder == 'q' && !frame.order.empty()) {
+        for (const Frame::Ordered& at : frame.order) {
+            if (at.mesh && wanted(at.index)) mOrder.push_back(at.index);
+        }
+    } else {
+        for (usize index = firstMesh; index < frame.meshes.size() && index <= lastMesh; index++) {
+            if (wanted(index)) mOrder.push_back(index);
+        }
+        if (mConfig->meshOrder != 'n') {
+            const bool nearFirst = mConfig->meshOrder == 'f';
+            std::stable_sort(mOrder.begin(), mOrder.end(), [&](usize a, usize b) {
+                const DrawMesh& x = frame.meshes[a];
+                const DrawMesh& y = frame.meshes[b];
+                if (x.otLocal != y.otLocal) return x.otLocal < y.otLocal;
+                return nearFirst ? x.sortZ < y.sortZ : x.sortZ > y.sortZ;
+            });
+        }
     }
 
     const int billboard = glGetUniformLocation(mMeshProgram, "uBillboard");
