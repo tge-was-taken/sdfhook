@@ -928,11 +928,11 @@ void xcmpDrawBoxG(s32 aX, s32 aY, s32 aW, s32 aH, u32 aPCol) {
     xsdfDrawTag_t* tag = xsdfAllocDrawTag();
     xsdfDrawTagInit(tag);          // 0x23A2EC
     xsdfDrawTagLink(tag, packet);  // 0x23A2F8
+    gSink.addSprite(tag, prim->sprite);
     if (ot->regFunc) {
         tag->sequence = gSequence++;
         ot->regFunc(ot, tag);  // 0x23A304, 0x23A308
     }
-    gSink.addSprite(tag, prim->sprite);
 }
 
 /// @fn cmpDrawTriG

@@ -133,7 +133,12 @@ def conditionals(chart):
 
     def ipdom(a):
         cand = post.get(a, set()) - {a}
-        return min(cand, key=lambda x: len(post[x])) if cand else None
+        # The nearest post dominator is the one with the most post dominators of
+        # its own; the exit has the fewest, so min() picks the exit every time.
+        return max(cand, key=lambda x: len(post[x])) if cand else None
+
+    # A loop's pre test is the loop's own condition, which a for statement already carries.
+    headers = {x.start_ea for b in chart for x in b.succs() if x.start_ea <= b.start_ea}
 
     depth = {a: 0 for a in order}
     for a in order:
@@ -141,6 +146,8 @@ def conditionals(chart):
             continue
         merge = ipdom(a)
         if merge is None or not succ.get(merge):
+            continue
+        if any(h for h in headers if min(succ[a]) <= h < merge):
             continue
         for arm in succ[a]:
             at, steps = arm, 0

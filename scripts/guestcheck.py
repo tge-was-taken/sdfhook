@@ -28,7 +28,7 @@ AUTONAME = ("unk_", "asc_", "off_", "flt_", "dbl_", "qword_", "dword_", "word_",
 CLASSES = ("vu1",)
 
 FACT = re.compile(r"^\s+(read|write|glob|call)\s+0x([0-9A-Fa-f]+)\s+(\S+)(?:\s+addrs=(\S+))?")
-BLK  = re.compile(r"^\s+(blk)\s+0x([0-9A-Fa-f]+)\.\.0x([0-9A-Fa-f]+)(?:\s+depth=(\d+))?\s*$")
+BLK  = re.compile(r"^\s+(blk)\s+0x([0-9A-Fa-f]+)\.\.0x([0-9A-Fa-f]+)(?:\s+depth=(\d+))?(?:\s+cond=(\d+))?\s*$")
 BRCH = re.compile(r"^\s+(brch)\s+0x([0-9A-Fa-f]+)\s+(\S.*?)\s*$")
 FIELD = re.compile(r"SDF_STATIC_ASSERT_OFFSETOF\((\w+),\s*(\w+),\s*(0x[0-9A-Fa-f]+)\)")
 BOUND = re.compile(r"(\w+)\s*=\s*\{?\s*pcsx2hook_find_symbol\(\w+,\s*\"(\w+)\"\)")
@@ -49,7 +49,7 @@ def facts(path):
         b = BLK.match(line)
         if b and fn:
             lo, hi = int(b.group(2), 16), int(b.group(3), 16)
-            DEPTH[(fn, lo)] = int(b.group(4) or 0)
+            DEPTH[(fn, lo)] = (int(b.group(4) or 0), int(b.group(5) or 0))
             out[fn].append(("blk", lo, "0x%X..0x%X" % (lo, hi), list(range(lo, hi + 1))))
             continue
         m = FACT.match(line) or BRCH.match(line)
@@ -60,6 +60,7 @@ def facts(path):
 
 
 LOOP = re.compile(r"^\s*(for|while|do)\b")
+COND = re.compile(r"^\s*(if|else|switch)\b")
 
 # {(function, block start): loop nesting the guest runs it at}
 DEPTH = {}
@@ -79,6 +80,22 @@ def citation_lines(text, lo, hi):
         inside = {a for a in seen if lo <= a <= hi}
         if inside:
             out.append((i, inside))
+    return out
+
+
+def nesting(text, opener):
+    """Brace nesting per line, counting only blocks a matching statement opened."""
+    out, stack, depth = [], [], 0
+    for line in text.splitlines():
+        opening = opener.search(line) is not None
+        out.append(depth)
+        for ch in line:
+            if ch == "{":
+                stack.append(opening)
+                depth += opening
+                opening = False
+            elif ch == "}" and stack:
+                depth -= stack.pop()
     return out
 
 
@@ -460,7 +477,8 @@ def main(argv):
 
         done = {"blk": 0, "data": 0}
         need = {"blk": len(table[fn]) - len(data), "data": len(data)}
-        nest = loop_depth(text)
+        nest = nesting(text, LOOP)
+        ifs = nesting(text, COND)
         seq = sequence(text, *span[fn])
         cites = citation_lines(text, *span[fn])
         for kind, at, target, extra in table[fn]:
@@ -482,7 +500,21 @@ def main(argv):
                         or (k[0] <= at <= k[1] and outs[k][0] == "elsewhere")]
             opt = outs[hits[0]] if hits else None
             used.update(hits)
-            deep = DEPTH.get((fn, at), 0)
+            deep, guarded = DEPTH.get((fn, at), (0, 0))
+            if ok and kind == "blk" and guarded:
+                # A ternary is the guest's if/else written without braces, so it nests nothing
+                # the brace count can see. The statement a citation introduces counts as its body.
+                rows = text.splitlines()
+                def ternary(line):
+                    near = " ".join(rows[line:line + 5])
+                    return "?" in near and ":" in near.split("?", 1)[1]
+
+                where = max((ifs[line] + ternary(line) for line, seen in cites
+                             if line < len(ifs) and seen & want), default=0)
+                if where < guarded:
+                    print("  0x%07X blk   %-28s sits in %d if bodies, cited in %d"
+                          % (at, target[:28], guarded, where))
+                    bad += 1
             if ok and kind == "blk" and deep:
                 where = max((nest[line] for line, seen in cites
                              if line < len(nest) and seen & want), default=0)
