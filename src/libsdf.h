@@ -630,15 +630,15 @@ struct sdfBillBoardBatch_t {
 
 SDF_STATIC_ASSERT_SIZE(sdfBillBoardBatch_t, 1024);
 
-using sdf3DPolyPtr_t = guest_ptr<struct sdf3DPoly_t>;
+using sdf3DPrimPolyParmPtr_t = guest_ptr<struct sdf3DPrimPolyParm_t>;
 
 /// A polygon as its counts, PRIM word and one array per attribute, which is what the packet it
 /// builds is derived from rather than read back.
 /// @fn sdf3DPrimMakePoly
 /// @note SLUS-20911 0x002BAAB8
-struct sdf3DPoly_t {
-    s16 extraQwords;
-    s16 vertexCount;
+struct sdf3DPrimPolyParm_t {
+    s16 faceCount;
+    s16 pointCount;
 
     /// The GS PRIM word, or'd with 0x68, and gaining 0x10 for UVs, 0x1000 for a second UV set and
     /// 0x800 for colors as each array below turns out non-null.
@@ -649,10 +649,11 @@ struct sdf3DPoly_t {
     /// write at +20 suggested.
     u32 colorWord;
 
-    /// Both hold guest pointers on every call measured, where the arrays below are null, so this
-    /// is where the 96-stride default path keeps its data. Which is which is not yet established.
-    u32 unk0C;
-    u32 unk10;
+    /// Measured on smt3_field_unknown_realm: faceIndex is null and the faces are implicit, and
+    /// vertex points at this block + 0x30, where the position array begins. The database types
+    /// both as inline sdfVector4_t arrays, which is what inflates its struct to 0x4C.
+    u32 faceIndex;
+    u32 vertex;
 
     /// Non-null takes the per-vertex stride from 96 to 224 and the base PRIM from 18 to 19. Null on
     /// every call measured on the field scenes, so the extended mode is not what fldSdwDraw uses.
@@ -665,10 +666,17 @@ struct sdf3DPoly_t {
     u32 allocator;
     f32 depth;
 };
-SDF_STATIC_ASSERT_SIZE(sdf3DPoly_t, 0x2C);
-SDF_STATIC_ASSERT_OFFSETOF(sdf3DPoly_t, position, 0x14);
-SDF_STATIC_ASSERT_OFFSETOF(sdf3DPoly_t, color, 0x20);
-SDF_STATIC_ASSERT_OFFSETOF(sdf3DPoly_t, depth, 0x28);
+SDF_STATIC_ASSERT_SIZE(sdf3DPrimPolyParm_t, 0x2C);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, faceCount, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, pointCount, 0x02);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, prim, 0x04);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, mask, 0x06);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, colorWord, 0x08);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, faceIndex, 0x0C);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, vertex, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, position, 0x14);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, color, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, depth, 0x28);
 
 enum sdfCoreAttrBit_t : u16 {
     sdfCoreAttrRefMapPass = 0x0001,

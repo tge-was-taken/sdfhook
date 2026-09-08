@@ -2022,24 +2022,19 @@ void xdrawSprite3D(TexHandle aTexHandle, sdfSprite3DPtr_t aSprite, Frame* frame)
 /// and +0x0C holds one byte index per lane, three to a word, with the word count at +0x00.
 /// @fn sdf3DPrimMakePoly
 /// @note SLUS-20911 0x002BAAB8
-void xsdf3DPrimMakePoly(sdf3DPolyPtr_t aPoly, Frame* frame) {
+void xsdf3DPrimMakePoly(sdf3DPrimPolyParmPtr_t aPoly, Frame* frame) {
     if (!frame || !aPoly) return;
-    const u32 vertexCount = u32(aPoly->vertexCount);
-    const u32 triangles = u32(aPoly->extraQwords);
+    const u32 vertexCount = u32(aPoly->pointCount);
+    const u32 triangles = u32(aPoly->faceCount);
     if (!vertexCount || !triangles) return;
 
     const sdfVector4_t* point = sdfVector4Ptr_t{aPoly->position.addr}.slice(vertexCount);
-    if (!point) point = sdfVector4Ptr_t{aPoly->unk10}.slice(vertexCount);
-    const u32* index = u32Ptr_t{aPoly->unk0C}.slice(triangles);
-    if (!point || !index) {
+    if (!point) point = sdfVector4Ptr_t{aPoly->vertex}.slice(vertexCount);
+    // A null face list means the faces are implicit: face t is points 3t, 3t+1, 3t+2. Measured on
+    // smt3_field_unknown_realm, where every call has faceCount 1, pointCount 3 and no list.
+    const u32* index = aPoly->faceIndex ? u32Ptr_t{aPoly->faceIndex}.slice(triangles) : nullptr;
+    if (!point || (aPoly->faceIndex && !index)) {
         reportUnsupported("sdf3DPrimMakePoly without geometry", aPoly.addr);
-        // Our layout and the database's disagree on this struct, so the block itself is logged.
-        if (const u32* word = u32Ptr_t{aPoly.addr}.slice(19)) {
-            for (u32 i = 0; i < 19; i++) {
-                log.debug("polyParm +0x{:02X} {:08X} {}", i * 4, word[i],
-                          *reinterpret_cast<const f32*>(&word[i]));
-            }
-        }
         return;
     }
 
@@ -2076,7 +2071,7 @@ void xsdf3DPrimMakePoly(sdf3DPolyPtr_t aPoly, Frame* frame) {
     }
     for (u32 t = 0; t < triangles; t++) {
         for (int corner = 0; corner < 3; corner++) {
-            const u32 at = (index[t] >> (8 * corner)) & 0xFF;
+            const u32 at = index ? ((index[t] >> (8 * corner)) & 0xFF) : (t * 3 + corner);
             if (at >= vertexCount) return;
             mesh.indices.push_back(u16(at));
         }

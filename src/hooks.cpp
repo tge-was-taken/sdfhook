@@ -948,7 +948,7 @@ int drawSprite3DHook(pcsx2hook_regs* regs, void* user) {
 int sdf3DPrimMakePolyHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
-    const sdf3DPolyPtr_t aPoly{c.getArg(0)};
+    const sdf3DPrimPolyParmPtr_t aPoly{c.getArg(0)};
     h.coverage.apiDraws++;
     if (!aPoly) return PCSX2HOOK_CONTINUE;
 

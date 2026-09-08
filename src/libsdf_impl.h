@@ -293,7 +293,7 @@ void xsdfModelLinkShapedDrawPacket(guest_ref<sdfModelRootNode_t> root,
                                                const NodeDraw& draw, u32 dataAddr, Frame* frame);
 [[nodiscard]] Matrix4 xSetRotateMatrixZ(f32 aAngle);
 void xdrawSprite3D(TexHandle aTexHandle, sdfSprite3DPtr_t aSprite, Frame* frame);
-void xsdf3DPrimMakePoly(sdf3DPolyPtr_t aPoly, Frame* frame);
+void xsdf3DPrimMakePoly(sdf3DPrimPolyParmPtr_t aPoly, Frame* frame);
 void xfldDrawPoly3(const sdfVector3_t point[3], const u32 color[3], Frame* frame);
 bool readShadowStream(u32 aPacket, u32 aEnd, const sdfGsState_t& aState,
                              Frame* frame);
