@@ -1111,7 +1111,9 @@ constexpr Entry kGameEntries[] = {
     {"cmpDrawTriG", &cmpDrawTriGHook, nullptr},
     // Traced, not drawn: its full-screen gouraud wash and row boxes are real draws, but drawing
     // them costs 6.2 points on the menu. See TODO M2.
-    {"cmpDrawBoxG", &cmpDrawBoxGHook, nullptr},
+    // Watched, not drawn: the handler and its shadow are complete, but enabling the draw costs
+    // the menu 6 points (11.785 to 17.774), so its geometry is wrong somewhere. See TODO.md.
+    {"cmpDrawBoxG", &traceEntryHook, nullptr},
     {"dds3DrawFade", &dds3DrawFadeHook, nullptr},
     {"dds3LinkZClearDrawTag", &dds3LinkZClearDrawTagHook, nullptr},
     {"aDrawBoxF", &aDrawBoxFHook, nullptr},

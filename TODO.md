@@ -2309,32 +2309,23 @@ right.
       - `fldDrawFrameSprite` passed a hardcoded 0x80 where the engine feeds the previous frame back
         at 48, painting it opaquely over the field. 202.604 to 5.283.
 
-      **The menu is 17.774 against master's 11.785 and I did not find the cause.** What it is
-      not, each measured rather than argued:
+      **The menu difference was mine to make: `cmpDrawBoxG`.** Master carries the handler but
+      wires the symbol to `traceEntryHook`, so it never draws; I wired it to the real handler and
+      added 689 sprites a frame that master never drew. Tracing it again scores exactly 11.785,
+      which is master to three decimals, so the attribution is certain and the rest of the menu is
+      untouched by the refactor.
 
-      - not the sprite stream: all 119 frames have byte identical sprite records between the two
-        builds, every field including corner colours and submission order,
-      - not the meshes: the menu draws none, and SDF_ORDER q/b/n and SDF_OT_MAX=84 all score the
-        same 17.774,
-      - not the composite, clear or post pass: with SDF_NO_SPRITES the two renders are bit
-        identical, 0.000 mean difference,
-      - not the textures: every texture SDF_DUMP_TEXTURES writes is byte identical,
-      - not the shot frame: pinned to the same SDF_SHOT_FRAME the two still split 11.9 to 17.5,
-      - not the feedback pass, the rsetAlpha table, otOffset or the GS state, all compared equal.
+      **The boxes are therefore wrong, not missing.** `xcmpDrawBoxG` is fully accounted (10 of 10
+      facts, 1 of 1 blocks) and reads its four corner colours through `cmpExpandColor` exactly as
+      the disabled handler at master does, so the error is in geometry or blend rather than in the
+      colours: worth an hour with the picker before enabling it. The entry is left as a trace so
+      the branch matches master.
 
-      - not the font path either: the glyph and sheet log lines are identical between the builds,
-        frFontClutTable resolves, and both report the same "0 glyph uploads, font clut loaded".
-
-      Both builds are deterministic: two runs of either produce a bit identical native and emu
-      shot. So identical sprites drawn over an identical background with identical textures and an
-      identical font sheet produce renders 9.318 apart. **That cannot all be true, so one of the
-      comparisons above is measuring the wrong object.** The trace is written from
-      `mBuilding->sprites` at submit, the same vector the renderer draws, which is why the sprite
-      comparison looks conclusive and probably is; the untested link is `frame.textureUploads`,
-      which the shadow fills through xsdfTexSetEx and which decides what is actually bound at draw
-      time rather than what the cache holds when SDF_DUMP_TEXTURES writes it. Start there.
-      **An earlier note here claimed a whole frame composite difference; SDF_NO_SPRITES disproves
-      that and it is withdrawn.**
+      **Two theories were recorded here and both were wrong**, which is why they are named: a
+      whole frame composite difference, disproved by SDF_NO_SPRITES rendering bit identically; and
+      a sprite stream difference, disproved by all 119 frames comparing byte for byte. The
+      summary comparison that first looked clean was comparing master against itself, which is
+      what hid the 332 apiDraws gap that pointed at the real cause.
 
       Battle is 0.58 over master, also unexplained, and likely the same cause.
 
