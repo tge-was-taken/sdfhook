@@ -18,6 +18,7 @@ add_executable(sdfhook
 	config.cpp
 	guest_ptr.cpp
 	log.cpp
+	packet_type.cpp
 	chain_census.cpp
 	chain_frame.cpp
 	gif.cpp

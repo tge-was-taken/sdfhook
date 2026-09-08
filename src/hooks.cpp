@@ -696,17 +696,15 @@ void observePost(pcsx2hook_regs* regs, void* user) {
     h.coverage.graph.recordReturn(h.symbols.getFunction(c.getPc()), c.getResult());
 }
 
-/// Records what built a packet, for the attribution census. Argument 0 is the packet in every
-/// builder measured; where it is an interior pointer the census says so rather than guessing.
+/// Records what a packet is, at the builder that makes it. Argument 0 is the packet in every
+/// builder measured; where it is an interior pointer the walk probes the offsets rather than guess.
 int packetTypeHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
 
     const u32 aPacket = c.getArg(0);
 
-    if (h.config->dumpChainCensus && aPacket) {
-        h.packetTypes[aPacket] = h.symbols.getFunction(c.getPc());
-    }
+    if (aPacket) h.packetTypes[aPacket] = packetTypeForBuilder(h.symbols.getFunction(c.getPc()));
     return PCSX2HOOK_CONTINUE;
 }
 

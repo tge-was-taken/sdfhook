@@ -6,6 +6,7 @@
 #include "guest_ptr.h"
 #include "json.h"
 #include "libsdf.h"
+#include "packet_type.h"
 #include "log.h"
 #include "unsupported.h"
 
@@ -125,36 +126,36 @@ void scanVif(u32 aData, u32 aQwc, u32* aCalls, u32* aUnpacks, u32* aMicrocode) {
     }
 }
 
-/// What the entry carries, which is the whole question a chain-walk renderer has to answer.
-const char* classify(u32 aData, u32 aQwc, const char** aDetail) {
-    *aDetail = "";
-    if (!aQwc) return "empty";
+/// What a payload says it is on its own. A GIF list is typed by its tag and a VIF transfer by its
+/// codes; anything else needs the builder to have named it.
+PacketType classifySelf(u32 aData, u32 aQwc) {
+    if (!aQwc) return PacketType::Empty;
 
     const sdfGifTagWords_t words = sdfGifTagWordsPtr_t{aData}.valueOr();
     if (looksLikeGifTag(words, aQwc)) {
         // NREG 1 naming A+D (0xE) is a run of register writes and draws nothing itself.
-        if (sdfGifNreg(words) == 1 && (words.regs & 0xF) == 0xE) {
-            *aDetail = "regs";
-        } else if (sdfGifFlg(words) == 2) {
-            *aDetail = "image";
-        } else {
-            *aDetail = sdfGifPre(words) ? "prim" : "verts";
-        }
-        return "gif";
+        const bool registersOnly = sdfGifNreg(words) == 1 && (words.regs & 0xF) == 0xE;
+        return registersOnly ? PacketType::GifRegisters : PacketType::GifPrimitive;
     }
 
     const u32 word = u32Ptr_t{aData}.valueOr();
     if (looksLikeVif(word)) {
-        // The first code names the stream: a microprogram run, an upload, or plain data.
-        const u32 command = vifCommand(word);
-        if (command == vifMpg) *aDetail = "microcode";
-        else if (command == vifMsCal || command == vifMsCalF || command == vifMsCnt) *aDetail = "call";
-        else if (command == vifDirect || command == vifDirectHl) *aDetail = "direct";
-        else if ((command & 0x60) == 0x60) *aDetail = "unpack";
-        else *aDetail = "setup";
-        return "vif";
+        return (vifCommand(word) & 0x60) == 0x60 ? PacketType::VifData : PacketType::VifSetup;
     }
-    return "opaque";
+    return PacketType::Unknown;
+}
+
+/// The entry's type: what it says it is, or failing that what its builder said. A builder is
+/// handed the packet, its data, or an interior offset of either, so all four are probed.
+PacketType classify(u32 aPacket, u32 aData, u32 aQwc, const char* aProducer,
+                    const std::unordered_map<u32, PacketType>& aTypes) {
+    const PacketType told = classifySelf(aData, aQwc);
+    if (told != PacketType::Unknown) return told;
+    for (const u32 probe : {aPacket, aData, aPacket + 16, aData + 16}) {
+        const auto found = aTypes.find(probe);
+        if (found != aTypes.end()) return found->second;
+    }
+    return packetTypeForProducer(aProducer);
 }
 
 }  // namespace
@@ -163,7 +164,7 @@ const char* classify(u32 aData, u32 aQwc, const char** aDetail) {
 /// identified exhaustively: a packet whose type is unknown cannot be processed without running the
 /// hardware that consumes it.
 void censusLinked(const std::vector<LinkedPacket>& aLinked, SymbolCache& aSymbols, u32 aFrame,
-                  const std::unordered_map<u32, const char*>& aTypes) {
+                  const std::unordered_map<u32, PacketType>& aTypes) {
     static const char* const kLinkKind[] = {"packet", "ref", "call"};
     for (const LinkedPacket& packet : aLinked) {
         DmaTag tag{};
@@ -172,18 +173,10 @@ void censusLinked(const std::vector<LinkedPacket>& aLinked, SymbolCache& aSymbol
                            || tag.id == sdfDmaTagRefe;
         const u32 data = byRef ? tag.addr : packet.addr + sdfQwordBytes;
 
-        const char* detail = "";
-        const char* kind = classify(data, tag.qwc, &detail);
+        const char* producer = aSymbols.getFunction(packet.caller);
+        const PacketType type = classify(packet.addr, data, tag.qwc, producer, aTypes);
         u32 calls = 0, unpacks = 0, microcode = 0;
-        if (kind[0] == 'v') scanVif(data, tag.qwc, &calls, &unpacks, &microcode);
-
-        // A builder is handed the packet, its data, or an interior offset of either, so all three
-        // are tried and the census reports which one matched.
-        const char* builder = nullptr;
-        for (const u32 probe : {packet.addr, data, packet.addr + 16, data + 16}) {
-            const auto found = aTypes.find(probe);
-            if (found != aTypes.end()) { builder = found->second; break; }
-        }
+        scanVif(data, tag.qwc, &calls, &unpacks, &microcode);
 
         log.dump(JsonObject()
                      .addString("dump", "linked")
@@ -192,17 +185,15 @@ void censusLinked(const std::vector<LinkedPacket>& aLinked, SymbolCache& aSymbol
                      .addString("link", kLinkKind[u8(packet.kind)])
                      .addUint("dmaId", tag.id)
                      .addUint("qwc", tag.qwc)
-                     .addString("kind", kind)
-                     .addString("detail", detail)
-                     .addString("by", aSymbols.getFunction(packet.caller))
-                     .addString("built", builder ? builder : "-")
+                     .addString("type", packetTypeName(type))
+                     .addString("by", producer)
                      .addUint("mscal", calls)
                      .take());
     }
 }
 
 void censusChain(u32 aTag, const std::vector<LinkedPacket>& aLinked, SymbolCache& aSymbols,
-                 u32 aFrame, const std::unordered_map<u32, const char*>& aTypes) {
+                 u32 aFrame, const std::unordered_map<u32, PacketType>& aTypes) {
     censusLinked(aLinked, aSymbols, aFrame, aTypes);
     // Who linked each packet, so an entry the walk finds can still be named by the producer that
     // built it. A chain-walk renderer would not have this; the census uses it to say what it loses.
@@ -225,11 +216,11 @@ void censusChain(u32 aTag, const std::vector<LinkedPacket>& aLinked, SymbolCache
         const bool byRef = id == sdfDmaTagRef || id == sdfDmaTagRefs || id == sdfDmaTagRefe;
         const u32 data = byRef ? addr : at + sdfQwordBytes;
 
-        const char* detail = "";
-        const char* kind = classify(data, qwc, &detail);
         const auto owner = byAddr.find(at);
+        const char* producer = owner == byAddr.end() ? "-" : aSymbols.getFunction(owner->second);
+        const PacketType type = classify(at, data, qwc, producer, aTypes);
         u32 calls = 0, unpacks = 0, microcode = 0;
-        if (kind[0] == 'v') scanVif(data, qwc, &calls, &unpacks, &microcode);
+        scanVif(data, qwc, &calls, &unpacks, &microcode);
 
         log.dump(JsonObject()
                      .addString("dump", "census")
@@ -238,10 +229,8 @@ void censusChain(u32 aTag, const std::vector<LinkedPacket>& aLinked, SymbolCache
                      .addHexDigits("at", at, 8)
                      .addUint("dmaId", id)
                      .addUint("qwc", qwc)
-                     .addString("kind", kind)
-                     .addString("detail", detail)
-                     .addString("by", owner == byAddr.end() ? "-"
-                                                            : aSymbols.getFunction(owner->second))
+                     .addString("type", packetTypeName(type))
+                     .addString("by", producer)
                      .addHexDigits("w0", u32Ptr_t{data}.valueOr(), 8)
                      .addHexDigits("w1", u32Ptr_t{data + 4}.valueOr(), 8)
                      .addHexDigits("w4", u32Ptr_t{data + 16}.valueOr(), 8)

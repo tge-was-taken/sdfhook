@@ -31,10 +31,16 @@ def main(argv):
 
         print("== %s, frame %d: %d entries, %d carrying data"
               % (path, frame, len(one), len(carrying)))
-        kinds = collections.Counter((r["kind"], r["detail"]) for r in carrying)
-        for (kind, detail), count in kinds.most_common():
-            print("   %-8s %-10s %5d  %5.1f%%"
-                  % (kind, detail, count, 100.0 * count / len(carrying)))
+        kinds = collections.Counter(r["type"] for r in carrying)
+        for kind, count in kinds.most_common():
+            print("   %-14s %5d  %5.1f%%" % (kind, count, 100.0 * count / len(carrying)))
+        untyped = [r for r in carrying if r["type"] == "unknown"]
+        print("   typed: %d of %d (%.1f%%)"
+              % (len(carrying) - len(untyped), len(carrying),
+                 100.0 * (len(carrying) - len(untyped)) / len(carrying)))
+        if untyped:
+            for name, n in collections.Counter(r["by"] for r in untyped).most_common(6):
+                print("      untyped from %-34s %d" % (name, n))
 
         plumbing = collections.Counter(ID[r["dmaId"]] for r in one if not r["qwc"])
         print("   plumbing (qwc 0): " + ", ".join("%s %d" % kv for kv in plumbing.most_common()))

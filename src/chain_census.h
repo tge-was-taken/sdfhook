@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "hooks.h"
+#include "packet_type.h"
 #include "types.h"
 
 namespace sdfhook {
@@ -11,6 +12,6 @@ namespace sdfhook {
 /// by hooking the functions that build it. One row per chain entry, so what a chain-walk renderer
 /// would have to decode can be counted before one is written.
 void censusChain(u32 aTag, const std::vector<LinkedPacket>& aLinked, SymbolCache& aSymbols,
-                 u32 aFrame, const std::unordered_map<u32, const char*>& aTypes);
+                 u32 aFrame, const std::unordered_map<u32, PacketType>& aTypes);
 
 }  // namespace sdfhook

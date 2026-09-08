@@ -4,6 +4,8 @@
 #include <set>
 #include <string>
 #include <unordered_map>
+
+#include "packet_type.h"
 #include <vector>
 
 #include "pcsx2hook/pcsx2hook.h"
@@ -217,10 +219,9 @@ struct HookContext {
     RenderState state;
     Coverage coverage;
 
-    /// What built each packet, recorded by the packet-type hooks. A packet whose type is unknown
-    /// cannot be processed without running the hardware that consumes it, so this is the set that
-    /// has to be exhaustive.
-    std::unordered_map<u32, const char*> packetTypes;
+    /// What each packet is, recorded where it is built. A packet whose type is unknown cannot be
+    /// processed without running the hardware that consumes it, so this has to be exhaustive.
+    std::unordered_map<u32, PacketType> packetTypes;
 
     /// The chain the last frame send carried, so the engine's second draw of it is not walked
     /// twice.
