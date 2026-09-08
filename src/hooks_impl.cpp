@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "chain_census.h"
 #include "gif.h"
 #include "guest_ptr.h"
 #include "json.h"
@@ -156,6 +157,11 @@ void settleMeshState(HookContext& h, u32 aTag) {
         h.model.getTrace().countSettledMesh();
     }
     h.model.traceMeshes(*frame);
+}
+
+void censusFrame(HookContext& h, u32 aTag) {
+    if (!h.config->dumpChainCensus) return;
+    censusChain(aTag, h.frames.getPackets(), h.symbols, h.trace->getFrame());
 }
 
 void collectPackets(HookContext& h) {

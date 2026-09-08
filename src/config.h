@@ -40,6 +40,9 @@ struct Config {
     bool dumpLight = false;
     bool dumpScreen = false;
     bool dumpDrawEnv = false;
+
+    /// An inventory of the frame's DMA chain, one row per entry.
+    bool dumpChainCensus = false;
     bool dumpRecover = false;
     bool describeFrame = false;
     bool debugDepth = false;

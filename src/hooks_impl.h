@@ -19,6 +19,10 @@ void settleMeshState(HookContext& h, u32 aTag);
 /// Parses the frame's linked packets for coverage, shadows and the trace.
 void collectPackets(HookContext& h);
 
+/// An inventory of the frame's DMA chain, for judging what a chain-walk renderer would have to
+/// decode. Runs before collectPackets, which clears the linked list the owner names come from.
+void censusFrame(HookContext& h, u32 aTag);
+
 /// Y is in half-height units, the same scale the draw space uses vertically.
 void submitSprite(HookContext& h, const char* producer, f32 x, f32 y, f32 w, f32 height, f32 u,
                   f32 v, f32 uw, f32 vh, Rgba color, u32 texFileHandle);

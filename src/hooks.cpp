@@ -498,6 +498,7 @@ int sdfGrReqDrawHook(pcsx2hook_regs* regs, void* user) {
     const u32 aTag = c.getArg(0);
     h.trace->onSdfGrReqDraw(aTag, c.getArg(1));
     settleMeshState(h, aTag);
+    censusFrame(h, aTag);
     collectPackets(h);
     h.frames.submit();
     return PCSX2HOOK_CONTINUE;
