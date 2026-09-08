@@ -535,13 +535,19 @@ int dds3DrawFadeHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
 
-    const u32 R = c.getArg(0);
-    const u32 G = c.getArg(1);
-    const u32 B = c.getArg(2);
-    const u32 State = c.getArg(3);
+    // The colour and state are globals, not arguments: fadergba holds r, g, b and the state byte.
+    const u32 fade = pcsx2hook_find_symbol(h.runtime, "fadergba");
+    if (!fade) {
+        reportUnsupported("fade globals not in the symbol map", 0);
+        return PCSX2HOOK_CONTINUE;
+    }
+    const u8 R = u8Ptr_t{fade}.valueOr();
+    const u8 G = u8Ptr_t{fade + 1}.valueOr();
+    const u8 B = u8Ptr_t{fade + 2}.valueOr();
+    const u8 State = u8Ptr_t{fade + 3}.valueOr();
 
     SinkScope scope(h, "dds3DrawFade");
-    xdds3DrawFade(u8(R), u8(G), u8(B), u8(State));
+    xdds3DrawFade(R, G, B, State);
     return PCSX2HOOK_CONTINUE;
 }
 

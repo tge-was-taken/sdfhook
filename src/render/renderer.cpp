@@ -707,6 +707,13 @@ void Renderer::drawMeshes(const Frame& frame) {
         }
     }
 
+    usize verts = 0;
+    usize tris = 0;
+    for (usize i : mOrder) {
+        verts += frame.meshes[i].vertices.size();
+        tris += frame.meshes[i].indices.size() / 3;
+    }
+    log.debug("drawMeshes {} meshes, {} verts, {} tris", mOrder.size(), verts, tris);
     const int billboard = glGetUniformLocation(mMeshProgram, "uBillboard");
     const int atest = glGetUniformLocation(mMeshProgram, "uAtest");
     const int atestRef = glGetUniformLocation(mMeshProgram, "uAtestRef");

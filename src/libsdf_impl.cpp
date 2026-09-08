@@ -1404,8 +1404,8 @@ void xsdfModelLinkOt(sdfModelOtPtr_t aOt, sdfModelRootNodePtr_t aRoot, Frame* fr
 
     // 0x2B1E14..0x2B1E73: the root's own light and fog, or the engine defaults when it has none.
     // @optout 0x2B1E24 packetbuf: sdfMatListUpdatePacket rebuilds each material's DMA packet
-    readLighting(root->light ? root->light : gModel.sdf3DLightDefault.valueOr());
-    readFog(root->fog ? root->fog : gModel.sdf3DFogDefault.valueOr());
+    readLighting(root->light);
+    readFog(root->fog);
 
     const u32 frameId = gModel.sdfFrameId ? *gModel.sdfFrameId : 0;
 
@@ -1468,8 +1468,9 @@ void xsdfModelLinkOt(sdfModelOtPtr_t aOt, sdfModelRootNodePtr_t aRoot, Frame* fr
         std::memcpy(&draw.model, &node->tm, sizeof(Matrix4));
         // 0x2B1EF4..0x2B1F1F: xMultMatrixRev over the node's own tm and the screen matrix, which
         // 0x2B1F10 loads from sdf3DScreenTm and readScreenTm captured once this frame.
-        draw.clip = xMultMatrixRev(draw.model, gModel.sdf3DScreenTm ? *gModel.sdf3DScreenTm
-                                                                    : gModel.screenTm);
+        // readScreenTm captured and conditioned this once for the frame; the raw guest matrix is
+        // not the same thing.
+        draw.clip = xMultMatrixRev(draw.model, gModel.screenTm);
         // 0x2B1F20
         if (node->bounds && xsdfModelCheckBounds(node->bounds, draw.clip)) {
             gConvert->getTrace().countNode(ModelTrace::Node::BoundsCulled);
@@ -1753,8 +1754,8 @@ void xsdfModelTempPacketLinkOt(guest_ref<sdfModelRootNode_t> root, Frame* frame)
     // @optout 0x2B19A4 packetbuf: sdfMatListUpdatePacket rebuilds each material's DMA packet
 
     // 0x2B19B0..0x2B19CC: the root's own light and fog, each falling back to the engine default.
-    readLighting(root->light ? root->light : gModel.sdf3DLightDefault.valueOr());
-    readFog(root->fog ? root->fog : gModel.sdf3DFogDefault.valueOr());
+    readLighting(root->light);
+    readFog(root->fog);
 
     // 0x2B19FC..0x2B1A17: this walk takes faceDivSoften where sdfModelLinkOt takes faceDivBias,
     // and falls back to its own global.
