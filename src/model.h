@@ -28,8 +28,6 @@ public:
     /// Carried neither a material nor a mesh, and opened like a mesh but would not decode.
     void countSetupRef() { mSetupRefs++; }
 
-    void countSettledMesh() { mSettledMeshes++; }
-    void countUnsettledMesh() { mUnsettledMeshes++; }
     void countStrayRef() { mStrayRefs++; }
 
     void countRoot(bool tempPackets);
@@ -164,8 +162,6 @@ private:
     std::map<u32, u64> mInfluences;
     u64 mSetupRefs = 0;
     u64 mStrayRefs = 0;
-    u64 mSettledMeshes = 0;
-    u64 mUnsettledMeshes = 0;
     u64 mGuestGenerated = 0;
     u64 mGuestShaped = 0;
     std::map<u32, u64> mMaterialShading;
@@ -282,7 +278,6 @@ private:
     dds3BillboardTagPtr_t mDds3BillboardTag;
     std::unordered_map<u32, u32> mBillboardOt;
     u32 mLinkIndex = 0;
-    u32 mCurrentChain = 0;
     u32 mDecodeFrame = 0;
     u32 mCurrentLink = 0;
 

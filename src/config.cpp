@@ -83,14 +83,11 @@ Config Config::fromEnvironment() {
     config.noBillboards = flag("SDF_NO_BILLBOARDS");
     config.poly = flag("SDF_POLY");
     config.noTransmitState = flag("SDF_NO_TRANSMIT_STATE");
-    config.drawUnlinkedMeshes = !flag("SDF_NO_UNLINKED_MESHES");
     config.captureDir = text("SDF_CAPTURE_DIR", "captures");
     config.captureFrame = u32(number("SDF_CAPTURE_FRAME", 0));
-    config.spriteOtCut = s32(number("SDF_SPRITE_OT_CUT", 0));
     config.recoverTexturesFromGs = !flag("SDF_NO_GS_RECOVER");
 
     config.cull = text("SDF_CULL", "b")[0];
-    config.meshOrder = text("SDF_ORDER", "q")[0];
     return config;
 }
 

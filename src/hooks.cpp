@@ -95,17 +95,6 @@ int rsetAlphaHook(pcsx2hook_regs* regs, void* user) {
     return PCSX2HOOK_CONTINUE;
 }
 
-// rsetOtOfs(otofs): the table the 2D draws after it go into, which is how SDF orders them.
-// There is no per-sprite depth to test.
-int rsetOtOfsHook(pcsx2hook_regs* regs, void* user) {
-    Context c{regs};
-
-    const s32 otofs = s32(c.getArg(0));
-
-    static_cast<HookContext*>(user)->state.otOffset = otofs;
-    return PCSX2HOOK_CONTINUE;
-}
-
 /// rsetFrameMaskRgbOn/Off, still ooyTestRGBMaskOn/Off in the map. They bracket the silhouette
 /// pass in call order, where our walk runs, so the flag needs no transmit-order settling.
 /// @fn rsetFrameMaskRgbOn
@@ -412,6 +401,7 @@ int sdfModelLinkOtHook(pcsx2hook_regs* regs, void* user) {
     const sdfModelRootNodePtr_t aRoot{c.getArg(1)};
 
     h.trace->onSdfModelLinkOt(aOt, aRoot.addr);
+    const ProducerDraws draws(h.frames);
     h.modelHooks.sdfModelLinkOt(aRoot, h.frames.getFrame());
     return PCSX2HOOK_CONTINUE;
 }
@@ -498,9 +488,9 @@ int sdfGrReqDrawHook(pcsx2hook_regs* regs, void* user) {
     HookContext& h = *static_cast<HookContext*>(user);
     const u32 aTag = c.getArg(0);
     h.trace->onSdfGrReqDraw(aTag, c.getArg(1));
-    settleMeshState(h, aTag);
     censusFrame(h, aTag);
     collectPackets(h);
+    placeDraws(h, aTag);
     h.frames.submit();
     return PCSX2HOOK_CONTINUE;
 }
@@ -523,12 +513,21 @@ void dds3DrawProcessPost(pcsx2hook_regs*, void* user) {
     h.frames.end();
 }
 
+/// What the builder that made it said, else what the single-site function linking it is known to
+/// link.
+bool linkCarriesDraw(HookContext& h, const LinkedPacket& packet) {
+    const auto built = h.packetTypes.find(packet.addr);
+    if (built != h.packetTypes.end()) return carriesDraw(built->second);
+    return carriesDraw(packetTypeForLinker(h.symbols.getFunction(packet.caller)));
+}
+
 // Every render function links its packet through here, so this is a complete frame inventory.
 int sdfDrawTagLinkHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
     if (c.getArg(1)) {
-        h.frames.link(LinkedPacket{.addr = c.getArg(1), .caller = c.getRa()});
+        const LinkedPacket packet{.addr = c.getArg(1), .caller = c.getRa()};
+        h.frames.link(packet, linkCarriesDraw(h, packet));
     }
     return PCSX2HOOK_CONTINUE;
 }
@@ -538,8 +537,8 @@ int sdfDrawTagLinkRefHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
     if (c.getArg(1)) {
-        h.frames.link(LinkedPacket{.addr = c.getArg(1), .caller = c.getRa(),
-                                   .kind = LinkKind::Ref});
+        const LinkedPacket packet{.addr = c.getArg(1), .caller = c.getRa(), .kind = LinkKind::Ref};
+        h.frames.link(packet, linkCarriesDraw(h, packet));
     }
     return PCSX2HOOK_CONTINUE;
 }
@@ -550,8 +549,8 @@ int sdfDrawTagLinkCallHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
     if (c.getArg(1)) {
-        h.frames.link(LinkedPacket{.addr = c.getArg(1), .caller = c.getRa(),
-                                   .kind = LinkKind::Call});
+        const LinkedPacket packet{.addr = c.getArg(1), .caller = c.getRa(), .kind = LinkKind::Call};
+        h.frames.link(packet, linkCarriesDraw(h, packet));
     }
     return PCSX2HOOK_CONTINUE;
 }
@@ -577,8 +576,8 @@ int sdfDrawTagLinkRefGifHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
     if (c.getArg(1)) {
-        h.frames.link(LinkedPacket{.addr = c.getArg(1), .caller = c.getRa(),
-                                   .kind = LinkKind::Ref});
+        const LinkedPacket packet{.addr = c.getArg(1), .caller = c.getRa(), .kind = LinkKind::Ref};
+        h.frames.link(packet, linkCarriesDraw(h, packet));
     }
     return PCSX2HOOK_CONTINUE;
 }
@@ -845,7 +844,8 @@ constexpr Entry kGameEntries[] = {
     {"fldDrawPoly3", &fldDrawPoly3Hook, nullptr},
     {"rsetFrameMaskRgbOn", &frameMaskOnHook, nullptr},
     {"rsetFrameMaskRgbOff", &frameMaskOffHook, nullptr},
-    {"rsetOtOfs", &rsetOtOfsHook, nullptr},
+    // Picks the table the 2D draws after it are filed into, which the chain walk sees as order.
+    {"rsetOtOfs", &traceEntryHook, nullptr},
     {"rsetTexa", &traceEntryHook, nullptr},
     {"frCreateDrawFontPacket_20550848", &frCreateDrawFontPacketHook, nullptr},
     {"aDrawBoxG", &aDrawBoxGHook, nullptr},
@@ -943,6 +943,25 @@ Frame* FrameBuilder::getFrame() {
     return mBuilding;
 }
 
+void FrameBuilder::claimDraws(u32 packet) {
+    if (!mBuilding) return;
+    for (usize i = mClaimed.sprites; i < mBuilding->sprites.size(); i++) {
+        mBuilding->sprites[i].linkAddr = packet;
+    }
+    for (usize i = mClaimed.meshes; i < mBuilding->meshes.size(); i++) {
+        DrawMesh& mesh = mBuilding->meshes[i];
+        if (!mesh.linkAddr && mesh.linkIndex == kNoLinkIndex) mesh.linkAddr = packet;
+    }
+    mClaimed = mark();
+}
+
+void FrameBuilder::adopt(DrawMark before) {
+    const DrawMark now = mark();
+    if (now.sprites == before.sprites && now.meshes == before.meshes) return;
+    mClaimed.sprites = std::max(mClaimed.sprites, before.sprites);
+    mClaimed.meshes = std::max(mClaimed.meshes, before.meshes);
+}
+
 void FrameBuilder::submit() {
     mSubmitted = true;
     mSubmittedFrames++;
@@ -953,6 +972,7 @@ void FrameBuilder::submit() {
     }
     mRenderer->submit(mBuilding);
     mBuilding = nullptr;
+    mClaimed = {};
 }
 
 void FrameBuilder::end() {
@@ -963,6 +983,7 @@ void FrameBuilder::end() {
     mGeneratedLinks.clear();
     mGenerating = false;
     mBuilding = nullptr;
+    mClaimed = {};
 }
 
 const char* SymbolCache::lookup(u32 address, bool trimOffset) {

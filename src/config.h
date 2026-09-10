@@ -91,10 +91,8 @@ struct Config {
     /// packet, and cost 24 points as opaque grey.
     bool drawShadows = false;
 
+    /// Meshes keep the ALPHA and TEST of their ordering table instead of the chain's.
     bool noTransmitState = false;
-
-    /// The engine files its 2D tables either side of the model ones, in index order.
-    s32 spriteOtCut = 0;
 
     /// Without a keypress, for scripting and for checking a capture resumes.
     u32 captureFrame = 0;
@@ -108,15 +106,10 @@ struct Config {
     /// fldDrawPoly3's gouraud triangles. Off: they land on screen but never rasterise.
     bool poly = false;
 
-    /// Generated but never linked, so the hardware never drew them.
-    bool drawUnlinkedMeshes = true;
     bool recoverTexturesFromGs = true;
 
     /// 'b' keeps back faces out, 'f' flips which side that is, 'n' draws both.
     char cull = 'b';
-
-    /// 'f' draws nearest first, 'b' farthest first, 'n' leaves submission order alone.
-    char meshOrder = 'q';
 };
 
 }  // namespace sdfhook

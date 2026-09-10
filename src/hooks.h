@@ -127,6 +127,12 @@ private:
     std::unordered_map<u32, std::string> mNames;
 };
 
+/// How many draws a frame held at some moment, so the ones added after it can be told apart.
+struct DrawMark {
+    usize sprites = 0;
+    usize meshes = 0;
+};
+
 /// The frame under construction and how it reaches the renderer.
 class FrameBuilder {
 public:
@@ -138,7 +144,9 @@ public:
 
     Frame* getFrame();
 
-    void link(const LinkedPacket& packet) {
+    /// A producer's draws belong to the first packet it links that carries a draw, so the chain
+    /// walk can find them. State packets it links first (a texture, an ALPHA write) do not.
+    void link(const LinkedPacket& packet, bool carriesDraw) {
         // The engine links a generated packet straight after generating it, which is the only
         // thing tying our nth to its address: it builds its own output buffer.
         if (mGenerating && packet.kind == LinkKind::Packet) {
@@ -146,7 +154,16 @@ public:
             mGenerating = false;
         }
         mPending.push_back(packet);
+        if (carriesDraw) claimDraws(packet.addr);
     }
+
+    DrawMark mark() const {
+        return mBuilding ? DrawMark{mBuilding->sprites.size(), mBuilding->meshes.size()} : DrawMark{};
+    }
+
+    /// A producer added draws after `before`. Any an earlier producer left without a packet stay
+    /// unlinked rather than be claimed by this one's.
+    void adopt(DrawMark before);
 
     /// Closes a generation that linked nothing, keeping the nth entry the nth generation.
     void beginGenerated() {
@@ -165,6 +182,10 @@ public:
     u64 getDiscardedFrames() const { return mDiscardedFrames; }
 
 private:
+    void claimDraws(u32 packet);
+
+    /// Draws before these are linked or given up on.
+    DrawMark mClaimed;
     bool mAcquireFailed = false;
     std::vector<u32> mGeneratedLinks;
     bool mGenerating = false;
@@ -176,6 +197,20 @@ private:
     bool mSubmitted = false;
     u64 mSubmittedFrames = 0;
     u64 mDiscardedFrames = 0;
+};
+
+/// Scopes one producer's draws. Hooks run at entry and add everything before returning, so the
+/// draws a handler adds are exactly this producer's.
+class ProducerDraws {
+public:
+    explicit ProducerDraws(FrameBuilder& frames) : mFrames(frames), mBefore(frames.mark()) {}
+    ~ProducerDraws() { mFrames.adopt(mBefore); }
+    ProducerDraws(const ProducerDraws&) = delete;
+    ProducerDraws& operator=(const ProducerDraws&) = delete;
+
+private:
+    FrameBuilder& mFrames;
+    DrawMark mBefore;
 };
 
 /// What a run covered, for the summary and for the checks that read it.
@@ -202,6 +237,12 @@ struct Coverage {
     /// so rather than rendering fewer shadows in silence.
     u64 shadowMeshes = 0;
     u64 shadowRejects = 0;
+
+    /// By producer: draws the chain walk placed, ones no packet claimed, and ones whose packet the
+    /// chain never reached. Only placed draws are rendered.
+    std::map<std::string, u64> placedDraws;
+    std::map<std::string, u64> unlinkedDraws;
+    std::map<std::string, u64> unreachedDraws;
 };
 
 

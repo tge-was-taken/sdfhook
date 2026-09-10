@@ -48,29 +48,23 @@ struct SpriteCorner {
     Rgba color;
 };
 
+/// A draw's index in the frame's generated links when its packet address is not known yet.
+constexpr u32 kNoLinkIndex = 0xFFFFFFFF;
+
 // Top left, top right, bottom right, bottom left. The engine submits rotated quads too, so the
 // corners are carried outright rather than as a rectangle.
 struct DrawSprite {
     SpriteCorner corner[4];
 
-    /// Submission order. 2D and 3D share one table, so a shadow quad submitted before a character
-    /// draws before him rather than after every mesh.
-    u32 sequence = 0;
-
-    /// How the mesh is found in the frame's transmit chain, so the GS state it ran under can be
-    /// settled. A generated packet has no chain address, so it is found by position instead.
-    bool linked = true;
+    /// The packet that carries the draw, which is how the chain walk finds it. Zero until the
+    /// producer links one.
     u32 linkAddr = 0;
-    u32 linkIndex = 0xFFFFFFFF;
     TexHandle texHandle;
     GsAlpha alpha;
 
     /// A draw whose alpha test can only fail and whose AFAIL writes depth alone is a Z barrier:
     /// it must not put a rectangle on the screen.
     u32 test = 0;
-
-    /// SDF orders 2D by the ordering-table offset rsetOtOfs sets, not by a per-sprite depth.
-    s32 otOffset = 0;
 
     /// So a quad nobody expected names its own source.
     const char* producer = "?";
@@ -154,9 +148,6 @@ struct MeshRamp {
     bool known = false;
 };
 
-/// A mesh whose tag the transmit chain never reached, so its draw order is unknown.
-constexpr u32 kNoChainPos = 0xFFFFFFFF;
-
 struct DrawMesh {
     std::vector<MeshVertex> vertices;
     std::vector<u16> indices;
@@ -165,17 +156,13 @@ struct DrawMesh {
     Rgba color{0x80, 0x80, 0x80, 0x80};
     f32 sortZ = 0.0f;
 
-    u32 sequence = 0;
-
-    /// How the mesh is found in the frame's transmit chain, so the GS state it ran under can be
-    /// settled. A generated packet has no chain address, so it is found by position instead.
-    bool linked = true;
+    /// The packet that carries the draw, or the stream a REF in the chain names. A generated
+    /// packet's address is known only once it is linked, so it is found by linkIndex instead.
     u32 linkAddr = 0;
-    u32 linkIndex = 0xFFFFFFFF;
+    u32 linkIndex = kNoLinkIndex;
 
-    /// Where the mesh's tag sits in the frame's DMA chain, which is the order the hardware draws
-    /// in. kNoChainPos when the chain never reached it.
-    u32 chainPos = kNoChainPos;
+    /// So a mesh the chain never reached names its source.
+    const char* producer = "?";
     u16 attrBits = 0;
     u16 matFlags = 0;
     u8 matDuty = 0;
@@ -272,12 +259,16 @@ struct TextureUpload {
     std::vector<u8> rgba;
 };
 
+/// One draw in the order the frame's DMA chain transmits it.
+struct DrawRef {
+    enum class Kind : u8 { Sprite, Mesh };
+    Kind kind;
+    u32 index;
+};
+
 // A frame outlives the hook that produced it without referring to guest memory.
 struct Frame {
     u64 index = 0;
-
-    /// Handed out to each draw as it arrives, so the two lists can be merged back into one order.
-    u32 nextSequence = 0;
     Rgba background{0, 0, 0, 0};
     Matrix4 screenTm{};
 
@@ -288,24 +279,18 @@ struct Frame {
     std::vector<DrawMesh> meshes;
     std::vector<TextureUpload> textureUploads;
 
+    /// What the renderer draws, in chain order. A draw the chain never reached is not in it.
+    std::vector<DrawRef> order;
 
-    /// Adding through these keeps the two lists mergeable, so no caller remembers the sequence.
-    void addSprite(DrawSprite sprite) {
-        sprite.sequence = nextSequence++;
-        sprites.push_back(std::move(sprite));
-    }
-
-    void addMesh(DrawMesh mesh) {
-        mesh.sequence = nextSequence++;
-        meshes.push_back(std::move(mesh));
-    }
+    void addSprite(DrawSprite sprite) { sprites.push_back(std::move(sprite)); }
+    void addMesh(DrawMesh mesh) { meshes.push_back(std::move(mesh)); }
 
     void reset(u64 next) {
         index = next;
-        nextSequence = 0;
         sprites.clear();
         meshes.clear();
         textureUploads.clear();
+        order.clear();
     }
 };
 

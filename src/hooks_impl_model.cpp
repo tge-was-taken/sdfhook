@@ -605,6 +605,7 @@ void ModelHooks::drawSprite3D(TexHandle aTexHandle, Sprite3DPtr_t aSprite, Frame
     axis(mParser.mScreenTm.m[0][1], mParser.mScreenTm.m[1][1], mParser.mScreenTm.m[2][1], up);
 
     DrawMesh mesh;
+    mesh.producer = "drawSprite3D";
     Matrix4 identity{};
     for (int i = 0; i < 4; i++) identity.m[i][i] = 1.0f;
     mesh.bones.push_back(identity);
@@ -675,6 +676,7 @@ void ModelHooks::sdf3DPrimMakePoly(sdf3DPrimPolyParmPtr_t aPoly, Frame* frame) {
     if (unread) reportUnsupported("sdf3DPrimMakePoly arrays (normal 1, uv 2, multiUv 4, color 8)", unread);
 
     DrawMesh mesh;
+    mesh.producer = "sdf3DPrimMakePoly";
     Matrix4 identity{};
     for (int axis = 0; axis < 4; axis++) identity.m[axis][axis] = 1.0f;
     mesh.bones.push_back(identity);
@@ -724,6 +726,7 @@ void ModelHooks::fldDrawPoly3(const sdfVector3_t point[3], const u32 color[3], F
     if (!frame) return;
 
     DrawMesh mesh;
+    mesh.producer = "fldDrawPoly3";
     Matrix4 identity{};
     for (int axis = 0; axis < 4; axis++) identity.m[axis][axis] = 1.0f;
     mesh.bones.push_back(identity);
@@ -796,6 +799,9 @@ bool ModelHooks::fldSdwDraw(u32 aPacket, u32 aEnd, const sdfGsState_t& aState,
     if (!points) return false;
 
     DrawMesh mesh;
+    mesh.producer = "fldSdwDraw";
+    // The stream rides straight after the packet's own DMA tag, which is what the chain sends.
+    mesh.linkAddr = aPacket - sdfQwordBytes;
     Matrix4 identity{};
     for (int axis = 0; axis < 4; axis++) identity.m[axis][axis] = 1.0f;
     mesh.bones.push_back(identity);
@@ -876,6 +882,7 @@ void ModelHooks::sdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Fram
         const UV_t* uv = batch.uv[i];
 
         DrawMesh mesh;
+        mesh.producer = "sdfBillBoardMakeN";
         Matrix4 identity{};
         for (int axisIndex = 0; axisIndex < 4; axisIndex++) identity.m[axisIndex][axisIndex] = 1.0f;
         mesh.bones.push_back(identity);
@@ -918,7 +925,6 @@ void ModelHooks::sdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Fram
 /// @fn sdfModelSetNormalDrawPacket
 /// @note SLUS-20911 0x002B0AC0
 void ModelHooks::sdfModelSetNormalDrawPacket(const NodeDraw& draw, u32 chainAddr, Frame* frame) {
-    mParser.mCurrentChain = chainAddr;
     sdfMatPtr_t mat;
     for (u32 at = chainAddr; ; at += 16) {
         const u32* tag = u32Ptr_t{at}.slice(2);

@@ -601,8 +601,12 @@ int Renderer::pickMesh(const Frame& frame, int x, int y) {
     glClearDepth(1.0);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+    mRun.clear();
+    for (const DrawRef ref : frame.order) {
+        if (ref.kind == DrawRef::Kind::Mesh) mRun.push_back(ref.index);
+    }
     mPickPass = true;
-    drawMeshes(frame);
+    drawMeshes(frame, mRun);
     mPickPass = false;
 
     const int w = int(target.getWidth());
@@ -624,15 +628,22 @@ void Renderer::draw(const Frame& frame) {
     glClearDepth(1.0);
     glDepthFunc(GL_LESS);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    // The 2D tables filed before the model ones transmit first, so their sprites are behind the
-    // 3D.
-    drawSprites(frame, 0, mConfig->spriteOtCut);
-    drawMeshes(frame);
-    drawSprites(frame, mConfig->spriteOtCut, 0x7FFFFFFF);
+    describeSprites(frame);
+
+    // The chain's order is the GS's, so 2D and 3D interleave the way it has them.
+    mRun.clear();
+    for (usize i = 0; i < frame.order.size(); i++) {
+        const DrawRef ref = frame.order[i];
+        mRun.push_back(ref.index);
+        if (i + 1 < frame.order.size() && frame.order[i + 1].kind == ref.kind) continue;
+        if (ref.kind == DrawRef::Kind::Mesh) drawMeshes(frame, mRun);
+        else drawSprites(frame, mRun);
+        mRun.clear();
+    }
 }
 
-void Renderer::drawMeshes(const Frame& frame) {
-    if (frame.meshes.empty()) return;
+void Renderer::drawMeshes(const Frame& frame, const std::vector<u32>& indices) {
+    if (indices.empty()) return;
 
     // Bisecting a bad mesh costs an emulator run per step, so the range is a run-time choice.
     const usize firstMesh = mConfig->meshFirst;
@@ -701,31 +712,13 @@ void Renderer::drawMeshes(const Frame& frame) {
     }
     glUniform1i(glGetUniformLocation(mMeshProgram, "uDebugDepth"), mConfig->debugDepth);
 
-    // The tables sort by the tag's z before transmitting, so submission order is not draw order.
-    // Stable, so equal depths keep their build order.
-    mOrder.clear();
-    mOrder.reserve(frame.meshes.size());
-    for (usize index = firstMesh; index < frame.meshes.size() && index <= lastMesh; index++) {
+    mMeshes.clear();
+    for (const u32 index : indices) {
+        if (index < firstMesh || index > lastMesh) continue;
         if (!drawWanted(mConfig->drawOnly, index, sdfDecodeTex0(frame.meshes[index].tex0).tbp)) {
             continue;
         }
-        if (frame.meshes[index].otIndex <= mConfig->otMax) mOrder.push_back(index);
-    }
-    if (mConfig->meshOrder == 'q') {
-        // The DMA chain is the order the hardware drew in, so no table index or depth key is
-        // needed. Barely half the meshes match a tag; the rest keep kNoChainPos and follow in
-        // build order, which measured better than sorting them by table and depth.
-        std::stable_sort(mOrder.begin(), mOrder.end(), [&](usize a, usize b) {
-            return frame.meshes[a].chainPos < frame.meshes[b].chainPos;
-        });
-    } else if (mConfig->meshOrder != 'n') {
-        const bool nearFirst = mConfig->meshOrder == 'f';
-        std::stable_sort(mOrder.begin(), mOrder.end(), [&](usize a, usize b) {
-            const DrawMesh& x = frame.meshes[a];
-            const DrawMesh& y = frame.meshes[b];
-            if (x.otIndex != y.otIndex) return x.otIndex < y.otIndex;
-            return nearFirst ? x.sortZ < y.sortZ : x.sortZ > y.sortZ;
-        });
+        if (frame.meshes[index].otIndex <= mConfig->otMax) mMeshes.push_back(index);
     }
 
     const int billboard = glGetUniformLocation(mMeshProgram, "uBillboard");
@@ -787,9 +780,8 @@ void Renderer::drawMeshes(const Frame& frame) {
     const int solid = glGetUniformLocation(mMeshProgram, "uSolid");
     const int solidOn = glGetUniformLocation(mMeshProgram, "uSolidOn");
 
-    for (usize index : mOrder) {
+    for (const u32 index : mMeshes) {
         const DrawMesh& mesh = frame.meshes[index];
-        if (!mesh.linked && !mConfig->drawUnlinkedMeshes) continue;
         // A pick pass paints each mesh with its index so the pixel under the cursor names it.
         if (mPickPass) {
             const u32 id = u32(index) + 1;
@@ -949,9 +941,43 @@ void Renderer::drawMeshes(const Frame& frame) {
     glDisable(GL_CULL_FACE);
 }
 
-void Renderer::drawSprites(const Frame& frame, s32 fromOt, s32 toOt) {
-    const bool skip = mConfig->noSprites;
-    if (skip || frame.sprites.empty()) return;
+void Renderer::describeSprites(const Frame& frame) {
+    if (!mDescribe || !mConfig->describeFrame) return;
+    log.dump(JsonObject()
+                 .addString("dump", "frame")
+                 .addUint("sprites", frame.sprites.size())
+                 .addUint("meshes", frame.meshes.size())
+                 .addUint("placed", frame.order.size())
+                 .take());
+    for (const DrawSprite& sprite : frame.sprites) {
+        f32 lo[2] = {sprite.corner[0].x, sprite.corner[0].y};
+        f32 hi[2] = {lo[0], lo[1]};
+        for (const SpriteCorner& c : sprite.corner) {
+            lo[0] = std::min(lo[0], c.x);
+            lo[1] = std::min(lo[1], c.y);
+            hi[0] = std::max(hi[0], c.x);
+            hi[1] = std::max(hi[1], c.y);
+        }
+        JsonObject row;
+        row.addString("dump", "sprite")
+            .addString("producer", sprite.producer)
+            .addReals("min", {lo[0], lo[1]}, 1)
+            .addReals("max", {hi[0], hi[1]}, 1)
+            .addHexDigits("texHandle", sprite.texHandle.addr, 8)
+            .addHexDigits("test", sprite.test, 6)
+            .addUint("alpha", u32(sprite.alpha))
+            .beginArray("corners");
+        for (const SpriteCorner& c : sprite.corner) {
+            row.pushHexDigits(u32(c.color.r) << 24 | u32(c.color.g) << 16 | u32(c.color.b) << 8 |
+                                  c.color.a,
+                              8);
+        }
+        log.dump(row.endArray().take());
+    }
+}
+
+void Renderer::drawSprites(const Frame& frame, const std::vector<u32>& indices) {
+    if (mConfig->noSprites || indices.empty()) return;
 
     glUseProgram(mProgram);
     glUniform2f(glGetUniformLocation(mProgram, "uGuestSize"), kGuestWidth, kGuestHeight);
@@ -967,46 +993,13 @@ void Renderer::drawSprites(const Frame& frame, s32 fromOt, s32 toOt) {
     glBindBuffer(GL_ARRAY_BUFFER, mVbo);
     glEnable(GL_BLEND);
 
-    if (mDescribe && mConfig->describeFrame) {
-        log.dump(JsonObject()
-                     .addString("dump", "frame")
-                     .addUint("sprites", frame.sprites.size())
-                     .addUint("meshes", frame.meshes.size())
-                     .take());
-        for (const DrawSprite& sprite : frame.sprites) {
-            f32 lo[2] = {sprite.corner[0].x, sprite.corner[0].y};
-            f32 hi[2] = {lo[0], lo[1]};
-            for (const SpriteCorner& c : sprite.corner) {
-                lo[0] = std::min(lo[0], c.x);
-                lo[1] = std::min(lo[1], c.y);
-                hi[0] = std::max(hi[0], c.x);
-                hi[1] = std::max(hi[1], c.y);
-            }
-            JsonObject row;
-            row.addString("dump", "sprite")
-                .addString("producer", sprite.producer)
-                .addReals("min", {lo[0], lo[1]}, 1)
-                .addReals("max", {hi[0], hi[1]}, 1)
-                .addHexDigits("texHandle", sprite.texHandle.addr, 8)
-                .addHexDigits("test", sprite.test, 6)
-                .addUint("alpha", u32(sprite.alpha))
-                .beginArray("corners");
-            for (const SpriteCorner& c : sprite.corner) {
-                row.pushHexDigits(u32(c.color.r) << 24 | u32(c.color.g) << 16 |
-                                      u32(c.color.b) << 8 | c.color.a,
-                                  8);
-            }
-            log.dump(row.endArray().take());
-        }
-    }
-
     // One draw call per sprite: batching needs equal state, and the state comes first. The skip
     // isolates a producer that is over- or under-contributing without a run per guess.
     const char* const skipProducer =
         mConfig->skipProducer.empty() ? nullptr : mConfig->skipProducer.c_str();
 
-    for (const DrawSprite& sprite : frame.sprites) {
-        if (sprite.otOffset < fromOt || sprite.otOffset >= toOt) continue;
+    for (const u32 index : indices) {
+        const DrawSprite& sprite = frame.sprites[index];
         if (skipProducer && std::strstr(sprite.producer, skipProducer)) continue;
         // ATST NEVER with AFAIL ZB_ONLY writes no color: it lays a depth barrier, and drawing it
         // paints a rectangle the hardware never shows.

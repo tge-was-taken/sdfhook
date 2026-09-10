@@ -145,6 +145,10 @@ PacketType packetTypeForLinker(const char* symbol);
 /// The engine globals a packet can reference outright, such as sdf3DPrimIdentityTm.
 PacketType packetTypeForGlobal(const char* symbol);
 
+/// Whether the GS or VU1 draws something from the packet, as against setting state for what
+/// follows. An unidentified packet counts as a draw: it is where a producer's draw would be.
+bool carriesDraw(PacketType type);
+
 /// How a packet's type was settled. Everything but Payload identifies a packet; Payload
 /// merely describes its encoding, which says nothing about what the packet means, so census.py
 /// counts it as unidentified.

@@ -201,9 +201,7 @@ void ModelTrace::addTo(JsonObject& row) const {
         .addUint("staleMatPackets", mStaleMatPackets)
         .addUint("freshMatPackets", mFreshMatPackets)
         .addUint("setupRefs", mSetupRefs)
-        .addUint("strayRefs", mStrayRefs)
-        .addUint("settledMeshes", mSettledMeshes)
-        .addUint("unsettledMeshes", mUnsettledMeshes);
+        .addUint("strayRefs", mStrayRefs);
 
     // Neither has another caller, so a difference here is our traversal reaching a different set
     // of packets, not a different way of drawing them.
@@ -288,10 +286,6 @@ void ModelTrace::report() const {
     if (seenElems) {
         log.info("triangle coverage {} of {} ({:.1f}%)", drawnElems, seenElems,
             100.0 * double(drawnElems) / double(seenElems));
-    }
-    if (mSettledMeshes || mUnsettledMeshes) {
-        log.info("mesh state: {} settled from the transmit chain, {} left on the table default",
-            mSettledMeshes, mUnsettledMeshes);
     }
     if (mSetupRefs || mStrayRefs) {
         log.info("chain refs: {} setup, {} looked like a mesh and failed", mSetupRefs,
@@ -489,7 +483,9 @@ void ModelParser::reportFaceDiv(const char* what, f32 value) {
 bool ModelParser::readVifStreamMesh(u32 at, u32 end, const NodeDraw& draw, sdfMatPtr_t aMat,
                                     Frame* frame) {
     DrawMesh mesh;
-    mesh.linkAddr = mCurrentChain;
+    // The chain names the stream by a REF to its first quadword.
+    mesh.linkAddr = at;
+    mesh.producer = "sdfModelLinkOt";
     mesh.sortZ = draw.sortZ;
     mesh.otIndex = draw.otIndex;
     mesh.color = Rgba::fromPacked(draw.color);
@@ -743,6 +739,7 @@ bool ModelParser::finishMesh(guest_ref<sdfModelRootNode_t> root,
     mesh.gs = sdfGsStateForOt(mesh.otIndex);
     mesh.gs.frameMask = mState ? mState->frameMask : 0;
     mesh.linkIndex = mCurrentLink;
+    mesh.producer = "sdfCorePacketGen";
     mesh.lit = (packet.prim.packetBits & sdfCorePacketNormals) != 0;
     mesh.matFlags = material->flags;
     mesh.matDuty = material->duty;

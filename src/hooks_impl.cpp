@@ -70,14 +70,68 @@ bool isHandled(const char* producer) {
     return false;
 }
 
-/// Replays the frame's GS state in transmit order, the only order that settles what a draw ran
-/// under: the tables sort their tags first, so link order says nothing.
+namespace {
+
+/// Every draw of the frame by the packet that carries it. A generated mesh is looked up through
+/// the link its generation was paired with.
+std::unordered_map<u32, std::vector<DrawRef>> drawsByPacket(HookContext& h, const Frame& frame) {
+    std::unordered_map<u32, std::vector<DrawRef>> byPacket;
+    for (u32 i = 0; i < frame.sprites.size(); i++) {
+        const DrawSprite& sprite = frame.sprites[i];
+        if (!sprite.linkAddr) {
+            h.coverage.unlinkedDraws[sprite.producer]++;
+            continue;
+        }
+        byPacket[sprite.linkAddr].push_back({DrawRef::Kind::Sprite, i});
+    }
+    const std::vector<u32>& generated = h.frames.getGeneratedLinks();
+    for (u32 i = 0; i < frame.meshes.size(); i++) {
+        const DrawMesh& mesh = frame.meshes[i];
+        u32 packet = mesh.linkAddr;
+        if (!packet && mesh.linkIndex < generated.size()) packet = generated[mesh.linkIndex];
+        if (!packet) {
+            h.coverage.unlinkedDraws[mesh.producer]++;
+            continue;
+        }
+        byPacket[packet].push_back({DrawRef::Kind::Mesh, i});
+    }
+    return byPacket;
+}
+
+const char* producerOf(const Frame& frame, DrawRef ref) {
+    return ref.kind == DrawRef::Kind::Sprite ? frame.sprites[ref.index].producer
+                                             : frame.meshes[ref.index].producer;
+}
+
+}  // namespace
+
+/// Walks the frame's DMA chain the way channel 1 transmits it, replaying the GS state and putting
+/// each packet's draws into the frame in that order. The tables sort their tags before this, so
+/// link order says nothing about draw order.
 /// @disc SLUS-20911
 /// @address 0x002AD980
 /// @function sdfGrDrawFrame
-std::unordered_map<u32, sdfGsState_t> replayTransmitOrder(u32 aTag,
-                                                          std::unordered_map<u32, u32>* aPosition) {
-    std::unordered_map<u32, sdfGsState_t> settled;
+void placeDraws(HookContext& h, u32 aTag) {
+    Frame* frame = h.frames.getFrame();
+    if (!frame) return;
+    std::unordered_map<u32, std::vector<DrawRef>> byPacket = drawsByPacket(h, *frame);
+
+    // A REF names its data elsewhere, and a model stream is found by that data's address.
+    const auto place = [&](u32 packet, const sdfGsState_t& gs) {
+        const auto found = byPacket.find(packet);
+        if (found == byPacket.end()) return;
+        for (const DrawRef ref : found->second) {
+            frame->order.push_back(ref);
+            h.coverage.placedDraws[producerOf(*frame, ref)]++;
+            if (ref.kind != DrawRef::Kind::Mesh || h.config->noTransmitState) continue;
+            DrawMesh& mesh = frame->meshes[ref.index];
+            const u64 mask = mesh.gs.frameMask;
+            mesh.gs = gs;
+            mesh.gs.frameMask = mask;
+        }
+        byPacket.erase(found);
+    };
+
     sdfGsState_t gs{};
     u32 stack[16] = {};
     u32 depth = 0;
@@ -95,8 +149,8 @@ std::unordered_map<u32, sdfGsState_t> replayTransmitOrder(u32 aTag,
         const u32 addr = tag->addr & 0x0FFFFFFFu;
 
         applyGsRegisterWrites(at, gs);
-        settled[at] = gs;
-        if (aPosition) aPosition->emplace(at, steps);
+        place(at, gs);
+        if (sdfDmaIsRef(*tag)) place(addr, gs);
 
         switch (id) {
             case sdfDmaTagRef:
@@ -104,7 +158,11 @@ std::unordered_map<u32, sdfGsState_t> replayTransmitOrder(u32 aTag,
             case sdfDmaTagCnt: at += sdfQwordBytes * (1 + qwc); break;
             case sdfDmaTagNext: at = addr; break;
             case sdfDmaTagCall:
-                if (depth == std::size(stack)) return settled;
+                if (depth == std::size(stack)) {
+                    reportUnsupported("transmit chain call depth", depth);
+                    at = 0;
+                    break;
+                }
                 stack[depth++] = at + sdfQwordBytes * (1 + qwc);
                 at = addr;
                 break;
@@ -113,49 +171,9 @@ std::unordered_map<u32, sdfGsState_t> replayTransmitOrder(u32 aTag,
         }
     }
     if (steps == kMaxChainTags) reportUnsupported("transmit chain tags", steps);
-    return settled;
-}
 
-/// Gives every mesh the ALPHA and TEST its packet transmitted under. Meshes are built in the same
-/// walk the engine links in, so the nth geometry link is the nth mesh's.
-void settleMeshState(HookContext& h, u32 aTag) {
-    Frame* frame = h.frames.getFrame();
-    if (!frame || frame->meshes.empty()) return;
-
-    std::unordered_map<u32, u32> position;
-    const std::unordered_map<u32, sdfGsState_t> settled =
-        h.config->noTransmitState ? std::unordered_map<u32, sdfGsState_t>()
-                                  : replayTransmitOrder(aTag, &position);
-    if (settled.empty()) {
-        h.model.traceMeshes(*frame);
-        return;
-    }
-
-    const std::vector<u32>& byLink = h.frames.getGeneratedLinks();
-
-    for (DrawMesh& mesh : frame->meshes) {
-        const sdfGsState_t* state = nullptr;
-        u32 tag = 0;
-        if (mesh.linkAddr) {
-            tag = mesh.linkAddr;
-        } else if (mesh.linkIndex < byLink.size()) {
-            mesh.linked = byLink[mesh.linkIndex] != 0;
-            tag = byLink[mesh.linkIndex];
-        }
-        if (tag) {
-            const auto found = settled.find(tag);
-            if (found != settled.end()) state = &found->second;
-            const auto where = position.find(tag);
-            if (where != position.end()) mesh.chainPos = where->second;
-        }
-        if (!state) {
-            h.model.getTrace().countUnsettledMesh();
-            continue;
-        }
-        const u64 mask = mesh.gs.frameMask;
-        mesh.gs = *state;
-        mesh.gs.frameMask = mask;
-        h.model.getTrace().countSettledMesh();
+    for (const auto& [packet, refs] : byPacket) {
+        for (const DrawRef ref : refs) h.coverage.unreachedDraws[producerOf(*frame, ref)]++;
     }
     h.model.traceMeshes(*frame);
 }
@@ -283,6 +301,7 @@ void collectPackets(HookContext& h) {
 // Y is in half-height units, the same scale the draw space uses vertically.
 void submitSprite(HookContext& h, const char* producer, f32 x, f32 y, f32 w, f32 height, f32 u, f32 v,
                 f32 uw, f32 vh, Rgba color, u32 texFileHandle) {
+    const ProducerDraws draws(h.frames);
     Frame* frame = h.frames.getFrame();
     // A producer naming no texture draws with the one sdf2DLinkTexPacket bound ahead of it.
     const TexHandle named{texFileHandle ? texFileHandle : h.state.texture};
@@ -293,7 +312,6 @@ void submitSprite(HookContext& h, const char* producer, f32 x, f32 y, f32 w, f32
     if (!frame) return;
     DrawSprite sprite = DrawSprite::fromRect(x, y * 0.5f, w, height * 0.5f, u, v, u + uw, v + vh);
     sprite.test = h.state.test;
-    sprite.otOffset = h.state.otOffset;
     sprite.producer = producer;
     sprite.setColor(color);
     sprite.texHandle = texHandle;
@@ -331,6 +349,7 @@ GsAlpha alphaForMode(u32 mode) {
 
 // The frame already presented, put back over the screen at a fixed alpha or the caller's.
 void submitFrameFeedback(HookContext& h, u8 alpha) {
+    const ProducerDraws draws(h.frames);
     h.coverage.apiDraws++;
     Frame* frame = h.frames.getFrame();
     if (!frame) return;
@@ -358,6 +377,7 @@ void aDrawBoxG(HookContext& h, const s32 x, const s32 y, const s32 w, const s32 
                const u32 r0, const u32 g0, const u32 b0, const u32 a0, const u32 r1, const u32 g1,
                const u32 b1, const u32 a1, const u32 r2, const u32 g2, const u32 b2, const u32 a2,
                const u32 r3, const u32 g3, const u32 b3, const u32 a3) {
+    const ProducerDraws draws(h.frames);
     h.coverage.apiDraws++;
     Frame* frame = h.frames.getFrame();
     if (!frame) return;
@@ -369,7 +389,6 @@ void aDrawBoxG(HookContext& h, const s32 x, const s32 y, const s32 w, const s32 
     sprite.corner[3].color = Rgba{u8(r3), u8(g3), u8(b3), u8(a3)};
     sprite.alpha = h.state.alpha;
     sprite.test = h.state.test;
-    sprite.otOffset = h.state.otOffset;
     sprite.producer = "aDrawBoxG";
     frame->addSprite(sprite);
 }
@@ -377,6 +396,7 @@ void aDrawBoxG(HookContext& h, const s32 x, const s32 y, const s32 w, const s32 
 // aDrawBoxF(x, y, w, h, r, g, b, a) in pixels.
 void aDrawBoxF(HookContext& h, const s32 x, const s32 y, const s32 w, const s32 height,
                const u32 r, const u32 g, const u32 b, const u32 a) {
+    const ProducerDraws draws(h.frames);
     h.coverage.apiDraws++;
     Frame* frame = h.frames.getFrame();
     if (!frame) return;
@@ -392,6 +412,7 @@ void aDrawBoxF(HookContext& h, const s32 x, const s32 y, const s32 w, const s32 
 // filled box: PRIM 0x41 is a LINE, so only the top and bottom edges draw.
 void aDrawBoxF_Direct(HookContext& h, const s32 x0, const s32 y0, const s32 x1, const s32 y1,
                       const u32 r, const u32 g, const u32 b, const u32 a) {
+    const ProducerDraws draws(h.frames);
     h.coverage.apiDraws++;
     Frame* frame = h.frames.getFrame();
     if (!frame) return;
@@ -405,8 +426,7 @@ void aDrawBoxF_Direct(HookContext& h, const s32 x0, const s32 y0, const s32 x1, 
         sprite.setColor(Rgba{u8(r), u8(g), u8(b), u8(a)});
         sprite.alpha = h.state.alpha;
         sprite.test = h.state.test;
-        sprite.otOffset = h.state.otOffset;
-        sprite.producer = "aDrawBoxF_Direct";
+            sprite.producer = "aDrawBoxF_Direct";
         frame->addSprite(sprite);
     }
 }
@@ -415,6 +435,7 @@ void aDrawBoxF_Direct(HookContext& h, const s32 x0, const s32 y0, const s32 x1, 
 // pixels.
 void frCreateDrawFontPacket(HookContext& h, const s32 X, const s32 Y, const s32 Width,
                             const s32 Height, const u32 Col, const u32 pUv, const u32 pGsTex) {
+    const ProducerDraws draws(h.frames);
     h.coverage.apiDraws++;
     Frame* frame = h.frames.getFrame();
     if (!frame) return;
@@ -442,6 +463,7 @@ void sdfPrimLinkFt4(HookContext& h, const u32 aColor, const u32 aPrim, const s32
                     const s32 aY0, const s32 aU0, const s32 aV0, const s32 aX1, const s32 aY1,
                     const s32 aU1, const s32 aV1, const s32 aX2, const s32 aY2, const s32 aU2,
                     const s32 aV2, const s32 aX3, const s32 aY3, const s32 aU3, const s32 aV3) {
+    const ProducerDraws draws(h.frames);
     h.coverage.apiDraws++;
     Frame* frame = h.frames.getFrame();
     if (!frame) return;
@@ -467,6 +489,7 @@ void sdfPrimLinkG4(HookContext& h, const u32 aPrim, const s32 aX0, const s32 aY0
                    const u32 aColor0, const s32 aX1, const s32 aY1, const u32 aColor1,
                    const s32 aX2, const s32 aY2, const u32 aColor2, const s32 aX3, const s32 aY3,
                    const u32 aColor3) {
+    const ProducerDraws draws(h.frames);
     h.coverage.apiDraws++;
     Frame* frame = h.frames.getFrame();
     if (!frame) return;
@@ -489,6 +512,7 @@ void sdfPrimLinkG4(HookContext& h, const u32 aPrim, const s32 aX0, const s32 aY0
 // doubled vertical scale.
 void fclDrawSpriteCore(HookContext& h, const s32 X, const s32 Y, const s32 W, const s32 H,
                        const u32 pCol, const u32 pSprite, const u32 FlipFlag, const u32 AlphaFlag) {
+    const ProducerDraws draws(h.frames);
     h.coverage.apiDraws++;
     Frame* frame = h.frames.getFrame();
     if (!frame) return;
@@ -523,6 +547,7 @@ void fclDrawSpriteCore(HookContext& h, const s32 X, const s32 Y, const s32 W, co
 // cppcheck-suppress unusedFunction
 void cmpDrawBoxG(HookContext& h, const s32 x, const s32 y, const s32 w, const s32 height,
                  const u32 pCol) {
+    const ProducerDraws draws(h.frames);
     h.coverage.apiDraws++;
     Frame* frame = h.frames.getFrame();
     if (!frame) return;
@@ -545,6 +570,7 @@ void cmpDrawBoxG(HookContext& h, const s32 x, const s32 y, const s32 w, const s3
 /// @fn cmpDrawTriG
 /// @note SLUS-20911 0x00239FD0
 void cmpDrawTriG(HookContext& h, const u32 pX, const u32 pY, const u32 pCol) {
+    const ProducerDraws draws(h.frames);
     h.coverage.apiDraws++;
     Frame* frame = h.frames.getFrame();
     if (!frame) return;
@@ -596,6 +622,7 @@ void sdfModelDrawEnvLinkOt(HookContext& h, const u32 aOt, const sdfModelDrawEnvP
 /// @fn sdfBillBoardMakeN
 /// @note SLUS-20911 0x002BB0F0
 void sdfBillBoardMakeN(HookContext& h, const sdfBillBoardBatchPtr_t aCenter, const u32 aNum) {
+    const ProducerDraws draws(h.frames);
     h.coverage.apiDraws++;
     if (h.config->noBillboards) return;
     h.modelHooks.sdfBillBoardMakeN(aCenter, aNum, h.frames.getFrame());
@@ -606,6 +633,7 @@ void sdfBillBoardMakeN(HookContext& h, const sdfBillBoardBatchPtr_t aCenter, con
 /// @fn drawSprite3D
 /// @note SLUS-20911 0x0012A2D0
 void drawSprite3D(HookContext& h, const TexHandle aTexHandle, const Sprite3DPtr_t aSprite) {
+    const ProducerDraws draws(h.frames);
     h.coverage.apiDraws++;
     if (h.config->noBillboards) return;
     h.modelHooks.drawSprite3D(aTexHandle, aSprite, h.frames.getFrame());
@@ -616,6 +644,7 @@ void drawSprite3D(HookContext& h, const TexHandle aTexHandle, const Sprite3DPtr_
 /// @fn sdf3DPrimMakePoly
 /// @note SLUS-20911 0x002BAAB8
 void sdf3DPrimMakePoly(HookContext& h, const sdf3DPrimPolyParmPtr_t aPoly) {
+    const ProducerDraws draws(h.frames);
     h.coverage.apiDraws++;
     if (!aPoly) return;
 
@@ -628,6 +657,7 @@ void sdf3DPrimMakePoly(HookContext& h, const sdf3DPrimPolyParmPtr_t aPoly) {
 /// @fn fldDrawPoly3
 /// @note SLUS-20911 0x0012A5E0
 void fldDrawPoly3(HookContext& h, const sdfVector3_t point[3], const u32 color[3]) {
+    const ProducerDraws draws(h.frames);
     h.coverage.apiDraws++;
     if (!h.config->poly) return;
     h.modelHooks.fldDrawPoly3(point, color, h.frames.getFrame());
@@ -638,6 +668,7 @@ void fldDrawPoly3(HookContext& h, const sdfVector3_t point[3], const u32 color[3
 /// @fn dds3DrawFade
 /// @note SLUS-20911 0x001052D8
 void dds3DrawFade(HookContext& h) {
+    const ProducerDraws draws(h.frames);
     const u32 fade = pcsx2hook_find_symbol(h.runtime, "fadergba");
     if (!fade) {
         reportUnsupported("fade globals not in the symbol map", 0);

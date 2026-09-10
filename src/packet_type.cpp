@@ -135,6 +135,61 @@ PacketType packetTypeForLinker(const char* symbol) {
     return PacketType::Unknown;
 }
 
+bool carriesDraw(PacketType type) {
+    switch (type) {
+        case PacketType::Unknown:
+        case PacketType::MeshNormal:
+        case PacketType::MeshSkinned:
+        case PacketType::MeshShaped:
+        case PacketType::MeshStream:
+        case PacketType::MeshGenerated:
+        case PacketType::PolyStream:
+        case PacketType::Sprite:
+        case PacketType::Glyph:
+        case PacketType::Primitive2D:
+        case PacketType::ZClear:
+        case PacketType::Fade:
+        case PacketType::BillboardBatch:
+        case PacketType::Packet2D:
+        case PacketType::Primitive3D:
+        case PacketType::DebugText:
+        case PacketType::GifPrimitive:
+        case PacketType::VifData: return true;
+        case PacketType::Transform:
+        case PacketType::TransformRef:
+        case PacketType::Viewport:
+        case PacketType::LightParallel:
+        case PacketType::Fog:
+        case PacketType::Material:
+        case PacketType::MaterialRef:
+        case PacketType::DrawParams:
+        case PacketType::VuMicrocode:
+        case PacketType::TestState:
+        case PacketType::AlphaState:
+        case PacketType::TexaState:
+        case PacketType::TexBind:
+        case PacketType::BillboardTransform:
+        case PacketType::BitBlt:
+        case PacketType::PacketHeader:
+        case PacketType::Terminator:
+        case PacketType::DrawEnv:
+        case PacketType::FrameMask:
+        case PacketType::FrameTex:
+        case PacketType::DrawFrame:
+        case PacketType::RefGif:
+        case PacketType::TextureUpload:
+        case PacketType::Clear:
+        case PacketType::FrameBuffer:
+        case PacketType::DirectRef:
+        case PacketType::GifRegisters:
+        case PacketType::VifSetup:
+        case PacketType::Empty: return false;
+        case PacketType::Count: break;
+    }
+    reportUnsupported("packet type", u32(type));
+    return true;
+}
+
 PacketType packetTypeForGlobal(const char* symbol) {
     // sdf3DPrimLinkResetTm references the identity matrix, sdf3DLinkInitPacket the VU1 microcode.
     if (std::strcmp(symbol, "sdf3DPrimIdentityTm") == 0) return PacketType::Transform;

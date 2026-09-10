@@ -168,6 +168,18 @@ void writeRunSummary(const sdfhook::HookContext& hooks) {
     }
     row.endArray();
 
+    // What reached the renderer: a draw is only drawn once the chain walk finds its packet.
+    const auto byProducer = [&](const char* name, const std::map<std::string, u64>& counts) {
+        row.beginArray(name);
+        for (const auto& [producer, count] : counts) {
+            row.beginObject().addString("producer", producer.c_str()).addUint("draws", count).endObject();
+        }
+        row.endArray();
+    };
+    byProducer("placedDraws", hooks.coverage.placedDraws);
+    byProducer("unlinkedDraws", hooks.coverage.unlinkedDraws);
+    byProducer("unreachedDraws", hooks.coverage.unreachedDraws);
+
     hooks.model.getTrace().addTo(row);
     hooks.trace->onRunSummary(row.take());
 }
@@ -229,6 +241,22 @@ void reportRun(const sdfhook::HookContext& hooks) {
     if (hooks.coverage.shadowMeshes || hooks.coverage.shadowRejects) {
         todoLog.info("fldSdwDraw shadow streams: {} read, {} refused", hooks.coverage.shadowMeshes,
                      hooks.coverage.shadowRejects);
+    }
+
+    // Only a draw the chain walk placed is rendered, so the other two are draws lost.
+    for (const auto& [producer, placed] : hooks.coverage.placedDraws) {
+        const auto count = [&](const std::map<std::string, u64>& counts) {
+            const auto found = counts.find(producer);
+            return found == counts.end() ? u64(0) : found->second;
+        };
+        log.info("{:<34} {} placed, {} unlinked, {} unreached", producer, placed,
+                 count(hooks.coverage.unlinkedDraws), count(hooks.coverage.unreachedDraws));
+    }
+    for (const auto& [producer, lost] : hooks.coverage.unlinkedDraws) {
+        if (!hooks.coverage.placedDraws.count(producer)) todoLog.info("{:<34} {} unlinked, none placed", producer, lost);
+    }
+    for (const auto& [producer, lost] : hooks.coverage.unreachedDraws) {
+        if (!hooks.coverage.placedDraws.count(producer)) todoLog.info("{:<34} {} unreached, none placed", producer, lost);
     }
 
     for (const auto& [producer, tbps] : hooks.coverage.tbpByProducer) {

@@ -388,11 +388,10 @@ void Trace::onMesh(const DrawMesh& mesh, const Matrix4& screenTm, u32 frame) {
                             u64(mesh.color.r) | (u64(mesh.color.g) << 8) |
                                 (u64(mesh.color.b) << 16) | (u64(mesh.color.a) << 24),
                             8)
-              // Which association gave this mesh its GS state: a chain address for world geometry,
-              // else position among the generated links. A wrong table lands on one or the other.
+              // How the chain walk found the mesh: its packet or stream, else its generated link.
               .addHexDigits("link", mesh.linkAddr, 8)
               .addUint("linkIndex", u64(mesh.linkIndex))
-              .addBool("linked", mesh.linked)
+              .addString("producer", mesh.producer)
               .addBool("streamColors", mesh.streamColors)
               .addUint("litcase", u64(litCase(mesh)))
               .addReals("litLo", {litLo[0], litLo[1], litLo[2]}, 4)
@@ -425,8 +424,7 @@ void Trace::onSprite(const DrawSprite& sprite) {
         .addUint("frame", u64(mFrame))
         .addString("producer", sprite.producer)
         .addHexDigits("texHandle", sprite.texHandle.addr, 8)
-        .addUint("otOffset", u64(u32(sprite.otOffset)))
-        .addUint("sequence", sprite.sequence);
+        .addHexDigits("link", sprite.linkAddr, 8);
     f32 ndcLo[2] = {};
     f32 ndcHi[2] = {};
     for (usize i = 0; i < std::size(sprite.corner); i++) {

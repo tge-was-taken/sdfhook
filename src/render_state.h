@@ -14,9 +14,6 @@ struct RenderState {
     /// again with RGB masked, to lay its shape into the alpha the bloom reads.
     u64 frameMask = 0;
 
-    /// What rsetOtOfs last set: which ordering table a 2D draw goes into, and so its draw order.
-    s32 otOffset = 0;
-
     /// Bound by sdf2DLinkTexPacket ahead of the draw that uses it, which is how a producer that
     /// takes no texture argument still names one.
     u32 texture = 0;

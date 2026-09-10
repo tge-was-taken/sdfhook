@@ -12,11 +12,12 @@ void dumpPacket(const LinkedPacket& packet, const char* by, const sdfDmaTag_t& t
 /// Producers whose draws reach the renderer through their own entry point.
 bool isHandled(const char* producer);
 
-/// Gives every mesh the ALPHA and TEST its packet transmitted under, and where in the chain it
-/// was drawn.
-void settleMeshState(HookContext& h, u32 aTag);
+/// Puts the frame's draws in the order its DMA chain transmits them, each mesh under the ALPHA
+/// and TEST in force there. A draw whose packet the chain never reaches is not drawn.
+void placeDraws(HookContext& h, u32 aTag);
 
-/// Parses the frame's linked packets for coverage, shadows and the trace.
+/// Parses the frame's linked packets for coverage, shadows and the trace. Runs before placeDraws,
+/// since the shadows it reads are draws the chain has to place.
 void collectPackets(HookContext& h);
 
 /// An inventory of the frame's DMA chain, for judging what a chain-walk renderer would have to

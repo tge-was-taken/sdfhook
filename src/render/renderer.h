@@ -61,11 +61,12 @@ private:
     };
 
     void uploadTextures(const Frame& frame);
-    void drawMeshes(const Frame& frame);
 
-    /// [fromOt, toOt). The 2D tables transmit in index order, so those filed before the model
-    /// tables belong behind the meshes.
-    void drawSprites(const Frame& frame, s32 fromOt, s32 toOt);
+    /// One run of `frame.order`, which holds draws of one kind back to back. Each kind has its own
+    /// pass, so the order interleaves them run by run.
+    void drawMeshes(const Frame& frame, const std::vector<u32>& indices);
+    void drawSprites(const Frame& frame, const std::vector<u32>& indices);
+    void describeSprites(const Frame& frame);
 
     /// Null when nothing was uploaded for the handle.
     const Texture* findTexture(TexHandle handle) const;
@@ -76,9 +77,8 @@ private:
     bool mPickPass = false;
     bool mDescribe = false;
     std::vector<ScreenVertex> mVerts;
-    // Decided by the ordering tables, not submission.
-    std::vector<usize> mOrder;
-    std::vector<usize> mSpriteOrder;
+    std::vector<u32> mRun;
+    std::vector<u32> mMeshes;
     std::unordered_map<TexHandle, Texture> mTextures;
     // Two, so a frame can sample the one before it.
     RenderTexture mFrames[2];
