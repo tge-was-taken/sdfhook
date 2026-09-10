@@ -2292,6 +2292,38 @@ right.
 - [ ] **B4: residual on the field scenes, +5.40 and +1.31 on ~11.** The worst tiles are the HUD
       corners. What is left after the texture work is a shading difference, not a missing feature.
 
+- [ ] **P1: a renderer driven by the frame's DMA chain, typed packet by packet.** `sceDmaSend`
+      filtered to `$ra == sdfGrDrawFrame+0x12C` sees the whole chain with predraw applied and nothing
+      consumed. The engine sends each chain twice (mode 0 and 1), so dedupe on the head.
+      `sdfImageSetTrans` is the third `sceDmaSend` site. `sdfDispThreadFlag` reads 3 at every send
+      and cannot tell them apart.
+      **Typing.** `SDF_CHAIN_CENSUS=1 SDF_LOG=census=dump`, then `scripts/census.py`. A GIF or VIF
+      payload counts as unidentified. Identified per frame: menu 567/570, loading 324/327, title
+      83/87, underground 67/70, field 1038/1083, battle 1193/1224. What is left, and what each needs:
+      - Billboards (`dds3BillboardTagLink` 3+1 link sites, `dds3BillboardLinkOt`, `drawSprite3D`
+        2+1): multi-site linkers, so type per site or by the builder of each packet. ~15 a frame.
+      - `dds3InitDrawEnvSub`: its `stdDrawEnv` is linked through `sdfGrLinkStdDrawEnv`, which
+        tail-calls its link, at an offset inside the persistent global `dds3DrawEnv`. Needs typing
+        by struct range, not exact address. 1 a frame in every scene.
+      - `dds3EffectManagerRunF` (1 site) and `dds3MultiBillboardLinkOt`'s `sdfDrawTagLink` site
+        each link a 2 or 3 write A+D list. Read what they write before naming them.
+      - Field only: 17 one-quadword `vifSetup` entries (`w0=00080070`) and 5 four-quadword ones
+        no link hook sees; a 28672-quadword transfer, likely `sdfLinkLoadImage` (a tail-caller);
+        `fldDrwZSave`, `fldDrwZLoad`, `fldDrawFrameSprite` (3 sites), `fldDrawEATexQuad`.
+      - Title: `release_movieobj2`. `DispCommCursor`, `DispHelpPanel` and `fldDrawEATexQuad` are
+        named by `$ra` but have no direct link call, so a callee tail-calls it.
+      **Savestates.** `sdfModelLinkDrawPacket` builds a model's persistent packets
+      (`sdfModelSetNormalDrawPacket`, `sdfModelSetOneSkinDrawPacket`, `sdfModelNewPacketHeader`) at
+      setup, and lights can be built at scene load, so a resumed state never sees those calls. Light
+      packets are typed by shape as the fallback: three unit direction rows at +0x90, colours at
+      +0x70 and +0x80. That disagrees with CLAUDE.md's "+16, columns" note; settle which is right.
+      **Prototype.** `SDF_CHAIN_FRAME=1` builds sprites from PACKED GIF only. Missing: the VIF
+      streams (793 field entries), REGLIST and fans over four vertices (menu 231 prim packets give
+      191 sprites), texture binding from TEX0 back to a handle, GS state across the walk. It builds
+      its own frame, since `dds3DrawProcessPost` has closed the API path's before the send.
+      `smt3_field_underground_facility` has no `vifData` or `transform` at all: that state sits on
+      a load or menu and does not exercise the 3D path.
+
 ## Done
 
 - **Every branch of `sdfModelLinkOt` is modelled**, including the ones no sample scene reaches, so
