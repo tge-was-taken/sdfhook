@@ -162,12 +162,25 @@ PacketType classifySelf(u32 aData, u32 aQwc) {
 /// The entry's type: what it says it is, or failing that what its builder said. A builder is
 /// handed the packet, its data, or an interior offset of either, so all four are probed.
 PacketType classify(u32 aPacket, u32 aData, u32 aQwc, const char* aProducer,
-                    const std::unordered_map<u32, PacketType>& aTypes, TypedBy* aHow) {
+                    const std::unordered_map<u32, PacketType>& aTypes, TypedBy* aHow,
+                    bool aInMeshCall) {
     // What the engine said it built is the only thing that identifies a packet outright.
     *aHow = TypedBy::Builder;
     for (const u32 probe : {aPacket, aData, aPacket + 16, aData + 16}) {
         const auto found = aTypes.find(probe);
         if (found != aTypes.end()) return found->second;
+    }
+
+    // A single-purpose linker is as good as the builder: sdfDrawTagLinkCall has one caller in the
+    // whole game, so what linked the packet says what it is.
+    *aHow = TypedBy::Linker;
+    const PacketType byLinker = packetTypeForLinker(aProducer);
+    if (byLinker != PacketType::Unknown) return byLinker;
+
+    // sdfDrawTagLinkCall's only caller is sdfModelLinkOt, so a call chain is a type 1 stream body.
+    if (aInMeshCall && aQwc) {
+        *aHow = TypedBy::Container;
+        return PacketType::MeshStream;
     }
 
     // The producer and the shape rules only apply where the payload is opaque. A producer links
@@ -212,7 +225,7 @@ void censusLinked(const std::vector<LinkedPacket>& aLinked, SymbolCache& aSymbol
 
         const char* producer = aSymbols.getFunction(packet.caller);
         TypedBy how = TypedBy::Nothing;
-        const PacketType type = classify(packet.addr, data, tag.qwc, producer, aTypes, &how);
+        const PacketType type = classify(packet.addr, data, tag.qwc, producer, aTypes, &how, false);
         u32 calls = 0, unpacks = 0, microcode = 0;
         scanVif(data, tag.qwc, &calls, &unpacks, &microcode);
 
@@ -258,7 +271,7 @@ void censusChain(u32 aTag, const std::vector<LinkedPacket>& aLinked, SymbolCache
         const auto owner = byAddr.find(at);
         const char* producer = owner == byAddr.end() ? "-" : aSymbols.getFunction(owner->second);
         TypedBy how = TypedBy::Nothing;
-        const PacketType type = classify(at, data, qwc, producer, aTypes, &how);
+        const PacketType type = classify(at, data, qwc, producer, aTypes, &how, depth != 0);
         u32 calls = 0, unpacks = 0, microcode = 0;
         scanVif(data, qwc, &calls, &unpacks, &microcode);
 

@@ -732,8 +732,21 @@ int packetTypeHook(pcsx2hook_regs* regs, void* user) {
     h.builderCalls[builder]++;
     if (!made.takesPacket) return PCSX2HOOK_CONTINUE;
     const u32 aPacket = c.getArg(made.argument);
-    if (aPacket) h.packetTypes[aPacket] = made.type;
+    if (!aPacket) return PCSX2HOOK_CONTINUE;
+    h.packetTypes[aPacket] = made.type;
+    if (made.trailing != PacketType::Unknown) h.packetTypes[aPacket + sdfQwordBytes] = made.trailing;
     return PCSX2HOOK_CONTINUE;
+}
+
+/// For the builders that return their packet rather than take one.
+void packetTypePost(pcsx2hook_regs* regs, void* user) {
+    Context c{regs};
+    HookContext& h = *static_cast<HookContext*>(user);
+
+    const PacketBuilder made = packetBuilderFor(h.symbols.getFunction(c.getPc()));
+    const u32 packet = c.getResult();
+
+    if (made.returnsPacket && packet) h.packetTypes[packet] = made.type;
 }
 
 int traceEntryHook(pcsx2hook_regs* regs, void* user) {
@@ -848,14 +861,14 @@ constexpr Entry kGameEntries[] = {
     {"sdf3DMakeViewportPacket", &packetTypeHook, nullptr},
     {"sdf3DMakeDirectRefPacket", &packetTypeHook, nullptr},
     {"sdf3DPrimSetTmPacket", &packetTypeHook, nullptr},
-    {"sdfModelAllocTmPacket", &packetTypeHook, nullptr},
+    {"sdfModelAllocTmPacket", &packetTypeHook, &packetTypePost},
     {"sdfModelSetTmRefPacket", &packetTypeHook, nullptr},
     {"sdfMatMakePacket", &packetTypeHook, nullptr},
     {"sdfGrSetFramePacket", &packetTypeHook, nullptr},
     {"MakeLightPacket", &packetTypeHook, nullptr},
     {"sdfModelSetMatRefPacket", &packetTypeHook, nullptr},
     {"sdfModelSetOneSkinDrawPacket", &packetTypeHook, nullptr},
-    {"sdfModelNewPacketHeader", &packetTypeHook, nullptr},
+    {"sdfModelNewPacketHeader", &packetTypeHook, &packetTypePost},
     {"sdfModelSetTermPacket", &packetTypeHook, nullptr},
     {"sdfGrSetStdDrawEnv", &packetTypeHook, nullptr},
     {"sdfGrSetFrameMaskRGB", &packetTypeHook, nullptr},

@@ -20,7 +20,8 @@ void settleMeshState(HookContext& h, u32 aTag);
 void collectPackets(HookContext& h);
 
 /// An inventory of the frame's DMA chain, for judging what a chain-walk renderer would have to
-/// decode. Runs before collectPackets, which clears the linked list the owner names come from.
+/// decode. Runs before collectPackets, which clears the linked list the owner names come from, and
+/// forgets the frame's packet types either way.
 void censusFrame(HookContext& h, u32 aTag);
 
 /// One sceDmaSend. Only the send that carries the frame's chain builds a chain frame, and only

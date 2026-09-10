@@ -38,15 +38,52 @@ PacketBuilder packetBuilderFor(const char* symbol) {
         {"sdfModelSetNormalDrawPacket", PacketType::MeshNormal, 2},
         {"sdfModelSetOneSkinDrawPacket", PacketType::MeshSkinned, 2},
         {"sdfGrLinkDrawFrameTex", PacketType::FrameTex, 2},
+        {"sdfGrSetRefGifPacket", PacketType::RefGif, 0},
     };
     for (const Entry& entry : kBuilders) {
-        if (std::strcmp(entry.symbol, symbol) == 0) return {entry.type, entry.argument, true};
+        if (std::strcmp(entry.symbol, symbol) != 0) continue;
+        PacketBuilder made{entry.type, entry.argument, true, false};
+        // 0x2B2018: sdfModelLinkOt writes the draw's colour and face-division UNPACKs and its MSCAL
+        // into the same 64-byte packet, straight after the ref.
+        if (entry.type == PacketType::TransformRef) made.trailing = PacketType::DrawParams;
+        return made;
     }
-    // Hooked but handed no packet: sdfMatUpdatePacket takes the material, MakeLightPacket a unit
-    // handle, sdfTexMakeGIFPacket a texture handle, and sdf3DPrimLinkMat and sdf3DPrimLinkTm link
-    // rather than build. sdfModelAllocTmPacket and sdfModelNewPacketHeader return theirs, which
-    // needs a post-handler.
+    if (std::strcmp(symbol, "sdfModelAllocTmPacket") == 0) {
+        return {PacketType::Transform, 0, false, true};
+    }
+    if (std::strcmp(symbol, "sdfModelNewPacketHeader") == 0) {
+        return {PacketType::PacketHeader, 0, false, true};
+    }
+    // Handed no packet: sdfMatUpdatePacket takes the material, MakeLightPacket a unit handle,
+    // sdfTexMakeGIFPacket a texture handle, sdf3DPrimLinkMat and sdf3DPrimLinkTm only link.
     return {};
+}
+
+PacketType packetTypeForLinker(const char* symbol) {
+    struct Entry {
+        const char* symbol;
+        PacketType type;
+    };
+    // Each of these links one kind of packet and nothing else, read off the call sites of the five
+    // sdfDrawTagLink* entry points.
+    static constexpr Entry kLinkers[] = {
+        {"sdf3DPrimLinkMat", PacketType::Material},
+        {"sdf3DPrimLinkResetTm", PacketType::Transform},
+        {"sdf3DLinkInitPacket", PacketType::DrawEnv},
+        {"sdfGrLinkDispFrameTex", PacketType::FrameTex},
+        {"sdfGrLinkDrawFrameTex", PacketType::FrameTex},
+        {"rsetFrameMaskRgbOn", PacketType::FrameMask},
+        {"rsetFrameMaskRgbOff", PacketType::FrameMask},
+        {"cmpDisableRGB", PacketType::FrameMask},
+        {"sdfModelLinkShapedDrawPacket", PacketType::MeshShaped},
+        {"sdfLinkStoreImage", PacketType::TextureUpload},
+        {"sdfLinkStoreFrameImage", PacketType::TextureUpload},
+        {"sdfLinkLoadImage", PacketType::TextureUpload},
+    };
+    for (const Entry& entry : kLinkers) {
+        if (std::strcmp(entry.symbol, symbol) == 0) return entry.type;
+    }
+    return PacketType::Unknown;
 }
 
 PacketType packetTypeForProducer(const char* symbol) {

@@ -35,7 +35,7 @@ def main(argv):
         for kind, count in kinds.most_common():
             print("   %-14s %5d  %5.1f%%" % (kind, count, 100.0 * count / len(carrying)))
         # A GIF or VIF payload says how a packet is encoded, not what it is, so it does not count.
-        identified = [r for r in carrying if r["how"] in ("builder", "producer", "shape")]
+        identified = [r for r in carrying if r["how"] != "payload" and r["how"] != "-"]
         how = collections.Counter(r["how"] for r in identified)
         print("   identified: %d of %d (%.1f%%)   by %s"
               % (len(identified), len(carrying), 100.0 * len(identified) / len(carrying),

@@ -20,6 +20,9 @@ enum class PacketType : u8 {
     MeshNormal,
     MeshSkinned,
     MeshShaped,
+    MeshStream,
+    MeshGenerated,
+    DrawParams,
     PacketHeader,
     Terminator,
     DrawEnv,
@@ -53,6 +56,9 @@ constexpr const char* packetTypeName(PacketType type) {
         case PacketType::MeshNormal: return "meshNormal";
         case PacketType::MeshSkinned: return "meshSkinned";
         case PacketType::MeshShaped: return "meshShaped";
+        case PacketType::MeshStream: return "meshStream";
+        case PacketType::MeshGenerated: return "meshGenerated";
+        case PacketType::DrawParams: return "drawParams";
         case PacketType::PacketHeader: return "packetHeader";
         case PacketType::Terminator: return "terminator";
         case PacketType::DrawEnv: return "drawEnv";
@@ -86,6 +92,10 @@ struct PacketBuilder {
     PacketType type = PacketType::Unknown;
     u8 argument = 0;
     bool takesPacket = false;
+    bool returnsPacket = false;
+
+    /// What the caller writes straight after the packet, in the same allocation.
+    PacketType trailing = PacketType::Unknown;
 };
 
 PacketBuilder packetBuilderFor(const char* symbol);
@@ -99,16 +109,23 @@ PacketType packetTypeForProducer(const char* symbol);
 /// census counts it apart from what the engine told us.
 PacketType packetTypeForShape(u32 aData, u32 aQwc);
 
-/// How a packet's type was settled. Only Builder, Producer and Shape identify a packet; Payload
+/// The call that linked a packet, where that call has one purpose. sdfDrawTagLinkCall has a single
+/// caller in the whole game and sdfDrawTagLink2 six, so what links a packet often says what it is
+/// where the packet itself does not.
+PacketType packetTypeForLinker(const char* symbol);
+
+/// How a packet's type was settled. Everything but Payload identifies a packet; Payload
 /// merely describes its encoding, which says nothing about what the packet means, so census.py
 /// counts it as unidentified.
-enum class TypedBy : u8 { Nothing, Payload, Builder, Producer, Shape };
+enum class TypedBy : u8 { Nothing, Payload, Builder, Linker, Container, Producer, Shape };
 
 constexpr const char* typedByName(TypedBy how) {
     switch (how) {
         case TypedBy::Nothing: return "-";
         case TypedBy::Payload: return "payload";
         case TypedBy::Builder: return "builder";
+        case TypedBy::Linker: return "linker";
+        case TypedBy::Container: return "container";
         case TypedBy::Producer: return "producer";
         case TypedBy::Shape: return "shape";
     }

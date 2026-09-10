@@ -161,7 +161,18 @@ void settleMeshState(HookContext& h, u32 aTag) {
 }
 
 void censusFrame(HookContext& h, u32 aTag) {
+    // Packet buffers are reused every other frame, so a type is only good for the frame that
+    // recorded it.
+    struct Reset {
+        std::unordered_map<u32, PacketType>& types;
+        ~Reset() { types.clear(); }
+    } reset{h.packetTypes};
     if (!h.config->dumpChainCensus) return;
+
+    // sdfCorePacketGen builds these, and the frame builder already pairs each with its link.
+    for (const u32 link : h.frames.getGeneratedLinks()) {
+        if (link) h.packetTypes[link] = PacketType::MeshGenerated;
+    }
     censusChain(aTag, h.frames.getPackets(), h.symbols, h.trace->getFrame(), h.packetTypes);
     for (const auto& [builder, calls] : h.builderCalls) {
         log.dump(JsonObject()
