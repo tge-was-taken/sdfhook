@@ -52,7 +52,6 @@ Config Config::fromEnvironment() {
     config.dumpScreen = flag("SDF_DUMP_SCREEN");
     config.dumpDrawEnv = flag("SDF_DUMP_DRAW_ENV");
     config.dumpChainCensus = flag("SDF_CHAIN_CENSUS");
-    config.chainFrame = flag("SDF_CHAIN_FRAME");
     config.dumpRecover = flag("SDF_DUMP_RECOVER");
     config.describeFrame = flag("SDF_DESCRIBE");
     config.debugDepth = flag("SDF_DEBUG_DEPTH");

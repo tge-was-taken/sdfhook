@@ -84,10 +84,10 @@ owns the window, the context and the loop; `Renderer` owns the GL objects and kn
 frame, on that thread and no other. The guest thread only ever touches the three-slot `FrameRing`,
 so a hook never blocks on the GPU.
 
-A frame is accumulated in the hooks' pending list, not in a `Frame`: the game allocates its content
-across several tasks before `dds3DrawProcess` assembles and submits it, so there is no call that
-reliably starts one. A `Frame` is taken from the ring at `sdfGrReqDraw`, which is the first moment
-the content is both complete and known to be wanted. `dds3DrawProcess` is `sdfGrReqDraw`'s only
+A frame's draws are decoded from the producers' arguments as the game calls them, each recording
+the packet that carries it. At `sdfGrReqDraw`, the first moment the content is both complete and
+known to be wanted, one walk follows the frame's DMA chain the way channel 1 sends it, replays the
+GS state, and puts the draws in that order. The renderer draws that order and nothing else. `dds3DrawProcess` is `sdfGrReqDraw`'s only
 caller, so returning from it without one means `dds3DrawFlag & 0x2000000` skipped the submission:
 the game built the frame and threw it away, and dropping the packets leaves the previous frame on
 screen the way the hardware does. None of the three sample states exercises that path.

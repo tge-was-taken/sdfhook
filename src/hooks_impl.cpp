@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "chain_census.h"
-#include "chain_frame.h"
 #include "gif.h"
 #include "guest_ptr.h"
 #include "json.h"
@@ -50,98 +49,190 @@ void dumpPacket(const LinkedPacket& packet, const char* by, const sdfDmaTag_t& t
     log.dump(row.endArray().take());
 }
 
-// Fills no frame by design: packets are the check on the API hooks, not the renderer's input.
-// Producers whose draws reach the renderer through their own entry point.
-bool isHandled(const char* producer) {
-    static const char* const kHandled[] = {"DrwSprite2D", "DrwSprite2DF", "nbPnlSprite",
-                                          "aDrawBoxG", "aDrawBoxF_Direct",
-                                          "fclDrawSpriteCore", "cmpDrawTriG",
-                                          "cmpDrawBoxG",     "dds3InitDrawEnvSub",
-                                          "dds3DrawFade",     "dds3LinkZClearDrawTag",
-                                          "fldDrawFrameSprite",
-                                          "aDrawBoxF",
-                                          "frCreateDrawFontPacket_20550848", "fldDrawEATexQuad",
-                                          "DispCommCursor",  "DispHelpPanel",
-                                          // ModelWalk redraws everything this links.
-                                          "sdfModelLinkOt"};
-    for (const char* name : kHandled) {
-        if (std::strcmp(producer, name) == 0) return true;
-    }
-    return false;
-}
-
 namespace {
-
-/// Every draw of the frame by the packet that carries it. A generated mesh is looked up through
-/// the link its generation was paired with.
-std::unordered_map<u32, std::vector<DrawRef>> drawsByPacket(HookContext& h, const Frame& frame) {
-    std::unordered_map<u32, std::vector<DrawRef>> byPacket;
-    for (u32 i = 0; i < frame.sprites.size(); i++) {
-        const DrawSprite& sprite = frame.sprites[i];
-        if (!sprite.linkAddr) {
-            h.coverage.unlinkedDraws[sprite.producer]++;
-            continue;
-        }
-        byPacket[sprite.linkAddr].push_back({DrawRef::Kind::Sprite, i});
-    }
-    const std::vector<u32>& generated = h.frames.getGeneratedLinks();
-    for (u32 i = 0; i < frame.meshes.size(); i++) {
-        const DrawMesh& mesh = frame.meshes[i];
-        u32 packet = mesh.linkAddr;
-        if (!packet && mesh.linkIndex < generated.size()) packet = generated[mesh.linkIndex];
-        if (!packet) {
-            h.coverage.unlinkedDraws[mesh.producer]++;
-            continue;
-        }
-        byPacket[packet].push_back({DrawRef::Kind::Mesh, i});
-    }
-    return byPacket;
-}
 
 const char* producerOf(const Frame& frame, DrawRef ref) {
     return ref.kind == DrawRef::Kind::Sprite ? frame.sprites[ref.index].producer
                                              : frame.meshes[ref.index].producer;
 }
 
-}  // namespace
+/// The frame's DMA chain walked the way channel 1 transmits it: the GS state replayed as it goes,
+/// each packet's draws put into the frame in that order, and every linked packet accounted for.
+class FrameWalk {
+public:
+    FrameWalk(HookContext& h, Frame& frame) : h(h), mFrame(frame), mParser(&h.coverage.gif) {
+        claimDraws();
+        keyDraws();
+        for (const LinkedPacket& packet : h.frames.getPackets()) mLinked.emplace(packet.addr, packet);
+    }
 
-/// Walks the frame's DMA chain the way channel 1 transmits it, replaying the GS state and putting
-/// each packet's draws into the frame in that order. The tables sort their tags before this, so
-/// link order says nothing about draw order.
-/// @disc SLUS-20911
-/// @address 0x002AD980
-/// @function sdfGrDrawFrame
-void placeDraws(HookContext& h, u32 aTag) {
-    Frame* frame = h.frames.getFrame();
-    if (!frame) return;
-    std::unordered_map<u32, std::vector<DrawRef>> byPacket = drawsByPacket(h, *frame);
+    void run(u32 aTag);
 
-    // A REF names its data elsewhere, and a model stream is found by that data's address. Every
-    // draw here is drawn in context 1; the second texture pass carries its own ALPHA.
-    const auto place = [&](u32 packet, const sdfGsState_t& gs) {
-        const auto found = byPacket.find(packet);
-        if (found == byPacket.end()) return;
-        for (const DrawRef ref : found->second) {
-            frame->order.push_back(ref);
-            h.coverage.placedDraws[producerOf(*frame, ref)]++;
-            if (h.config->noTransmitState) continue;
-            if (ref.kind == DrawRef::Kind::Sprite) {
-                DrawSprite& sprite = frame->sprites[ref.index];
-                // Without ABE in its PRIM the GS never reads ALPHA, which the producer knows.
-                if (sprite.alpha != GsAlpha::Opaque) sprite.alpha = GsAlpha(u32(gs.alpha & 0xFF));
-                sprite.test = u32(gs.test);
-                continue;
-            }
-            DrawMesh& mesh = frame->meshes[ref.index];
-            const u64 mask = mesh.gs.frameMask;
-            mesh.gs = gs;
-            mesh.gs.frameMask = mask;
-        }
-        byPacket.erase(found);
+private:
+    /// A CALL's packet is accounted at its RET, once the draws inside it are placed.
+    struct Call {
+        u32 back = 0;
+        const LinkedPacket* packet = nullptr;
+        u64 placedBefore = 0;
+        bool stateOnly = false;
     };
 
-    GsContexts gs;
-    u32 stack[16] = {};
+    PacketType typeOf(const LinkedPacket& packet) const;
+    u32 claimedPacket(const FrameBuilder::DrawClaim& claim) const;
+    void claimDraws();
+    void keyDraws();
+    void place(u32 packet);
+    bool readShadow(u32 at, const sdfDmaTag_t& tag);
+    void account(const LinkedPacket& packet, bool stateOnly, bool drew);
+    void dumpStateChange(const sdfGsState_t& was, u32 at);
+
+    HookContext& h;
+    Frame& mFrame;
+    GifParser mParser;
+    std::unordered_map<u32, std::vector<DrawRef>> mByPacket;
+    std::unordered_map<u32, LinkedPacket> mLinked;
+    GsContexts mGs;
+    u64 mPlaced = 0;
+};
+
+/// What the builder that made it said, else what the single-site function linking it is known to
+/// link.
+PacketType FrameWalk::typeOf(const LinkedPacket& packet) const {
+    const auto built = h.packetTypes.find(packet.addr);
+    if (built != h.packetTypes.end()) return built->second;
+    return packetTypeForLinker(h.symbols.getFunction(packet.caller));
+}
+
+/// The first packet the producer linked that draws: a texture or A+D state packet linked ahead of
+/// the geometry is passed over, now that its contents are written.
+u32 FrameWalk::claimedPacket(const FrameBuilder::DrawClaim& claim) const {
+    for (const LinkedPacket& packet : claim.packets) {
+        if (!carriesDraw(typeOf(packet))) continue;
+        GsContexts scratch;
+        if (applyGsRegisterWrites(packet.addr, scratch)) continue;
+        return packet.addr;
+    }
+    return 0;
+}
+
+void FrameWalk::claimDraws() {
+    for (const FrameBuilder::DrawClaim& claim : h.frames.getClaims()) {
+        const u32 packet = claimedPacket(claim);
+        for (usize i = claim.from.sprites; i < claim.to.sprites; i++) {
+            mFrame.sprites[i].linkAddr = packet;
+        }
+        for (usize i = claim.from.meshes; i < claim.to.meshes; i++) {
+            DrawMesh& mesh = mFrame.meshes[i];
+            if (!mesh.linkAddr && mesh.linkIndex == kNoLinkIndex) mesh.linkAddr = packet;
+        }
+    }
+}
+
+/// Every draw by the packet that carries it. A generated mesh is looked up through the link its
+/// generation was paired with.
+void FrameWalk::keyDraws() {
+    for (u32 i = 0; i < mFrame.sprites.size(); i++) {
+        const DrawSprite& sprite = mFrame.sprites[i];
+        if (!sprite.linkAddr) {
+            h.coverage.unlinkedDraws[sprite.producer]++;
+            continue;
+        }
+        mByPacket[sprite.linkAddr].push_back({DrawRef::Kind::Sprite, i});
+    }
+    const std::vector<u32>& generated = h.frames.getGeneratedLinks();
+    for (u32 i = 0; i < mFrame.meshes.size(); i++) {
+        const DrawMesh& mesh = mFrame.meshes[i];
+        u32 packet = mesh.linkAddr;
+        if (!packet && mesh.linkIndex < generated.size()) packet = generated[mesh.linkIndex];
+        if (!packet) {
+            h.coverage.unlinkedDraws[mesh.producer]++;
+            continue;
+        }
+        mByPacket[packet].push_back({DrawRef::Kind::Mesh, i});
+    }
+}
+
+/// Every draw here runs in context 1; the second texture pass carries its own ALPHA.
+void FrameWalk::place(u32 packet) {
+    const auto found = mByPacket.find(packet);
+    if (found == mByPacket.end()) return;
+    const sdfGsState_t& gs = mGs.context[0];
+    for (const DrawRef ref : found->second) {
+        mFrame.order.push_back(ref);
+        mPlaced++;
+        h.coverage.placedDraws[producerOf(mFrame, ref)]++;
+        if (h.config->noTransmitState) continue;
+        if (ref.kind == DrawRef::Kind::Sprite) {
+            DrawSprite& sprite = mFrame.sprites[ref.index];
+            // Without ABE in its PRIM the GS never reads ALPHA, which the producer knows.
+            if (sprite.alpha != GsAlpha::Opaque) sprite.alpha = GsAlpha(u32(gs.alpha & 0xFF));
+            sprite.test = u32(gs.test);
+            continue;
+        }
+        DrawMesh& mesh = mFrame.meshes[ref.index];
+        const u64 mask = mesh.gs.frameMask;
+        mesh.gs = gs;
+        mesh.gs.frameMask = mask;
+    }
+    mByPacket.erase(found);
+}
+
+/// fldSdwDraw links its shadow as an inline VIF stream rather than a REF, so it is read where the
+/// chain sends it, under the state in force there.
+bool FrameWalk::readShadow(u32 at, const sdfDmaTag_t& tag) {
+    const u32 data = at + sdfQwordBytes;
+    if (!h.modelHooks.fldSdwDraw(data, data + sdfQwordBytes * tag.qwc, mGs.context[0], &mFrame)) {
+        h.coverage.shadowRejects++;
+        return false;
+    }
+    h.coverage.shadowMeshes++;
+    mFrame.order.push_back({DrawRef::Kind::Mesh, u32(mFrame.meshes.size() - 1)});
+    mPlaced++;
+    h.coverage.placedDraws["fldSdwDraw"]++;
+    return true;
+}
+
+/// A packet that should draw and had nothing placed is one the renderer does not handle, ranked
+/// by its GIF vertices where it has any.
+void FrameWalk::account(const LinkedPacket& packet, bool stateOnly, bool drew) {
+    const GifCounts before = h.coverage.gif;
+    mParser.parse(packet.addr);
+    u64 verts = 0;
+    for (int i = 0; i < 8; i++) verts += h.coverage.gif.verts[i] - before.verts[i];
+
+    const char* by = h.symbols.getFunction(packet.caller);
+    for (const u32 tbp : mParser.getParsedTbps()) h.coverage.tbpByProducer[by][tbp]++;
+
+    if (!drew && !stateOnly && carriesDraw(typeOf(packet))) {
+        if (verts) h.coverage.unhandledVerts[by] += verts;
+        else h.coverage.unhandledPackets[by]++;
+    }
+
+    const sdfDmaTag_t tag = sdfDmaTagPtr_t{packet.addr}.valueOr();
+    if (h.trace->isOpen()) h.trace->onPacket(packet, by, tag, verts);
+    if (!drew && !h.config->dumpPackets.empty() && std::strstr(by, h.config->dumpPackets.c_str())) {
+        dumpPacket(packet, by, tag);
+    }
+}
+
+void FrameWalk::dumpStateChange(const sdfGsState_t& was, u32 at) {
+    const sdfGsState_t& gs = mGs.context[0];
+    if (gs.alpha == was.alpha && gs.test == was.test && gs.frameMask == was.frameMask) return;
+    const auto linked = mLinked.find(at);
+    log.dump(JsonObject()
+                 .addString("dump", "gsState")
+                 .addUint("frame", h.trace->getFrame())
+                 .addString("by", linked == mLinked.end() ? "-"
+                                                         : h.symbols.getFunction(linked->second.caller))
+                 .addHexDigits("alpha", gs.alpha, 2)
+                 .addHexDigits("test", gs.test, 6)
+                 .addHexDigits("fbmsk", gs.frameMask, 8)
+                 .addUint("aref", sdfTestAref(gs.test))
+                 .take());
+}
+
+void FrameWalk::run(u32 aTag) {
+    Call calls[16] = {};
     u32 depth = 0;
     const sdfDrawTagPtr_t drawTag{aTag};
     u32 at = drawTag ? drawTag->head.addr & 0x0FFFFFFFu : 0;
@@ -150,48 +241,83 @@ void placeDraws(HookContext& h, u32 aTag) {
     constexpr u32 kMaxChainTags = 65536;
     u32 steps = 0;
     for (; at && steps < kMaxChainTags; steps++) {
-        const sdfDmaTagPtr_t tag{at};
-        if (!tag) break;
-        const u32 qwc = tag->qwc;
-        const u32 id = sdfDmaId(*tag);
-        const u32 addr = tag->addr & 0x0FFFFFFFu;
+        const sdfDmaTagPtr_t tagPtr{at};
+        if (!tagPtr) break;
+        const sdfDmaTag_t tag = *tagPtr;
+        const u32 id = sdfDmaId(tag);
+        const u32 addr = tag.addr & 0x0FFFFFFFu;
 
-        applyGsRegisterWrites(at, gs);
-        place(at, gs.context[0]);
-        if (sdfDmaIsRef(*tag)) place(addr, gs.context[0]);
+        const sdfGsState_t was = mGs.context[0];
+        const bool stateOnly = applyGsRegisterWrites(at, mGs);
+        if (h.config->dumpDrawEnv) dumpStateChange(was, at);
+
+        const u64 placedBefore = mPlaced;
+        place(at);
+        // A REF names its data elsewhere, and a model stream is found by that data's address.
+        if (sdfDmaIsRef(tag)) place(addr);
+
+        const auto found = mLinked.find(at);
+        const LinkedPacket* linked = found == mLinked.end() ? nullptr : &found->second;
+        if (linked && h.config->drawShadows && !stateOnly && id == sdfDmaTagCnt &&
+            std::strstr(h.symbols.getFunction(linked->caller), "fldSdwDraw")) {
+            readShadow(at, tag);
+        }
+        if (linked && id != sdfDmaTagCall) account(*linked, stateOnly, mPlaced > placedBefore);
 
         switch (id) {
             case sdfDmaTagRef:
             case sdfDmaTagRefs: at += sdfQwordBytes; break;
-            case sdfDmaTagCnt: at += sdfQwordBytes * (1 + qwc); break;
+            case sdfDmaTagCnt: at += sdfQwordBytes * (1 + tag.qwc); break;
             case sdfDmaTagNext: at = addr; break;
             case sdfDmaTagCall:
-                if (depth == std::size(stack)) {
+                if (depth == std::size(calls)) {
                     reportUnsupported("transmit chain call depth", depth);
                     at = 0;
                     break;
                 }
-                stack[depth++] = at + sdfQwordBytes * (1 + qwc);
+                calls[depth++] = Call{at + sdfQwordBytes * (1 + tag.qwc), linked, placedBefore,
+                                      stateOnly};
                 at = addr;
                 break;
-            case sdfDmaTagRet: at = depth ? stack[--depth] : 0; break;
+            case sdfDmaTagRet: {
+                if (!depth) {
+                    at = 0;
+                    break;
+                }
+                const Call& call = calls[--depth];
+                if (call.packet) account(*call.packet, call.stateOnly, mPlaced > call.placedBefore);
+                at = call.back;
+                break;
+            }
             default: at = 0; break;  // REFE and END both stop the chain
         }
     }
     if (steps == kMaxChainTags) reportUnsupported("transmit chain tags", steps);
 
-    for (const auto& [packet, refs] : byPacket) {
-        for (const DrawRef ref : refs) h.coverage.unreachedDraws[producerOf(*frame, ref)]++;
+    for (const auto& [packet, refs] : mByPacket) {
+        for (const DrawRef ref : refs) h.coverage.unreachedDraws[producerOf(mFrame, ref)]++;
     }
-    h.model.traceMeshes(*frame);
+}
+
+}  // namespace
+
+/// @disc SLUS-20911
+/// @address 0x002AD980
+/// @function sdfGrDrawFrame
+void placeDraws(HookContext& h, u32 aTag) {
+    // A trace-only run has no renderer and so no frame, but its packets are still accounted.
+    Frame none;
+    Frame* frame = h.frames.getFrame();
+    FrameWalk(h, frame ? *frame : none).run(aTag);
+    if (frame) h.model.traceMeshes(*frame);
 }
 
 void recordBuiltPacket(HookContext& h, const char* aBuilder, const u32 (&aArgs)[4]) {
     const PacketBuilder made = packetBuilderFor(aBuilder);
     h.builderCalls[aBuilder]++;
     if (!made.takesPacket) return;
-    const u32 packet = aArgs[made.argument];
-    if (!packet) return;
+    if (!aArgs[made.argument]) return;
+    const u32 packet = aArgs[made.argument] + made.offset;
     h.packetTypes[packet] = made.type;
     if (made.trailing != PacketType::Unknown) h.packetTypes[packet + sdfQwordBytes] = made.trailing;
 }
@@ -206,17 +332,17 @@ void censusFrame(HookContext& h, u32 aTag) {
     // recorded it.
     struct Reset {
         std::unordered_map<u32, PacketType>& types;
-        ~Reset() { types.clear(); }
-    } reset{h.packetTypes};
+        std::vector<LinkedPacket>& linked;
+        ~Reset() {
+            types.clear();
+            linked.clear();
+        }
+    } reset{h.packetTypes, h.frames.getPackets()};
     if (!h.config->dumpChainCensus) return;
 
     for (const char* global : {"sdf3DPrimIdentityTm", "vu1MicroPacket"}) {
         const u32 at = pcsx2hook_find_symbol(h.runtime, global);
         if (at) h.packetTypes[at] = packetTypeForGlobal(global);
-    }
-    // sdfCorePacketGen builds these, and the frame builder already pairs each with its link.
-    for (const u32 link : h.frames.getGeneratedLinks()) {
-        if (link) h.packetTypes[link] = PacketType::MeshGenerated;
     }
     censusChain(aTag, h.frames.getPackets(), h.symbols, h.trace->getFrame(), h.packetTypes);
     for (const auto& [builder, calls] : h.builderCalls) {
@@ -228,83 +354,17 @@ void censusFrame(HookContext& h, u32 aTag) {
     }
 }
 
-void chainFrameSend(HookContext& h, u32 aRa, u32 aAddr) {
-    if (!h.config->chainFrame) return;
-    // sceDmaSend has three call sites: sdfImageSetTrans, and sdfGrDrawFrame's own send and its
-    // resume after a GS readback. Only the first of those carries the frame.
-    static const char* const kFrameSend = "sdfGrDrawFrame+0x12C";
-    const char* site = h.symbols.getSite(aRa);
-    if (std::strcmp(site, kFrameSend) != 0) {
-        log.debug("chain send from {}, not the frame send", site);
-        return;
-    }
-    // The engine draws one chain twice, at mode 0 and mode 1, so the second send repeats it.
-    if (aAddr == h.lastChainHead) return;
-    h.lastChainHead = aAddr;
-
-    // sdfGrDrawFrame runs after dds3DrawProcessPost has closed the API path's frame, so the walk
-    // builds its own rather than borrowing one. Frame boundaries belong to the chain here.
-    Frame chain;
-    const ChainFrameCounts counts = buildFrameFromChain(aAddr, h, &chain);
-    log.info("chain frame: {} entries, {} sprites, {} regs, {} opaque, {} dropped; api {} sprites",
-             counts.entries, counts.sprites, counts.registerWrites, counts.opaque,
-             counts.verticesDropped, h.coverage.apiDraws - h.lastApiDraws);
-    log.info("chain frame: x {:.1f}..{:.1f} y {:.1f}..{:.1f}", counts.minX, counts.maxX,
-             counts.minY, counts.maxY);
-    h.lastApiDraws = h.coverage.apiDraws;
-}
-
-void collectPackets(HookContext& h) {
-    GifParser parser(&h.coverage.gif);
-    GsContexts& linked = h.linkedState;
-
-    for (const LinkedPacket& packet : h.frames.getPackets()) {
-        const GifCounts before = h.coverage.gif;
-        // A draw runs under whatever the packets before it left behind, so it is tracked across
-        // the chain rather than looked up per draw.
-        const sdfGsState_t was = linked.context[0];
-        const bool stateOnly = applyGsRegisterWrites(packet.addr, linked);
-        const sdfGsState_t& gs = linked.context[0];
-        if (h.config->dumpDrawEnv && (gs.alpha != was.alpha || gs.test != was.test ||
-                                      gs.frameMask != was.frameMask)) {
-            log.dump(JsonObject()
-                         .addString("dump", "gsState")
-                         .addUint("frame", h.trace->getFrame())
-                         .addString("by", h.symbols.getFunction(packet.caller))
-                         .addHexDigits("alpha", gs.alpha, 2)
-                         .addHexDigits("test", gs.test, 6)
-                         .addHexDigits("fbmsk", gs.frameMask, 8)
-                         .addUint("aref", sdfTestAref(gs.test))
-                         .take());
-        }
-        parser.parse(packet.addr);
-        if (!h.trace->isOpen()) continue;
-
-        const sdfDmaTag_t tag = sdfDmaTagPtr_t{packet.addr}.valueOr();
-        u64 verts = 0;
-        for (int i = 0; i < 8; i++) verts += h.coverage.gif.verts[i] - before.verts[i];
-        const char* by = h.symbols.getFunction(packet.caller);
-        for (const u32 tbp : parser.getParsedTbps()) h.coverage.tbpByProducer[by][tbp]++;
-        // Shadows arrive as an inline VIF stream, not a REF chain, so the type 1 path misses them.
-        if (h.config->drawShadows && !verts && !stateOnly && std::strstr(by, "fldSdwDraw")) {
-            const u32 qwc = tag.qwc;
-            if (h.modelHooks.fldSdwDraw(packet.addr + 16, packet.addr + 16 + 16 * qwc, gs,
-                                   h.frames.getFrame())) {
-                h.coverage.shadowMeshes++;
-            } else {
-                h.coverage.shadowRejects++;
-            }
-        }
-        if (!isHandled(by)) {
-            if (verts) h.coverage.unhandledVerts[by] += verts;
-            else if (!stateOnly) h.coverage.unhandledPackets[by]++;
-        }
-        h.trace->onPacket(packet, by, tag, verts);
-        if (!h.config->dumpPackets.empty() && !verts && std::strstr(by, h.config->dumpPackets.c_str())) {
-            dumpPacket(packet, by, tag);
-        }
-    }
-    h.frames.getPackets().clear();
+void sceDmaSend(HookContext& h, u32 aRa, u32 aChan, u32 aAddr) {
+    if (!h.config->dumpChainCensus) return;
+    const u32 flag = pcsx2hook_find_symbol(h.runtime, "sdfDispThreadFlag");
+    log.dump(JsonObject()
+                 .addString("dump", "dmaSend")
+                 .addUint("frame", h.trace->getFrame())
+                 .addUint("chan", aChan)
+                 .addHexDigits("addr", aAddr, 8)
+                 .addString("by", h.symbols.getSite(aRa))
+                 .addUint("dispThreadFlag", flag ? u8Ptr_t{flag}.valueOr() : 0xFFu)
+                 .take());
 }
 
 // Y is in half-height units, the same scale the draw space uses vertically.

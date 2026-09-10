@@ -249,7 +249,8 @@ bool applyGsRegisterWrites(u32 packetAddr, GsContexts& state) {
             default: break;
         }
     }
-    return true;
+    // A glyph sends its texture registers this way and its geometry in a second tag after them.
+    return tag->qwc == 1 + count;
 }
 
 }  // namespace sdfhook

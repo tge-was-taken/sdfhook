@@ -2,7 +2,6 @@
 #include "hooks.h"
 
 #include "hooks_impl.h"
-#include "chain_frame.h"
 
 #include <bit>
 #include <cstring>
@@ -412,9 +411,17 @@ int sdfCorePacketGenHook(pcsx2hook_regs* regs, void* user) {
     h.trace->onSdfCorePacketGen(c.getArg(0), c.getArg(1), c.getArg(2), c.getArg(3));
     // 0x2B91A8/0x2B91B0: the face-division terms arrive here as $f12 and $f13.
     h.modelHooks.setFaceDivTerms(regs->fpr[12], regs->fpr[13]);
-    h.frames.beginGenerated();
     h.model.getTrace().countGuestGenerated();
     return PCSX2HOOK_CONTINUE;
+}
+
+/// Nothing sdfCorePacketGen calls is a tail call, so a post-handler costs no caller attribution.
+void sdfCorePacketGenPost(pcsx2hook_regs* regs, void* user) {
+    Context c{regs};
+    HookContext& h = *static_cast<HookContext*>(user);
+    const u32 packet = c.getResult();
+    h.frames.addGenerated(packet);
+    recordReturnedPacket(h, "sdfCorePacketGen", packet);
 }
 
 int sdfModelLinkShapedDrawPacketHook(pcsx2hook_regs* regs, void* user) {
@@ -488,9 +495,8 @@ int sdfGrReqDrawHook(pcsx2hook_regs* regs, void* user) {
     HookContext& h = *static_cast<HookContext*>(user);
     const u32 aTag = c.getArg(0);
     h.trace->onSdfGrReqDraw(aTag, c.getArg(1));
-    censusFrame(h, aTag);
-    collectPackets(h);
     placeDraws(h, aTag);
+    censusFrame(h, aTag);
     h.frames.submit();
     return PCSX2HOOK_CONTINUE;
 }
@@ -513,21 +519,13 @@ void dds3DrawProcessPost(pcsx2hook_regs*, void* user) {
     h.frames.end();
 }
 
-/// What the builder that made it said, else what the single-site function linking it is known to
-/// link.
-bool linkCarriesDraw(HookContext& h, const LinkedPacket& packet) {
-    const auto built = h.packetTypes.find(packet.addr);
-    if (built != h.packetTypes.end()) return carriesDraw(built->second);
-    return carriesDraw(packetTypeForLinker(h.symbols.getFunction(packet.caller)));
-}
-
 // Every render function links its packet through here, so this is a complete frame inventory.
 int sdfDrawTagLinkHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
     if (c.getArg(1)) {
         const LinkedPacket packet{.addr = c.getArg(1), .caller = c.getRa()};
-        h.frames.link(packet, linkCarriesDraw(h, packet));
+        h.frames.link(packet);
     }
     return PCSX2HOOK_CONTINUE;
 }
@@ -538,7 +536,7 @@ int sdfDrawTagLinkRefHook(pcsx2hook_regs* regs, void* user) {
     HookContext& h = *static_cast<HookContext*>(user);
     if (c.getArg(1)) {
         const LinkedPacket packet{.addr = c.getArg(1), .caller = c.getRa(), .kind = LinkKind::Ref};
-        h.frames.link(packet, linkCarriesDraw(h, packet));
+        h.frames.link(packet);
     }
     return PCSX2HOOK_CONTINUE;
 }
@@ -550,7 +548,7 @@ int sdfDrawTagLinkCallHook(pcsx2hook_regs* regs, void* user) {
     HookContext& h = *static_cast<HookContext*>(user);
     if (c.getArg(1)) {
         const LinkedPacket packet{.addr = c.getArg(1), .caller = c.getRa(), .kind = LinkKind::Call};
-        h.frames.link(packet, linkCarriesDraw(h, packet));
+        h.frames.link(packet);
     }
     return PCSX2HOOK_CONTINUE;
 }
@@ -577,7 +575,7 @@ int sdfDrawTagLinkRefGifHook(pcsx2hook_regs* regs, void* user) {
     HookContext& h = *static_cast<HookContext*>(user);
     if (c.getArg(1)) {
         const LinkedPacket packet{.addr = c.getArg(1), .caller = c.getRa(), .kind = LinkKind::Ref};
-        h.frames.link(packet, linkCarriesDraw(h, packet));
+        h.frames.link(packet);
     }
     return PCSX2HOOK_CONTINUE;
 }
@@ -704,18 +702,7 @@ int dmaSendHook(pcsx2hook_regs* regs, void* user) {
     const u32 aChan = c.getArg(0);
     const u32 aAddr = c.getArg(1);
 
-    chainFrameSend(h, c.getRa(), aAddr);
-    if (h.config->dumpChainCensus) {
-        const u32 flag = pcsx2hook_find_symbol(h.runtime, "sdfDispThreadFlag");
-        log.dump(JsonObject()
-                     .addString("dump", "dmaSend")
-                     .addUint("frame", h.trace->getFrame())
-                     .addUint("chan", aChan)
-                     .addHexDigits("addr", aAddr, 8)
-                     .addString("by", h.symbols.getSite(c.getRa()))
-                     .addUint("dispThreadFlag", flag ? u8Ptr_t{flag}.valueOr() : 0xFFu)
-                     .take());
-    }
+    sceDmaSend(h, c.getRa(), aChan, aAddr);
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -767,7 +754,7 @@ struct Entry {
 constexpr Entry kEngineEntries[] = {
     {"sdf3DSetCamera", &sdf3DSetCameraHook, nullptr},
     {"sdfModelLinkOt", &sdfModelLinkOtHook, nullptr},
-    {"sdfCorePacketGen", &sdfCorePacketGenHook, nullptr},
+    {"sdfCorePacketGen", &sdfCorePacketGenHook, &sdfCorePacketGenPost},
     {"corePktApplyFaceDivColor", &corePktApplyFaceDivColorHook, nullptr},
     // The ramp's caller and its sibling, to say whether the second pass recolors at
     // all: corePktApplyFaceDivColor never fires, and this is what tells the two reasons apart.
@@ -896,6 +883,8 @@ constexpr Entry kGameEntries[] = {
     {"sdfModelNewPacketHeader", &packetTypeHook, &packetTypePost},
     {"sdfModelSetTermPacket", &packetTypeHook, nullptr},
     {"sdfGrSetStdDrawEnv", &packetTypeHook, nullptr},
+    {"sdfModelSetDrawEnv", &packetTypeHook, nullptr},
+    {"sdf3DLinkInitPacket", &packetTypeHook, nullptr},
     {"sdfGrSetFrameMaskRGB", &packetTypeHook, nullptr},
     {"sdfGrSetFrameMaskReset", &packetTypeHook, nullptr},
     {"sdfGrLinkDrawFrameTex", &packetTypeHook, nullptr},
@@ -943,25 +932,6 @@ Frame* FrameBuilder::getFrame() {
     return mBuilding;
 }
 
-void FrameBuilder::claimDraws(u32 packet) {
-    if (!mBuilding) return;
-    for (usize i = mClaimed.sprites; i < mBuilding->sprites.size(); i++) {
-        mBuilding->sprites[i].linkAddr = packet;
-    }
-    for (usize i = mClaimed.meshes; i < mBuilding->meshes.size(); i++) {
-        DrawMesh& mesh = mBuilding->meshes[i];
-        if (!mesh.linkAddr && mesh.linkIndex == kNoLinkIndex) mesh.linkAddr = packet;
-    }
-    mClaimed = mark();
-}
-
-void FrameBuilder::adopt(DrawMark before) {
-    const DrawMark now = mark();
-    if (now.sprites == before.sprites && now.meshes == before.meshes) return;
-    mClaimed.sprites = std::max(mClaimed.sprites, before.sprites);
-    mClaimed.meshes = std::max(mClaimed.meshes, before.meshes);
-}
-
 void FrameBuilder::submit() {
     mSubmitted = true;
     mSubmittedFrames++;
@@ -972,7 +942,7 @@ void FrameBuilder::submit() {
     }
     mRenderer->submit(mBuilding);
     mBuilding = nullptr;
-    mClaimed = {};
+    mClaims.clear();
 }
 
 void FrameBuilder::end() {
@@ -981,9 +951,8 @@ void FrameBuilder::end() {
     mPending.clear();
     mAcquireFailed = false;
     mGeneratedLinks.clear();
-    mGenerating = false;
     mBuilding = nullptr;
-    mClaimed = {};
+    mClaims.clear();
 }
 
 const char* SymbolCache::lookup(u32 address, bool trimOffset) {

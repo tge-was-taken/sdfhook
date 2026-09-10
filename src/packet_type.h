@@ -126,6 +126,10 @@ struct PacketBuilder {
     bool takesPacket = false;
     bool returnsPacket = false;
 
+    /// Bytes from the argument to the packet the chain sends, where the builder is handed a
+    /// struct that holds it: an env whose predraw hook comes before its DMA tag.
+    u32 offset = 0;
+
     /// What the caller writes straight after the packet, in the same allocation.
     PacketType trailing = PacketType::Unknown;
 };

@@ -42,8 +42,8 @@ struct GsContexts {
     sdfGsState_t context[2];
 };
 
-/// Applies a packet's A+D register writes to the running GS state.
-/// @return Whether the packet was one: pure register writes draw nothing.
+/// Applies the A+D register writes a packet opens with to the running GS state.
+/// @return Whether they are the whole packet: pure register writes draw nothing.
 bool applyGsRegisterWrites(u32 packetAddr, GsContexts& state);
 
 }  // namespace sdfhook

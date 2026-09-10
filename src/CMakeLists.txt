@@ -20,7 +20,6 @@ add_executable(sdfhook
 	log.cpp
 	packet_type.cpp
 	chain_census.cpp
-	chain_frame.cpp
 	gif.cpp
 	model.cpp
 	hooks_impl_model.cpp

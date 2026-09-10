@@ -9,20 +9,13 @@ namespace sdfhook {
 /// Reading a packet that yielded nothing, rather than guessing at it.
 void dumpPacket(const LinkedPacket& packet, const char* by, const sdfDmaTag_t& tag);
 
-/// Producers whose draws reach the renderer through their own entry point.
-bool isHandled(const char* producer);
-
-/// Puts the frame's draws in the order its DMA chain transmits them, each mesh under the ALPHA
-/// and TEST in force there. A draw whose packet the chain never reaches is not drawn.
+/// Walks the frame's DMA chain as channel 1 transmits it and puts the frame's draws in that order,
+/// each under the GS state in force at its packet. A draw whose packet the chain never reaches is
+/// not drawn. Also where the shadows are read and every linked packet is accounted for.
 void placeDraws(HookContext& h, u32 aTag);
 
-/// Parses the frame's linked packets for coverage, shadows and the trace. Runs before placeDraws,
-/// since the shadows it reads are draws the chain has to place.
-void collectPackets(HookContext& h);
-
-/// An inventory of the frame's DMA chain, for judging what a chain-walk renderer would have to
-/// decode. Runs before collectPackets, which clears the linked list the owner names come from, and
-/// forgets the frame's packet types either way.
+/// An inventory of the frame's DMA chain, for judging what is left untyped. Runs after placeDraws
+/// and forgets the frame's linked packets and their types either way.
 void censusFrame(HookContext& h, u32 aTag);
 
 /// A builder ran, handed its four argument registers. Records the packet it makes by address.
@@ -31,9 +24,8 @@ void recordBuiltPacket(HookContext& h, const char* aBuilder, const u32 (&aArgs)[
 /// A builder returned its packet.
 void recordReturnedPacket(HookContext& h, const char* aBuilder, u32 aPacket);
 
-/// One sceDmaSend. Only the send that carries the frame's chain builds a chain frame, and only
-/// the first of the two the engine makes per chain.
-void chainFrameSend(HookContext& h, u32 aRa, u32 aAddr);
+/// One sceDmaSend, with its caller and the engine's display-thread flag, for the census.
+void sceDmaSend(HookContext& h, u32 aRa, u32 aChan, u32 aAddr);
 
 /// Y is in half-height units, the same scale the draw space uses vertically.
 void submitSprite(HookContext& h, const char* producer, f32 x, f32 y, f32 w, f32 height, f32 u,

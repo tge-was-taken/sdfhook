@@ -89,6 +89,25 @@ and friends, but this game calls almost none of it: only `sdfPrimLinkFt4` and `s
 and the main menu uses neither. Everything else takes `sdf2DAllocSprite` and writes registers
 itself. Expect to rewrite the game-level 2D group per disc while the `sdf*` hooks carry over.
 
+## The frame is the chain
+
+**The renderer draws the frame's DMA chain, not the order the hooks fire in.** Every draw records the
+packet that carries it: `linkAddr`, or `linkIndex` for a generated mesh, whose address is known only
+once it links. `placeDraws` at `sdfGrReqDraw` walks the chain as channel 1 sends it, replays the A+D
+writes per GS context, and puts each packet's draws into `Frame::order` under the ALPHA and TEST in
+force there. The renderer draws `order` as it stands, switching pass run by run.
+
+- **A model stream is keyed by the REF that names it**, not by the call chain it sits in.
+- **A producer's draws are claimed by the first draw-carrying packet it links**, so a texture or ALPHA
+  packet linked first is passed over (`carriesDraw`). Each producer's impl opens a `ProducerDraws`:
+  draws that another producer's hook arrives before stay unlinked rather than land on its packet.
+- **A draw the chain never reaches is not drawn.** The summary counts placed, unlinked and unreached
+  draws by producer; the expected losses are `sdfCorePacketGen` meshes the engine never links.
+- **Unhandled means transmitted and unrendered**: a packet of a draw-carrying type with nothing placed
+  at it, at its REF target, or in the chain it calls. That is the `[todo]` ranking.
+- **The chain's state beat the call-time state where they disagreed**: two-sided polys took
+  `rsetTest`'s 0x33801 at the call, and the GS trace has no batch under it.
+
 ## Naming and attribution
 
 `nb` battle, `fld` field, `cmp` camp/menu, `fcl` facilities, `dds3` kernel, `sdf` engine library. A
@@ -306,7 +325,7 @@ the programs: SDF's MSCAL entries are dispatch stubs. `docs/vu1/` keeps the anno
 sends `*(u32*)(tag + 4) & 0x0FFFFFFF` down channel 1; walking it as a source chain and replaying the
 A+D writes finds 654 of 654 linked packets a frame where walking each table's `tagHead` reached two
 thirds. **The engine generates and links before `dds3DrawProcess` opens the frame**, so a per-frame
-inventory resets at frame end.
+inventory resets at frame end. The renderer draws in this order; see "The frame is the chain".
 
 **`~/projects/ps2-runtime`** has an independent GIF/VIF/GS implementation and agrees with `gif.cpp`
 exactly on field extraction. The two differ on FLG 3 and both are right: it consumes a stream that is

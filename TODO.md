@@ -2292,7 +2292,8 @@ right.
 - [ ] **B4: residual on the field scenes, +5.40 and +1.31 on ~11.** The worst tiles are the HUD
       corners. What is left after the texture work is a shading difference, not a missing feature.
 
-- [ ] **P1: a renderer driven by the frame's DMA chain, typed packet by packet.** `sceDmaSend`
+- [ ] **P1: type every packet in the chain the renderer walks.** The renderer draws in chain order
+      ("The frame is the chain" in CLAUDE.md); what is left is naming every entry it passes. `sceDmaSend`
       filtered to `$ra == sdfGrDrawFrame+0x12C` sees the whole chain with predraw applied and nothing
       consumed. The engine sends each chain twice (mode 0 and 1), so dedupe on the head.
       `sdfImageSetTrans` is the third `sceDmaSend` site. `sdfDispThreadFlag` reads 3 at every send
@@ -2317,12 +2318,21 @@ right.
       setup, and lights can be built at scene load, so a resumed state never sees those calls. Light
       packets are typed by shape as the fallback: three unit direction rows at +0x90, colours at
       +0x70 and +0x80. That disagrees with CLAUDE.md's "+16, columns" note; settle which is right.
-      **Prototype.** `SDF_CHAIN_FRAME=1` builds sprites from PACKED GIF only. Missing: the VIF
-      streams (793 field entries), REGLIST and fans over four vertices (menu 231 prim packets give
-      191 sprites), texture binding from TEX0 back to a handle, GS state across the walk. It builds
-      its own frame, since `dds3DrawProcessPost` has closed the API path's before the send.
+      **Rendering.** `placeDraws` draws in chain order; the `[todo]` ranking is transmitted packets of a
+      draw-carrying type with nothing placed. The VIF streams nothing claims are the next producers.
       `smt3_field_underground_facility` has no `vifData` or `transform` at all: that state sits on
       a load or menu and does not exercise the 3D path.
+
+- [ ] **P4: transmitted draw packets nothing renders.** The `[todo]` ranking is now measured by the
+      chain walk: a packet of a draw-carrying type with nothing placed at it, its REF target, or the
+      chain it calls. Leaving out the producers switched off on purpose (`cmpDrawBoxG`, TODO M2;
+      `aDrawBoxF_Direct`, `fldDrawPoly3`, `fldSdwDraw`), three remain:
+      - `sdfModelLinkOt`, battle only, 3689 CALL chains a run (31 a frame) with no mesh inside:
+        `sdfModelSetNormalDrawPacket` reads every REF in them as setup (5950 setup, 0 failed), so
+        their streams are not the batch-header kind. Read one with `SDF_DUMP_CALL`.
+      - `dds3LinkZClearDrawTag`, about 3 a frame everywhere: a sprite under TEST NEVER with AFAIL
+        ZB_ONLY, which clears depth mid-frame. The renderer clears depth only at frame start.
+      - `dds3TrackPolyLinkOt`, 1 a frame on the unknown realm field.
 
 - [ ] **P2: the packet writes the typed IDB exposed.** With the packets typed in the IDB,
       `ida_facts.py` sees what `sdfModelLinkOt` (13 facts, 0x2B2018..0x2B20E4) and

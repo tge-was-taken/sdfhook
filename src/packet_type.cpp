@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "guest_ptr.h"
+#include "libsdf.h"
 #include "unsupported.h"
 
 namespace sdfhook {
@@ -14,6 +15,7 @@ PacketBuilder packetBuilderFor(const char* symbol) {
         const char* symbol;
         PacketType type;
         u8 argument;
+        u32 offset = 0;
     };
     // The argument holding the packet, from each function's own declaration. A Set*RefPacket
     // writes a DMA REF tag into its buffer, so the buffer is the chain entry and the reference is
@@ -25,11 +27,14 @@ PacketBuilder packetBuilderFor(const char* symbol) {
         {"sdf3DMakeFogPacket", PacketType::Fog, 0},
         {"sdf3DMakeDirectRefPacket", PacketType::DirectRef, 0},
         {"sdfGrSetClearPacket", PacketType::Clear, 0},
-        {"sdfGrSetFramePacket", PacketType::FrameBuffer, 0},
+        {"sdfGrSetFramePacket", PacketType::FrameBuffer, 0, offsetof(sdfGrFramePacket_t, dmatag)},
         {"sdfGrSetDrawFramePacket", PacketType::DrawFrame, 0},
         {"sdfGrSetDrawFrame", PacketType::DrawFrame, 0},
         {"sdfGrSetDrawEnv", PacketType::DrawEnv, 0},
-        {"sdfGrSetStdDrawEnv", PacketType::DrawEnv, 0},
+        {"sdfGrSetStdDrawEnv", PacketType::DrawEnv, 0, offsetof(sdfGrStdDrawEnv_t, dmatag)},
+        // Its last link, the terminator, is a tail call, so $ra names whoever called it.
+        {"sdfModelSetDrawEnv", PacketType::Terminator, 0, offsetof(sdfModelDrawEnv_t, term.footer)},
+        {"sdf3DLinkInitPacket", PacketType::VuMicrocode, 1},
         {"sdfModelSetTermPacket", PacketType::Terminator, 0},
         {"sdfMatMakePacket", PacketType::Material, 1},
         {"sdfModelSetTmRefPacket", PacketType::TransformRef, 1},
@@ -58,6 +63,7 @@ PacketBuilder packetBuilderFor(const char* symbol) {
     for (const Entry& entry : kBuilders) {
         if (std::strcmp(entry.symbol, symbol) != 0) continue;
         PacketBuilder made{entry.type, entry.argument, true, false};
+        made.offset = entry.offset;
         // 0x2B2018: sdfModelLinkOt writes the draw's colour and face-division UNPACKs and its MSCAL
         // into the same 64-byte packet, straight after the ref.
         if (entry.type == PacketType::TransformRef) made.trailing = PacketType::DrawParams;
@@ -67,6 +73,7 @@ PacketBuilder packetBuilderFor(const char* symbol) {
     // functions) are here because the link sites link their return value.
     static constexpr Entry kReturners[] = {
         {"sdfModelAllocTmPacket", PacketType::Transform, 0},
+        {"sdfCorePacketGen", PacketType::MeshGenerated, 0},
         {"sdfModelNewPacketHeader", PacketType::PacketHeader, 0},
         {"sdf3DPrimMakePoly", PacketType::PolyStream, 0},
         {"effPkt3DPrimMakePoly", PacketType::PolyStream, 0},

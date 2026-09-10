@@ -144,32 +144,36 @@ public:
 
     Frame* getFrame();
 
-    /// A producer's draws belong to the first packet it links that carries a draw, so the chain
-    /// walk can find them. State packets it links first (a texture, an ALPHA write) do not.
-    void link(const LinkedPacket& packet, bool carriesDraw) {
-        // The engine links a generated packet straight after generating it, which is the only
-        // thing tying our nth to its address: it builds its own output buffer.
-        if (mGenerating && packet.kind == LinkKind::Packet) {
-            mGeneratedLinks.back() = packet.addr;
-            mGenerating = false;
-        }
+    /// One producer's draws and every packet linked from then until the next producer's draws. The
+    /// draws belong to the first of those packets that draws, which only the written chain can tell:
+    /// a packet is linked before its contents are.
+    struct DrawClaim {
+        DrawMark from;
+        DrawMark to;
+        std::vector<LinkedPacket> packets;
+    };
+
+    void link(const LinkedPacket& packet) {
         mPending.push_back(packet);
-        if (carriesDraw) claimDraws(packet.addr);
+        if (!mClaims.empty()) mClaims.back().packets.push_back(packet);
     }
 
     DrawMark mark() const {
         return mBuilding ? DrawMark{mBuilding->sprites.size(), mBuilding->meshes.size()} : DrawMark{};
     }
 
-    /// A producer added draws after `before`. Any an earlier producer left without a packet stay
-    /// unlinked rather than be claimed by this one's.
-    void adopt(DrawMark before);
-
-    /// Closes a generation that linked nothing, keeping the nth entry the nth generation.
-    void beginGenerated() {
-        mGeneratedLinks.push_back(0);
-        mGenerating = true;
+    /// A producer added the draws after `before`, which closes the previous producer's claim.
+    void adopt(DrawMark before) {
+        const DrawMark now = mark();
+        if (now.sprites == before.sprites && now.meshes == before.meshes) return;
+        mClaims.push_back(DrawClaim{before, now, {}});
     }
+
+    const std::vector<DrawClaim>& getClaims() const { return mClaims; }
+
+    /// The engine's nth sdfCorePacketGen made this packet, null when it made none. Its only caller
+    /// links the packet it returns, so this is the address our nth generated mesh is drawn at.
+    void addGenerated(u32 packet) { mGeneratedLinks.push_back(packet); }
 
     std::vector<LinkedPacket>& getPackets() { return mPending; }
     const std::vector<u32>& getGeneratedLinks() const { return mGeneratedLinks; }
@@ -182,13 +186,9 @@ public:
     u64 getDiscardedFrames() const { return mDiscardedFrames; }
 
 private:
-    void claimDraws(u32 packet);
-
-    /// Draws before these are linked or given up on.
-    DrawMark mClaimed;
+    std::vector<DrawClaim> mClaims;
     bool mAcquireFailed = false;
     std::vector<u32> mGeneratedLinks;
-    bool mGenerating = false;
     RenderThread* mRenderer = nullptr;
     TextureCache* mTextures = nullptr;
     Trace* mTrace = nullptr;
@@ -260,25 +260,14 @@ struct HookContext {
     RenderState state;
     Coverage coverage;
 
-    /// What the linked packets leave in force in link order, which the shadow pass takes its FRAME
-    /// mask from. Carried across frames, as the GS's own registers are.
-    GsContexts linkedState;
-
     /// What each packet is, recorded where it is built. A packet whose type is unknown cannot be
     /// processed without running the hardware that consumes it, so this has to be exhaustive.
     std::unordered_map<u32, PacketType> packetTypes;
 
 
-    /// The chain the last frame send carried, so the engine's second draw of it is not walked
-    /// twice.
     /// How often each builder ran, so a hook that claims nothing can be told from one that never
     /// fires.
     std::unordered_map<const char*, u32> builderCalls;
-
-    u32 lastChainHead = 0;
-
-    /// So a chain frame's sprite count is against the API draws of that frame, not the run.
-    u64 lastApiDraws = 0;
 };
 // o32: the first four arguments are in registers, the rest on the stack.
 
