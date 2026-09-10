@@ -512,7 +512,43 @@ SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawDefParmPacket_t, colclamp, 0x10);
 SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawDefParmPacket_t, dthe, 0x20);
 SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawDefParmPacket_t, texa, 0x30);
 
-/// sdfGrSetStdDrawEnv. `worker` is its predraw hook, sdfGrStdDrawEnvPredraw.
+/// sdfTexSetPacket: a texture handle's registers, which sdfTexGetTex0Reg reads TEX0 back out of.
+struct sdfTexPacket_t {
+    sdfGifTag_t giftag;
+    sdfGrTagStdReg_t tex1;
+    sdfGrTagStdReg_t tex0;
+    sdfGrTagStdReg_t clamp;
+};
+SDF_STATIC_ASSERT_SIZE(sdfTexPacket_t, 64);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexPacket_t, giftag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexPacket_t, tex1, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexPacket_t, tex0, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexPacket_t, clamp, 0x30);
+
+using sdfTexPacketPtr_t = guest_ptr<sdfTexPacket_t>;
+
+/// The masked FRAME writes sdfGrStdDrawEnvPredraw builds, which sdfGrSetFrameMaskRGB REFs.
+struct sdfGrAlphaMaskPacket_t {
+    sdfGrTagStdReg_t frame1;
+    sdfGrTagStdReg_t frame2;
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrAlphaMaskPacket_t, 32);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrAlphaMaskPacket_t, frame1, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrAlphaMaskPacket_t, frame2, 0x10);
+
+/// sdfGrLinkDispFrameTex REFs dispTex and sdfGrLinkDrawFrameTex drawTex: the two frame buffers as
+/// textures.
+struct sdfGrStdDrawEnvExt_t {
+    sdfGrAlphaMaskPacket_t alphaMask;
+    sdfTexPacket_t dispTex;
+    sdfTexPacket_t drawTex;
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrStdDrawEnvExt_t, 160);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrStdDrawEnvExt_t, alphaMask, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrStdDrawEnvExt_t, dispTex, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrStdDrawEnvExt_t, drawTex, 0x60);
+
+/// sdfGrSetStdDrawEnv. `worker` is its predraw hook, sdfGrStdDrawEnvPredraw, which fills `ext`.
 struct sdfGrStdDrawEnv_t {
     sdfPreDrawHook_t worker;
     sdfDmaTag_t dmatag;
@@ -525,8 +561,9 @@ struct sdfGrStdDrawEnv_t {
     sdfGrTagStdReg_t alpha1;
     sdfGrTagStdReg_t test2;
     sdfGrTagStdReg_t alpha2;
+    sdfGrStdDrawEnvExt_t ext;
 };
-SDF_STATIC_ASSERT_SIZE(sdfGrStdDrawEnv_t, 384);
+SDF_STATIC_ASSERT_SIZE(sdfGrStdDrawEnv_t, 544);
 SDF_STATIC_ASSERT_OFFSETOF(sdfGrStdDrawEnv_t, worker, 0x00);
 SDF_STATIC_ASSERT_OFFSETOF(sdfGrStdDrawEnv_t, dmatag, 0x10);
 SDF_STATIC_ASSERT_OFFSETOF(sdfGrStdDrawEnv_t, giftag, 0x20);
@@ -538,8 +575,10 @@ SDF_STATIC_ASSERT_OFFSETOF(sdfGrStdDrawEnv_t, test1, 0x140);
 SDF_STATIC_ASSERT_OFFSETOF(sdfGrStdDrawEnv_t, alpha1, 0x150);
 SDF_STATIC_ASSERT_OFFSETOF(sdfGrStdDrawEnv_t, test2, 0x160);
 SDF_STATIC_ASSERT_OFFSETOF(sdfGrStdDrawEnv_t, alpha2, 0x170);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrStdDrawEnv_t, ext, 0x180);
 
-struct sdfGrDrawFrame_t {
+/// sdfGrSetDrawEnv, for dds3DrawEnv_t's RenderDrawEnv.
+struct sdfGrDrawEnv_t {
     sdfDmaTag_t dmatag;
     sdfGifTag_t giftag;
     sdfGrDrawDefParmPacket_t defParm;
@@ -551,17 +590,28 @@ struct sdfGrDrawFrame_t {
     sdfGrTagStdReg_t test2;
     sdfGrTagStdReg_t alpha2;
 };
-SDF_STATIC_ASSERT_SIZE(sdfGrDrawFrame_t, 368);
+SDF_STATIC_ASSERT_SIZE(sdfGrDrawEnv_t, 368);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawEnv_t, dmatag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawEnv_t, giftag, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawEnv_t, defParm, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawEnv_t, frame1, 0x60);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawEnv_t, frame2, 0xA0);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawEnv_t, clear, 0xE0);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawEnv_t, test1, 0x130);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawEnv_t, alpha1, 0x140);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawEnv_t, test2, 0x150);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawEnv_t, alpha2, 0x160);
+
+/// sdfGrSetDrawFrame
+struct sdfGrDrawFrame_t {
+    sdfDmaTag_t dmatag;
+    sdfGifTag_t giftag;
+    sdfGrDrawFramePacket_t packet;
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrDrawFrame_t, 96);
 SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawFrame_t, dmatag, 0x00);
 SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawFrame_t, giftag, 0x10);
-SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawFrame_t, defParm, 0x20);
-SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawFrame_t, frame1, 0x60);
-SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawFrame_t, frame2, 0xA0);
-SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawFrame_t, clear, 0xE0);
-SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawFrame_t, test1, 0x130);
-SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawFrame_t, alpha1, 0x140);
-SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawFrame_t, test2, 0x150);
-SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawFrame_t, alpha2, 0x160);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawFrame_t, packet, 0x20);
 
 /// sdfGrSetFramePacket. `worker` is its predraw hook, sdfGrFramePacketPredraw.
 struct sdfGrFramePacket_t {
@@ -684,21 +734,6 @@ SDF_STATIC_ASSERT_OFFSETOF(sdfStoreImagePacket_t, callbackParam, 0xBC);
 SDF_STATIC_ASSERT_OFFSETOF(sdfStoreImagePacket_t, dmaFooter, 0xC0);
 SDF_STATIC_ASSERT_OFFSETOF(sdfStoreImagePacket_t, gifFooter, 0xD0);
 SDF_STATIC_ASSERT_OFFSETOF(sdfStoreImagePacket_t, footer, 0xE0);
-
-/// sdfTexSetPacket: a texture handle's registers, which sdfTexGetTex0Reg reads TEX0 back out of.
-struct sdfTexPacket_t {
-    sdfGifTag_t giftag;
-    sdfGrTagStdReg_t tex1;
-    sdfGrTagStdReg_t tex0;
-    sdfGrTagStdReg_t clamp;
-};
-SDF_STATIC_ASSERT_SIZE(sdfTexPacket_t, 64);
-SDF_STATIC_ASSERT_OFFSETOF(sdfTexPacket_t, giftag, 0x00);
-SDF_STATIC_ASSERT_OFFSETOF(sdfTexPacket_t, tex1, 0x10);
-SDF_STATIC_ASSERT_OFFSETOF(sdfTexPacket_t, tex0, 0x20);
-SDF_STATIC_ASSERT_OFFSETOF(sdfTexPacket_t, clamp, 0x30);
-
-using sdfTexPacketPtr_t = guest_ptr<sdfTexPacket_t>;
 
 /// sdf2DMakeTexPacket
 struct sdf2DTexPacket_t {
@@ -1219,41 +1254,6 @@ SDF_STATIC_ASSERT_OFFSETOF(sdfCorePacket_t, prim, 0x10);
 constexpr u16 sdfCoreShapeCount(const sdfCorePacket_t& p) { return u16(p.header.extData[0]); }
 constexpr u16 sdfCoreMorphIndex(const sdfCorePacket_t& p) { return u16(p.header.extData[0] >> 16); }
 
-using sdfBillBoardBatchPtr_t = guest_ptr<struct sdfBillBoardBatch_t>;
-using dds3BillResourcePtr_t = guest_ptr<struct dds3BillResource_t>;
-
-/// The resource a billboard batch draws from: its texture, its quad size and the ordering tag the
-/// batch is linked into.
-struct dds3BillResource_t {
-    sdfTexHandlePtr_t hTex;
-    u16 type;
-    u16 pad;
-    u32 count;
-    sdfVector2_t uv[2];
-    f32 cx;
-    f32 cy;
-    f32 width;
-    f32 height;
-};
-
-using dds3BillboardNodePtr_t = guest_ptr<struct dds3BillboardNode_t>;
-
-/// One entry of the list dds3BillboardLinkOt walks. Only the four fields it reads are modelled:
-/// the tag it links into is `tag[otIndex]`, and the batch is what sdfBillBoardMakeN is handed.
-struct dds3BillboardNode_t {
-    u8 unknown[44];
-    u32 tag[4];
-    u16 otIndex;
-    u16 pad;
-    u32 pad2;
-    sdfBillBoardBatchPtr_t batch;
-    dds3BillboardNodePtr_t next;
-};
-SDF_STATIC_ASSERT_OFFSETOF(dds3BillboardNode_t, tag, 44);
-SDF_STATIC_ASSERT_OFFSETOF(dds3BillboardNode_t, otIndex, 60);
-SDF_STATIC_ASSERT_OFFSETOF(dds3BillboardNode_t, batch, 68);
-SDF_STATIC_ASSERT_OFFSETOF(dds3BillboardNode_t, next, 72);
-
 /// A texel coordinate in 12.4 fixed point.
 struct UV_t {
     u16 u;
@@ -1270,6 +1270,47 @@ struct VTX_t {
 SDF_STATIC_ASSERT_SIZE(VTX_t, 8);
 SDF_STATIC_ASSERT_OFFSETOF(VTX_t, x, 0x00);
 SDF_STATIC_ASSERT_OFFSETOF(VTX_t, y, 0x04);
+
+using sdfBillBoardBatchPtr_t = guest_ptr<struct sdfBillBoardBatch_t>;
+using dds3BillResourcePtr_t = guest_ptr<struct dds3BillResource_tag>;
+using dds3BillboardTagPtr_t = guest_ptr<dds3BillResourcePtr_t>;
+
+/// What a billboard batch draws from: its texture, its quad, and a tag per ordering table. The
+/// tail of BillboardLoadTex's 1100-byte allocation, whose first 1024 bytes are `batch`.
+struct dds3BillResource_tag {
+    sdfTexHandlePtr_t hTex;
+    u16 type;
+    u32 count;
+    UV_t uv[4];
+    f32 cx;
+    f32 cy;
+    f32 width;
+    f32 height;
+
+    /// One tag per ordering table; current_mode picks the one a batch links into.
+    sdfDrawTagPtr_t pBillTag[4];
+    u16 current_mode;
+
+    sdfMemHandlePtr_t hMem;
+    sdfBillBoardBatchPtr_t batch;
+
+    /// The pending list dds3BillboardLinkOt walks from dds3BillboardTag, self while unqueued.
+    dds3BillResourcePtr_t next;
+};
+SDF_STATIC_ASSERT_SIZE(dds3BillResource_tag, 76);
+SDF_STATIC_ASSERT_OFFSETOF(dds3BillResource_tag, hTex, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(dds3BillResource_tag, type, 0x04);
+SDF_STATIC_ASSERT_OFFSETOF(dds3BillResource_tag, count, 0x08);
+SDF_STATIC_ASSERT_OFFSETOF(dds3BillResource_tag, uv, 0x0C);
+SDF_STATIC_ASSERT_OFFSETOF(dds3BillResource_tag, cx, 0x1C);
+SDF_STATIC_ASSERT_OFFSETOF(dds3BillResource_tag, cy, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(dds3BillResource_tag, width, 0x24);
+SDF_STATIC_ASSERT_OFFSETOF(dds3BillResource_tag, height, 0x28);
+SDF_STATIC_ASSERT_OFFSETOF(dds3BillResource_tag, pBillTag, 0x2C);
+SDF_STATIC_ASSERT_OFFSETOF(dds3BillResource_tag, current_mode, 0x3C);
+SDF_STATIC_ASSERT_OFFSETOF(dds3BillResource_tag, hMem, 0x40);
+SDF_STATIC_ASSERT_OFFSETOF(dds3BillResource_tag, batch, 0x44);
+SDF_STATIC_ASSERT_OFFSETOF(dds3BillResource_tag, next, 0x48);
 
 /// sdfBillBoardMake1
 struct sdfBillBoard1Packet_t {
@@ -1534,11 +1575,6 @@ constexpr u64 sdfFrameMask(u64 frame) { return (frame >> 32) & 0xFFFFFFFF; }
 /// What sdfGrSetFrameMaskRGB writes: color masked, alpha writable.
 constexpr u64 sdfFrameMaskRgb = 0x00FFFFFF;
 
-/// sdfModelDrawEnvLinkOt links one env set per ordering table, 96 bytes apart, and puts the
-/// terminator at aEnv[19].set[1], which is 96 * 4.
-constexpr u32 sdfModelOrderingTables = 4;
-constexpr u32 sdfModelDrawEnvStride = 96;
-
 /// The four the engine sets up, in ordering-table order.
 constexpr sdfGsState_t sdfGsStateForOt(u32 otIndex) {
     switch (otIndex) {
@@ -1750,6 +1786,79 @@ struct sdf3DFogPacket_t {
 SDF_STATIC_ASSERT_SIZE(sdf3DFogPacket_t, 80);
 SDF_STATIC_ASSERT_OFFSETOF(sdf3DFogPacket_t, fogParm, 0x10);
 SDF_STATIC_ASSERT_OFFSETOF(sdf3DFogPacket_t, fogColor, 0x30);
+
+/// sdf3DLinkInitPacket: a REF to vu1MicroPacket and the tag after it.
+struct sdf3DInitPacket_t {
+    sdfDmaTag_t reftag;
+    sdfDmaTag_t linktag;
+};
+SDF_STATIC_ASSERT_SIZE(sdf3DInitPacket_t, 32);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DInitPacket_t, reftag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DInitPacket_t, linktag, 0x10);
+
+/// One ordering table's alpha and test state, which sdfModelDrawEnvLinkOt files ahead of its draws.
+struct sdfModelDrawEnvSet_t {
+    sdfDrawTag_t drawTag;
+    sdfPrimTransPacket_t transPacket;
+};
+SDF_STATIC_ASSERT_SIZE(sdfModelDrawEnvSet_t, 96);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelDrawEnvSet_t, drawTag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelDrawEnvSet_t, transPacket, 0x20);
+
+struct sdfModelDrawEnvTerm_t {
+    sdfDrawTag_t drawTag;
+    sdfDmaTag_t footer;
+};
+SDF_STATIC_ASSERT_SIZE(sdfModelDrawEnvTerm_t, 48);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelDrawEnvTerm_t, drawTag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelDrawEnvTerm_t, footer, 0x20);
+
+using sdfModelDrawEnvPtr_t = guest_ptr<struct sdfModelDrawEnv_t>;
+
+/// sdfModelSetDrawEnv: one set per ordering table, then the terminator linked into the last.
+struct sdfModelDrawEnv_t {
+    sdfModelDrawEnvSet_t set[4];
+    sdfModelDrawEnvTerm_t term;
+};
+SDF_STATIC_ASSERT_SIZE(sdfModelDrawEnv_t, 432);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelDrawEnv_t, set, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelDrawEnv_t, term, 0x180);
+
+/// The kernel's per-frame draw state, dds3DrawEnv[2], as dds3InitDrawEnvSub and dds3InitRenderDrawEnv
+/// build it. Names are HD's; every member is inline here where HD keeps a pointer.
+struct dds3DrawEnv_t {
+    sdfDrawTag_t SysDrawTag;
+    sdf3DInitPacket_t TdPacket;
+    sdfModelDrawEnv_t ModelDrawEnv[11];
+    sdfDrawTag_t DrawTag;
+    sdfPreDrawTag_t PreDrawTag;
+    sdfGrStdDrawEnv_t DrawEnv;
+    sdf3DViewportPacket_t ViewportPacket;
+    sdf3DLightParallelPacket_t DirLightPacket;
+    sdfDrawTag_t RenderDrawTag;
+    sdfGrDrawEnv_t RenderDrawEnv;
+    sdf3DViewportPacket_t RenderViewportPacket;
+    sdf3DLightParallelPacket_t RenderDirLightPacket;
+    sdfDrawTag_t HighDrawTag;
+    sdf3DViewportPacket_t HighViewportPacket;
+    sdf3DLightParallelPacket_t HighDirLightPacket;
+};
+SDF_STATIC_ASSERT_SIZE(dds3DrawEnv_t, 7136);
+SDF_STATIC_ASSERT_OFFSETOF(dds3DrawEnv_t, SysDrawTag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(dds3DrawEnv_t, TdPacket, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(dds3DrawEnv_t, ModelDrawEnv, 0x40);
+SDF_STATIC_ASSERT_OFFSETOF(dds3DrawEnv_t, DrawTag, 0x12D0);
+SDF_STATIC_ASSERT_OFFSETOF(dds3DrawEnv_t, PreDrawTag, 0x12F0);
+SDF_STATIC_ASSERT_OFFSETOF(dds3DrawEnv_t, DrawEnv, 0x1300);
+SDF_STATIC_ASSERT_OFFSETOF(dds3DrawEnv_t, ViewportPacket, 0x1520);
+SDF_STATIC_ASSERT_OFFSETOF(dds3DrawEnv_t, DirLightPacket, 0x15F0);
+SDF_STATIC_ASSERT_OFFSETOF(dds3DrawEnv_t, RenderDrawTag, 0x16D0);
+SDF_STATIC_ASSERT_OFFSETOF(dds3DrawEnv_t, RenderDrawEnv, 0x16F0);
+SDF_STATIC_ASSERT_OFFSETOF(dds3DrawEnv_t, RenderViewportPacket, 0x1860);
+SDF_STATIC_ASSERT_OFFSETOF(dds3DrawEnv_t, RenderDirLightPacket, 0x1930);
+SDF_STATIC_ASSERT_OFFSETOF(dds3DrawEnv_t, HighDrawTag, 0x1A10);
+SDF_STATIC_ASSERT_OFFSETOF(dds3DrawEnv_t, HighViewportPacket, 0x1A30);
+SDF_STATIC_ASSERT_OFFSETOF(dds3DrawEnv_t, HighDirLightPacket, 0x1B00);
 
 /// One blend shape a morph controller drives, and how far towards it the model currently is.
 struct sdfModelMorphParm_t {

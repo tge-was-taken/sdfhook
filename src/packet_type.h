@@ -46,7 +46,6 @@ enum class PacketType : u8 {
     FrameMask,
     FrameTex,
     DrawFrame,
-    DrawDefParm,
     RefGif,
     TextureUpload,
     Clear,
@@ -99,7 +98,6 @@ constexpr const char* packetTypeName(PacketType type) {
         case PacketType::FrameMask: return "frameMask";
         case PacketType::FrameTex: return "frameTex";
         case PacketType::DrawFrame: return "drawFrame";
-        case PacketType::DrawDefParm: return "drawDefParm";
         case PacketType::RefGif: return "refGif";
         case PacketType::Viewport: return "viewport";
         case PacketType::LightParallel: return "light";

@@ -214,13 +214,13 @@ void ModelHooks::readMultiTexturePacket(const sdfMat_t& material, sdfMatPacketPt
 /// @note SLUS-20911 0x002B1838
 bool ModelHooks::sdfModelCheckBounds(sdfModelBoundsPtr_t aBounds, const Matrix4& clip) const {
     if (!aBounds) return false;
-    const f32* box = &aBounds->min.x;
+    const sdfModelBounds_t& box = *aBounds;
 
     u32 code = 0x3F;
     for (int corner = 0; corner < 8; corner++) {
         f32 out[4];
-        transformPoint(clip, box[(corner & 1) ? 3 : 0], box[(corner & 2) ? 4 : 1],
-                       box[(corner & 4) ? 5 : 2], out);
+        transformPoint(clip, (corner & 1) ? box.max.x : box.min.x, (corner & 2) ? box.max.y : box.min.y,
+                       (corner & 4) ? box.max.z : box.min.z, out);
         code &= clipCode(out);
         if (!code) return false;
     }
@@ -833,9 +833,9 @@ void ModelHooks::readBillboardTables() {
     mParser.mBillboardOt.clear();
     if (!mParser.mDds3BillboardTag) return;
     // The engine's own loop rewrites `next` as it consumes each node, so this runs at its entry.
-    dds3BillboardNodePtr_t node{u32Ptr_t{mParser.mDds3BillboardTag.addr}.valueOr()};
+    dds3BillResourcePtr_t node = mParser.mDds3BillboardTag.valueOr();
     for (u32 steps = 0; node && steps < kMaxBillboardNodes; steps++) {
-        mParser.mBillboardOt[node->batch.addr] = node->otIndex;
+        mParser.mBillboardOt[node->batch.addr] = node->current_mode;
         node = node->next;
     }
 }

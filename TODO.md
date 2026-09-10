@@ -2302,9 +2302,9 @@ right.
       83/87, underground 67/70, field 1038/1083, battle 1193/1224. What is left, and what each needs:
       - Billboards (`dds3BillboardTagLink` 3+1 link sites, `dds3BillboardLinkOt`, `drawSprite3D`
         2+1): multi-site linkers, so type per site or by the builder of each packet. ~15 a frame.
-      - `dds3InitDrawEnvSub`: its `stdDrawEnv` is linked through `sdfGrLinkStdDrawEnv`, which
-        tail-calls its link, at an offset inside the persistent global `dds3DrawEnv`. Needs typing
-        by struct range, not exact address. 1 a frame in every scene.
+      - `dds3InitDrawEnvSub`: its `DrawEnv` is linked through `sdfGrLinkStdDrawEnv`, which
+        tail-calls its link, at `dds3DrawEnv[i].DrawEnv.dmatag` in the persistent global. Type it
+        by `dds3DrawEnv_t`'s member ranges, not by exact address. 1 a frame in every scene.
       - `dds3EffectManagerRunF` (1 site) and `dds3MultiBillboardLinkOt`'s `sdfDrawTagLink` site
         each link a 2 or 3 write A+D list. Read what they write before naming them.
       - Field only: 17 one-quadword `vifSetup` entries (`w0=00080070`) and 5 four-quadword ones

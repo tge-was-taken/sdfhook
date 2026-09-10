@@ -102,9 +102,9 @@ void cmpDrawBoxG(HookContext& h, const s32 x, const s32 y, const s32 w, const s3
 // cmpDrawTriG(pX, pY, Z, pCol, OtNo): three x, three y and three colors, read through pointers.
 void cmpDrawTriG(HookContext& h, const u32 pX, const u32 pY, const u32 pCol);
 
-// sdfModelDrawEnvLinkOt(aOt, aEnv): one env set per table, striding 96 bytes, holding that
+// sdfModelDrawEnvLinkOt(aOt, aEnv): one env set per table, holding that
 // layer's frame buffer, clear, alpha test and blend for both GS contexts.
-void sdfModelDrawEnvLinkOt(HookContext& h, const u32 aOt, const u32 aEnv);
+void sdfModelDrawEnvLinkOt(HookContext& h, const u32 aOt, const sdfModelDrawEnvPtr_t aEnv);
 
 /// sdfBillBoardMakeN(aCenter, aColor, aUVList, aXYOffsetList, aNum, aAllocator): one batch of
 /// camera-facing quads. The four pointers are one allocation, so it is taken as the struct it is.

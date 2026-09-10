@@ -389,14 +389,14 @@ int frCopyFontClutToVramHook(pcsx2hook_regs* regs, void* user) {
     return PCSX2HOOK_CONTINUE;
 }
 
-// sdfModelDrawEnvLinkOt(aOt, aEnv): one env set per table, striding 96 bytes, holding that
+// sdfModelDrawEnvLinkOt(aOt, aEnv): one env set per table, holding that
 // layer's frame buffer, clear, alpha test and blend for both GS contexts.
 int sdfModelDrawEnvLinkOtHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
 
     const u32 aOt = c.getArg(0);
-    const u32 aEnv = c.getArg(1);
+    const sdfModelDrawEnvPtr_t aEnv{c.getArg(1)};
 
     sdfModelDrawEnvLinkOt(h, aOt, aEnv);
     return PCSX2HOOK_CONTINUE;
@@ -900,7 +900,8 @@ constexpr Entry kGameEntries[] = {
     {"sdfGrSetFrameMaskReset", &packetTypeHook, nullptr},
     {"sdfGrLinkDrawFrameTex", &packetTypeHook, nullptr},
     {"sdfGrSetDrawFramePacket", &packetTypeHook, nullptr},
-    {"sdfGrSetDrawDefParmPacket", &packetTypeHook, nullptr},
+    {"sdfGrSetDrawFrame", &packetTypeHook, nullptr},
+    {"sdfGrSetDrawEnv", &packetTypeHook, nullptr},
     {"sdfGrSetRefGifPacket", &packetTypeHook, nullptr},
     {"sdf3DPrimLinkTm", &packetTypeHook, nullptr},
     {"sdf3DPrimLinkMat", &packetTypeHook, nullptr},

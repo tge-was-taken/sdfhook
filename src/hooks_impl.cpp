@@ -569,18 +569,19 @@ void cmpDrawTriG(HookContext& h, const u32 pX, const u32 pY, const u32 pCol) {
 /// test and blend for both GS contexts.
 /// @fn sdfModelDrawEnvLinkOt
 /// @note SLUS-20911 0x002B2590
-void sdfModelDrawEnvLinkOt(HookContext& h, const u32 aOt, const u32 aEnv) {
+void sdfModelDrawEnvLinkOt(HookContext& h, const u32 aOt, const sdfModelDrawEnvPtr_t aEnv) {
     h.trace->onPrimEntry("sdfModelDrawEnvLinkOt", aOt);
 
     static bool shown = false;
     if (h.config->dumpDrawEnv && !shown) {
         shown = true;
-        for (u32 ot = 0; ot < sdfModelOrderingTables; ot++) {
-            const u32 at = aEnv + sdfModelDrawEnvStride * ot;
+        constexpr u32 kSetBytes = sizeof(sdfModelDrawEnvSet_t);
+        for (u32 ot = 0; ot < std::size(sdfModelDrawEnv_t{}.set); ot++) {
+            const u32 at = aEnv.addr + kSetBytes * ot;
             JsonObject row;
             row.addString("dump", "drawEnv").addUint("ot", ot).addHexDigits("at", at, 8);
             row.beginArray("qwords");
-            for (u32 q = 0; q < sdfModelDrawEnvStride / 16; q++) {
+            for (u32 q = 0; q < kSetBytes / sdfQwordBytes; q++) {
                 const u64* pair = u64Ptr_t{at + 16 * q}.slice(2);
                 if (!pair) break;
                 row.beginObject().addUint("at", 16 * q).addHex128("qword", pair[1], pair[0]).endObject();
