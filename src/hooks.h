@@ -260,6 +260,10 @@ struct HookContext {
     RenderState state;
     Coverage coverage;
 
+    /// What the linked packets leave in force in link order, which the shadow pass takes its FRAME
+    /// mask from. Carried across frames, as the GS's own registers are.
+    GsContexts linkedState;
+
     /// What each packet is, recorded where it is built. A packet whose type is unknown cannot be
     /// processed without running the hardware that consumes it, so this has to be exhaustive.
     std::unordered_map<u32, PacketType> packetTypes;

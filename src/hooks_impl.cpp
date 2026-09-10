@@ -116,14 +116,22 @@ void placeDraws(HookContext& h, u32 aTag) {
     if (!frame) return;
     std::unordered_map<u32, std::vector<DrawRef>> byPacket = drawsByPacket(h, *frame);
 
-    // A REF names its data elsewhere, and a model stream is found by that data's address.
+    // A REF names its data elsewhere, and a model stream is found by that data's address. Every
+    // draw here is drawn in context 1; the second texture pass carries its own ALPHA.
     const auto place = [&](u32 packet, const sdfGsState_t& gs) {
         const auto found = byPacket.find(packet);
         if (found == byPacket.end()) return;
         for (const DrawRef ref : found->second) {
             frame->order.push_back(ref);
             h.coverage.placedDraws[producerOf(*frame, ref)]++;
-            if (ref.kind != DrawRef::Kind::Mesh || h.config->noTransmitState) continue;
+            if (h.config->noTransmitState) continue;
+            if (ref.kind == DrawRef::Kind::Sprite) {
+                DrawSprite& sprite = frame->sprites[ref.index];
+                // Without ABE in its PRIM the GS never reads ALPHA, which the producer knows.
+                if (sprite.alpha != GsAlpha::Opaque) sprite.alpha = GsAlpha(u32(gs.alpha & 0xFF));
+                sprite.test = u32(gs.test);
+                continue;
+            }
             DrawMesh& mesh = frame->meshes[ref.index];
             const u64 mask = mesh.gs.frameMask;
             mesh.gs = gs;
@@ -132,7 +140,7 @@ void placeDraws(HookContext& h, u32 aTag) {
         byPacket.erase(found);
     };
 
-    sdfGsState_t gs{};
+    GsContexts gs;
     u32 stack[16] = {};
     u32 depth = 0;
     const sdfDrawTagPtr_t drawTag{aTag};
@@ -149,8 +157,8 @@ void placeDraws(HookContext& h, u32 aTag) {
         const u32 addr = tag->addr & 0x0FFFFFFFu;
 
         applyGsRegisterWrites(at, gs);
-        place(at, gs);
-        if (sdfDmaIsRef(*tag)) place(addr, gs);
+        place(at, gs.context[0]);
+        if (sdfDmaIsRef(*tag)) place(addr, gs.context[0]);
 
         switch (id) {
             case sdfDmaTagRef:
@@ -248,14 +256,15 @@ void chainFrameSend(HookContext& h, u32 aRa, u32 aAddr) {
 
 void collectPackets(HookContext& h) {
     GifParser parser(&h.coverage.gif);
-    sdfGsState_t& gs = h.model.getGsState();
+    GsContexts& linked = h.linkedState;
 
     for (const LinkedPacket& packet : h.frames.getPackets()) {
         const GifCounts before = h.coverage.gif;
         // A draw runs under whatever the packets before it left behind, so it is tracked across
         // the chain rather than looked up per draw.
-        const sdfGsState_t was = gs;
-        const bool stateOnly = applyGsRegisterWrites(packet.addr, gs);
+        const sdfGsState_t was = linked.context[0];
+        const bool stateOnly = applyGsRegisterWrites(packet.addr, linked);
+        const sdfGsState_t& gs = linked.context[0];
         if (h.config->dumpDrawEnv && (gs.alpha != was.alpha || gs.test != was.test ||
                                       gs.frameMask != was.frameMask)) {
             log.dump(JsonObject()

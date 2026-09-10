@@ -358,31 +358,14 @@ GsBlend gsAlphaToBlend(u64 reg) {
 }
 
 void applyBlend(GsAlpha alpha) {
-    switch (alpha) {
-        case GsAlpha::Additive:
-            glBlendEquation(GL_FUNC_ADD);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-            return;
-        case GsAlpha::ReverseSubtract:
-            glBlendEquation(GL_FUNC_REVERSE_SUBTRACT);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-            return;
-        case GsAlpha::DestScale:
-            glBlendEquation(GL_FUNC_ADD);
-            glBlendFunc(GL_ZERO, GL_SRC_ALPHA);
-            return;
-        case GsAlpha::Opaque:
-            glBlendEquation(GL_FUNC_ADD);
-            glBlendFunc(GL_ONE, GL_ZERO);
-            return;
-        case GsAlpha::Blend:
-            break;
-        default:
-            reportUnsupported("ALPHA", u32(alpha));
-            break;
+    if (alpha == GsAlpha::Opaque) {
+        glBlendEquation(GL_FUNC_ADD);
+        glBlendFunc(GL_ONE, GL_ZERO);
+        return;
     }
-    glBlendEquation(GL_FUNC_ADD);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    const GsBlend blend = gsAlphaToBlend(u64(alpha));
+    glBlendEquation(blend.equation);
+    glBlendFunc(blend.src, blend.dst);
 }
 
 /// PCSX2HOOK_GS_ONLY's own spec, so a frame cuts to the same draws on both sides.

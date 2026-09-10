@@ -36,9 +36,14 @@ private:
     std::unique_ptr<State> mState;
 };
 
+/// ALPHA, TEST and FRAME as the GS keeps them, once per drawing context. PRIM's CTXT bit picks
+/// which one a draw runs under.
+struct GsContexts {
+    sdfGsState_t context[2];
+};
+
 /// Applies a packet's A+D register writes to the running GS state.
-/// @todo Nothing calls this yet, so every mesh is still stamped from sdfGsStateForOt. See TODO.md E1.
 /// @return Whether the packet was one: pure register writes draw nothing.
-bool applyGsRegisterWrites(u32 packetAddr, sdfGsState_t& state);
+bool applyGsRegisterWrites(u32 packetAddr, GsContexts& state);
 
 }  // namespace sdfhook

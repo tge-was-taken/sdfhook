@@ -198,9 +198,6 @@ public:
 
     void setBillboardTexture(sdfTexHandlePtr_t aTex) { mBillboardTexture = aTex; }
 
-    /// The GS state the linked packets have left in force, tracked across a frame's whole chain.
-    sdfGsState_t& getGsState() { return mGsState; }
-
 private:
     struct NodeDraw {
         Matrix4 model;
@@ -272,7 +269,6 @@ private:
     sdfModelNodeListPtr_t mNodeList;
     MeshLighting mLighting{};
     MeshFog mFog{};
-    sdfGsState_t mGsState{};
     /// sdfBillBoardMakeN gets the geometry alone, so the handle comes from the call that fills.
     sdfTexHandlePtr_t mBillboardTexture;
     dds3BillboardTagPtr_t mDds3BillboardTag;

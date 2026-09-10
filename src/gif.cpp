@@ -224,12 +224,12 @@ void GifParser::parse(u32 packetAddr) {
     }
 }
 
-bool applyGsRegisterWrites(u32 packetAddr, sdfGsState_t& state) {
+bool applyGsRegisterWrites(u32 packetAddr, GsContexts& state) {
     const sdfDmaTagPtr_t tag{packetAddr};
     if (!tag) return false;
 
     // A REF tag names its data elsewhere; anything else carries it straight after the tag.
-    const u32 at = sdfDmaId(*tag) == sdfDmaTagRef ? tag->addr : packetAddr + sdfQwordBytes;
+    const u32 at = sdfDmaIsRef(*tag) ? tag->addr : packetAddr + sdfQwordBytes;
     const sdfGifTagPtr_t gif{at};
     if (!gif) return false;
     if (sdfGifFlg(*gif) != 0 || sdfGifNreg(*gif) != 1) return false;
@@ -240,12 +240,12 @@ bool applyGsRegisterWrites(u32 packetAddr, sdfGsState_t& state) {
     if (!writes) return false;
     for (u32 i = 0; i < count; i++) {
         switch (u32(writes[i].reg & 0xFF)) {
-            case sdfGsAddrAlpha1:
-            case sdfGsAddrAlpha2: state.alpha = writes[i].data; break;
-            case sdfGsAddrTest1:
-            case sdfGsAddrTest2: state.test = writes[i].data; break;
-            case sdfGsAddrFrame1:
-            case sdfGsAddrFrame2: state.frameMask = sdfFrameMask(writes[i].data); break;
+            case sdfGsAddrAlpha1: state.context[0].alpha = writes[i].data; break;
+            case sdfGsAddrAlpha2: state.context[1].alpha = writes[i].data; break;
+            case sdfGsAddrTest1: state.context[0].test = writes[i].data; break;
+            case sdfGsAddrTest2: state.context[1].test = writes[i].data; break;
+            case sdfGsAddrFrame1: state.context[0].frameMask = sdfFrameMask(writes[i].data); break;
+            case sdfGsAddrFrame2: state.context[1].frameMask = sdfFrameMask(writes[i].data); break;
             default: break;
         }
     }
