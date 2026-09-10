@@ -17,7 +17,7 @@ using sdfhook::u64;
 using sdfhook::u8;
 using sdfhook::usize;
 
-// Named by the database, not mapped here yet. A pointer to an incomplete type is still four bytes.
+// Declared ahead so the pointer aliases below can name them.
 struct sdfModelNode_t;
 struct sdfModelNodeDef_t;
 struct sdfModelPacketHeader_t;
@@ -34,6 +34,8 @@ struct sdfGrOt_t;
 struct sdfGrPacketHeader_t;
 struct sdf3DLightParallelPacket_t;
 struct sdf3DFogPacket_t;
+struct sdfMat_t;
+struct sdfModelMorph_t;
 
 // A size on its own passes even when a field has moved, because padding absorbs the difference.
 #define SDF_STATIC_ASSERT_SIZE(type, bytes) \
@@ -60,6 +62,9 @@ using sdf3DFogPacketPtr_t = guest_ptr<sdf3DFogPacket_t>;
 using sdf3DFogDefaultPtr_t = guest_ptr<sdf3DFogPacketPtr_t>;
 using sdfShapePtr_t = guest_ptr<sdfShape_t>;
 using sdfDrawTagPtr_t = guest_ptr<sdfDrawTag_t>;
+using sdfMatPtr_t = guest_ptr<sdfMat_t>;
+using sdfMatPacketPtr_t = guest_ptr<struct sdfMatPacket_t>;
+using sdfModelMorphPtr_t = guest_ptr<sdfModelMorph_t>;
 using sdfVoidPtr_t = guest_ptr<void>;
 
 struct sdfVector2_t {
@@ -164,31 +169,46 @@ struct sdfModelOt_t {
 SDF_STATIC_ASSERT_SIZE(sdfModelOt_t, 16);
 SDF_STATIC_ASSERT_OFFSETOF(sdfModelOt_t, ot, 0x00);
 
+// Every sdf growable list is this header over an item array allocated on its own.
 struct sdfModelNodeList_t {
     sdfMemHandlePtr_t memHandle;
     s16 count;
     s16 capacity;
     s16 elemSize;
     s16 growStep;
+    guest_ptr<sdfModelNodePtr_t> items;
 };
-SDF_STATIC_ASSERT_SIZE(sdfModelNodeList_t, 12);
+SDF_STATIC_ASSERT_SIZE(sdfModelNodeList_t, 16);
 SDF_STATIC_ASSERT_OFFSETOF(sdfModelNodeList_t, memHandle, 0x00);
 SDF_STATIC_ASSERT_OFFSETOF(sdfModelNodeList_t, count, 0x04);
 SDF_STATIC_ASSERT_OFFSETOF(sdfModelNodeList_t, capacity, 0x06);
 SDF_STATIC_ASSERT_OFFSETOF(sdfModelNodeList_t, elemSize, 0x08);
 SDF_STATIC_ASSERT_OFFSETOF(sdfModelNodeList_t, growStep, 0x0A);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelNodeList_t, items, 0x0C);
 
-// Every sdf growable list has this header and keeps its items inline from sdfListItems.
 struct sdfMatList_t {
     sdfMemHandlePtr_t memHandle;
     s16 count;
     s16 capacity;
     s16 elemSize;
     s16 growStep;
+    guest_ptr<sdfMatPtr_t> items;
 };
-SDF_STATIC_ASSERT_SIZE(sdfMatList_t, 12);
+SDF_STATIC_ASSERT_SIZE(sdfMatList_t, 16);
+SDF_STATIC_ASSERT_OFFSETOF(sdfMatList_t, count, 0x04);
+SDF_STATIC_ASSERT_OFFSETOF(sdfMatList_t, items, 0x0C);
 
-constexpr u32 sdfListItems = 0x0C;
+struct sdfModelMorphList_t {
+    sdfMemHandlePtr_t memHandle;
+    s16 count;
+    s16 capacity;
+    s16 elemSize;
+    s16 growStep;
+    sdfModelMorphPtr_t items;
+};
+SDF_STATIC_ASSERT_SIZE(sdfModelMorphList_t, 16);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelMorphList_t, count, 0x04);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelMorphList_t, items, 0x0C);
 
 /// The transfer unit everything on this hardware is counted in.
 constexpr u32 sdfQwordBytes = 16;
@@ -207,6 +227,715 @@ enum sdfDmaTagId_t : u32 {
     sdfDmaTagRet = 6,
     sdfDmaTagEnd = 7,
 };
+
+// The packets the engine links, as its builders lay them out.
+
+/// A DMA source-chain tag. `id` holds PCE, ID and IRQ; channel 1 hands dat0 and dat1 to VIF as
+/// codes.
+struct sdfDmaTag_t {
+    u16 qwc;
+    u8 pad;
+    u8 id;
+    u32 addr;
+    u32 dat0;
+    u32 dat1;
+};
+SDF_STATIC_ASSERT_SIZE(sdfDmaTag_t, 16);
+SDF_STATIC_ASSERT_OFFSETOF(sdfDmaTag_t, qwc, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfDmaTag_t, pad, 0x02);
+SDF_STATIC_ASSERT_OFFSETOF(sdfDmaTag_t, id, 0x03);
+SDF_STATIC_ASSERT_OFFSETOF(sdfDmaTag_t, addr, 0x04);
+SDF_STATIC_ASSERT_OFFSETOF(sdfDmaTag_t, dat0, 0x08);
+SDF_STATIC_ASSERT_OFFSETOF(sdfDmaTag_t, dat1, 0x0C);
+
+using sdfDmaTagPtr_t = guest_ptr<sdfDmaTag_t>;
+
+constexpr u32 sdfDmaId(const sdfDmaTag_t& t) { return (t.id >> 4) & 7; }
+
+/// REFE, REF and REFS name their data at `addr`; the rest carry it after the tag.
+constexpr bool sdfDmaIsRef(const sdfDmaTag_t& t) {
+    const u32 id = sdfDmaId(t);
+    return id == sdfDmaTagRef || id == sdfDmaTagRefs || id == sdfDmaTagRefe;
+}
+
+struct sdfGifTag_t {
+    u64 parm;
+    u64 regs;
+};
+SDF_STATIC_ASSERT_SIZE(sdfGifTag_t, 16);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGifTag_t, parm, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGifTag_t, regs, 0x08);
+
+using sdfGifTagPtr_t = guest_ptr<sdfGifTag_t>;
+
+constexpr u32 sdfGifNloop(const sdfGifTag_t& t) { return u32(t.parm & 0x7FFF); }
+constexpr u32 sdfGifPre(const sdfGifTag_t& t) { return u32((t.parm >> 46) & 1); }
+constexpr u32 sdfGifPrim(const sdfGifTag_t& t) { return u32((t.parm >> 47) & 0x7FF); }
+constexpr u32 sdfGifFlg(const sdfGifTag_t& t) { return u32((t.parm >> 58) & 3); }
+constexpr u32 sdfGifNreg(const sdfGifTag_t& t) { return u32((t.parm >> 60) & 0xF); }
+
+/// One A+D write: the value, then the GS register it names in the low byte.
+struct sdfGrTagStdReg_t {
+    u64 data;
+    u64 reg;
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrTagStdReg_t, 16);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrTagStdReg_t, data, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrTagStdReg_t, reg, 0x08);
+
+using sdfGrTagStdRegPtr_t = guest_ptr<sdfGrTagStdReg_t>;
+
+/// A GIF packet's opening, as sdf2DMakePrimPacketHeader writes it: the DMA tag, then the GIF tag.
+struct sdfGrPacketHeader_t {
+    sdfDmaTag_t dmatag;
+    sdfGifTag_t giftag;
+    // u64 data[] follows
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrPacketHeader_t, 32);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrPacketHeader_t, dmatag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrPacketHeader_t, giftag, 0x10);
+
+/// sdfGrSetRegsPacketHeader: NLOOP A+D writes. The sized variants are what the callers allocate.
+struct sdfGrRegPacket_t {
+    sdfDmaTag_t dmatag;
+    sdfGifTag_t giftag;
+    // sdfGrTagStdReg_t reg[] follows
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrRegPacket_t, 32);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrRegPacket_t, dmatag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrRegPacket_t, giftag, 0x10);
+
+struct sdfGrReg1Packet_t {
+    sdfDmaTag_t dmatag;
+    sdfGifTag_t giftag;
+    sdfGrTagStdReg_t reg[1];
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrReg1Packet_t, 48);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrReg1Packet_t, dmatag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrReg1Packet_t, giftag, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrReg1Packet_t, reg, 0x20);
+
+struct sdfGrReg2Packet_t {
+    sdfDmaTag_t dmatag;
+    sdfGifTag_t giftag;
+    sdfGrTagStdReg_t reg[2];
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrReg2Packet_t, 64);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrReg2Packet_t, dmatag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrReg2Packet_t, giftag, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrReg2Packet_t, reg, 0x20);
+
+struct sdfGrReg9Packet_t {
+    sdfDmaTag_t dmatag;
+    sdfGifTag_t giftag;
+    sdfGrTagStdReg_t reg[9];
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrReg9Packet_t, 176);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrReg9Packet_t, dmatag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrReg9Packet_t, giftag, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrReg9Packet_t, reg, 0x20);
+
+struct sdfGrReg15Packet_t {
+    sdfDmaTag_t dmatag;
+    sdfGifTag_t giftag;
+    sdfGrTagStdReg_t reg[15];
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrReg15Packet_t, 272);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrReg15Packet_t, dmatag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrReg15Packet_t, giftag, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrReg15Packet_t, reg, 0x20);
+
+/// A REF to data held elsewhere, then the tag that continues the chain.
+struct sdfGrRefPacketHeader_t {
+    sdfDmaTag_t reftag;
+    sdfDmaTag_t linktag;
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrRefPacketHeader_t, 32);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrRefPacketHeader_t, reftag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrRefPacketHeader_t, linktag, 0x10);
+
+struct sdfGrRefGifPacketHeader_t {
+    sdfDmaTag_t dmatag;
+    sdfGifTag_t giftag;
+    sdfDmaTag_t reftag;
+    sdfDmaTag_t linktag;
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrRefGifPacketHeader_t, 64);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrRefGifPacketHeader_t, dmatag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrRefGifPacketHeader_t, giftag, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrRefGifPacketHeader_t, reftag, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrRefGifPacketHeader_t, linktag, 0x30);
+
+/// sdfDrawTagLinkCall: a DMA call into a chain the caller built, and the tag after it.
+struct sdfGrCallPacket_t {
+    sdfDmaTag_t calltag;
+    sdfDmaTag_t linktag;
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrCallPacket_t, 32);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrCallPacket_t, calltag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrCallPacket_t, linktag, 0x10);
+
+/// A VIF stream straight after its tag, what the VU1 routines' builders return.
+struct sdfGrVifPacket_t {
+    sdfDmaTag_t tag;
+    // u32 vif[] follows
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrVifPacket_t, 16);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrVifPacket_t, tag, 0x00);
+
+using sdfPreDrawHookPtr_t = guest_ptr<struct sdfPreDrawHook_t>;
+using sdfPreDrawTagPtr_t = guest_ptr<struct sdfPreDrawTag_t>;
+
+/// A callback sdfGrDrawFrame runs before it sends the chain, with two words of its own.
+struct sdfPreDrawHook_t {
+    sdfPreDrawHookPtr_t next;
+    u32 predrawFunc;
+    u32 option0;
+    u32 option1;
+};
+SDF_STATIC_ASSERT_SIZE(sdfPreDrawHook_t, 16);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPreDrawHook_t, next, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPreDrawHook_t, predrawFunc, 0x04);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPreDrawHook_t, option0, 0x08);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPreDrawHook_t, option1, 0x0C);
+
+struct sdfPreDrawTag_t {
+    sdfPreDrawTagPtr_t next;
+    sdfPreDrawHookPtr_t head;
+    sdfPreDrawHookPtr_t tail;
+    u32 pad;
+};
+SDF_STATIC_ASSERT_SIZE(sdfPreDrawTag_t, 16);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPreDrawTag_t, next, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPreDrawTag_t, head, 0x04);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPreDrawTag_t, tail, 0x08);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPreDrawTag_t, pad, 0x0C);
+
+using sdfGsMemSlicePtr_t = guest_ptr<struct sdfGsMemSlice_t>;
+
+struct sdfGrFrameSet_t {
+    s16 w;
+    s16 h;
+    s16 buffH;
+    u8 pixelFormat;
+    u8 zbuffFormat;
+    sdfGsMemSlicePtr_t frameHandle[2];
+    sdfGsMemSlicePtr_t zbuffHandle;
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrFrameSet_t, 20);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrFrameSet_t, w, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrFrameSet_t, h, 0x02);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrFrameSet_t, buffH, 0x04);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrFrameSet_t, pixelFormat, 0x06);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrFrameSet_t, zbuffFormat, 0x07);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrFrameSet_t, frameHandle, 0x08);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrFrameSet_t, zbuffHandle, 0x10);
+
+using sdfGrFrameSetPtr_t = guest_ptr<sdfGrFrameSet_t>;
+
+struct sdfGrOt_t {
+    sdfGrOtPtr_t next;
+    sdfDrawTagPtr_t tagHead;
+    sdfDrawTagPtr_t tagTail;
+    sdfDrawTagPtr_t noSortTag;
+    u32 regFunc;
+    u32 callbackFunc;
+    sdfVoidPtr_t data;
+    u32 pad;
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrOt_t, 32);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrOt_t, next, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrOt_t, tagHead, 0x04);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrOt_t, tagTail, 0x08);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrOt_t, noSortTag, 0x0C);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrOt_t, regFunc, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrOt_t, callbackFunc, 0x14);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrOt_t, data, 0x18);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrOt_t, pad, 0x1C);
+
+/// One queued frame, sdfGrDrawState[sdfDrawReqQueueIndex]: sdfGrDrawFrame sends `tag->head`.
+struct sdfGrDrawState_t {
+    sdfDrawTagPtr_t tag;
+    sdfPreDrawHookPtr_t preDrawHead;
+    u8 mode;
+    u8 buffId;
+    u8 frameId;
+    u8 halfOffset;
+    s32 field_C;
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrDrawState_t, 16);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawState_t, tag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawState_t, preDrawHead, 0x04);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawState_t, mode, 0x08);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawState_t, buffId, 0x09);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawState_t, frameId, 0x0A);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawState_t, halfOffset, 0x0B);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawState_t, field_C, 0x0C);
+
+/// sdfGrSetClearPacket: a sprite over the whole buffer, under a TEST that passes everything.
+struct sdfGrClearPacket_t {
+    sdfGrTagStdReg_t test;
+    sdfGrTagStdReg_t prim;
+    sdfGrTagStdReg_t rgbaq;
+    sdfGrTagStdReg_t xyzA;
+    sdfGrTagStdReg_t xyzB;
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrClearPacket_t, 80);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrClearPacket_t, test, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrClearPacket_t, prim, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrClearPacket_t, rgbaq, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrClearPacket_t, xyzA, 0x30);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrClearPacket_t, xyzB, 0x40);
+
+/// sdfGrSetDrawFramePacket
+struct sdfGrDrawFramePacket_t {
+    sdfGrTagStdReg_t frame;
+    sdfGrTagStdReg_t zbuf;
+    sdfGrTagStdReg_t xyoffset;
+    sdfGrTagStdReg_t scissor;
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrDrawFramePacket_t, 64);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawFramePacket_t, frame, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawFramePacket_t, zbuf, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawFramePacket_t, xyoffset, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawFramePacket_t, scissor, 0x30);
+
+struct sdfGrDrawDefParmPacket_t {
+    sdfGrTagStdReg_t prmodecont;
+    sdfGrTagStdReg_t colclamp;
+    sdfGrTagStdReg_t dthe;
+    sdfGrTagStdReg_t texa;
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrDrawDefParmPacket_t, 64);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawDefParmPacket_t, prmodecont, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawDefParmPacket_t, colclamp, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawDefParmPacket_t, dthe, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawDefParmPacket_t, texa, 0x30);
+
+/// sdfGrSetStdDrawEnv. `worker` is its predraw hook, sdfGrStdDrawEnvPredraw.
+struct sdfGrStdDrawEnv_t {
+    sdfPreDrawHook_t worker;
+    sdfDmaTag_t dmatag;
+    sdfGifTag_t giftag;
+    sdfGrDrawDefParmPacket_t defParm;
+    sdfGrDrawFramePacket_t frame1;
+    sdfGrDrawFramePacket_t frame2;
+    sdfGrClearPacket_t clear;
+    sdfGrTagStdReg_t test1;
+    sdfGrTagStdReg_t alpha1;
+    sdfGrTagStdReg_t test2;
+    sdfGrTagStdReg_t alpha2;
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrStdDrawEnv_t, 384);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrStdDrawEnv_t, worker, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrStdDrawEnv_t, dmatag, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrStdDrawEnv_t, giftag, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrStdDrawEnv_t, defParm, 0x30);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrStdDrawEnv_t, frame1, 0x70);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrStdDrawEnv_t, frame2, 0xB0);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrStdDrawEnv_t, clear, 0xF0);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrStdDrawEnv_t, test1, 0x140);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrStdDrawEnv_t, alpha1, 0x150);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrStdDrawEnv_t, test2, 0x160);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrStdDrawEnv_t, alpha2, 0x170);
+
+struct sdfGrDrawFrame_t {
+    sdfDmaTag_t dmatag;
+    sdfGifTag_t giftag;
+    sdfGrDrawDefParmPacket_t defParm;
+    sdfGrDrawFramePacket_t frame1;
+    sdfGrDrawFramePacket_t frame2;
+    sdfGrClearPacket_t clear;
+    sdfGrTagStdReg_t test1;
+    sdfGrTagStdReg_t alpha1;
+    sdfGrTagStdReg_t test2;
+    sdfGrTagStdReg_t alpha2;
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrDrawFrame_t, 368);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawFrame_t, dmatag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawFrame_t, giftag, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawFrame_t, defParm, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawFrame_t, frame1, 0x60);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawFrame_t, frame2, 0xA0);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawFrame_t, clear, 0xE0);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawFrame_t, test1, 0x130);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawFrame_t, alpha1, 0x140);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawFrame_t, test2, 0x150);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrDrawFrame_t, alpha2, 0x160);
+
+/// sdfGrSetFramePacket. `worker` is its predraw hook, sdfGrFramePacketPredraw.
+struct sdfGrFramePacket_t {
+    sdfPreDrawHook_t worker;
+    sdfDmaTag_t dmatag;
+    sdfGifTag_t giftag;
+    sdfGrTagStdReg_t frame;
+    sdfGrTagStdReg_t zbuf;
+    sdfGrFrameSetPtr_t frameSet;
+    u32 frameMask;
+    u32 zbuffMask;
+    s32 context;
+};
+SDF_STATIC_ASSERT_SIZE(sdfGrFramePacket_t, 96);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrFramePacket_t, worker, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrFramePacket_t, dmatag, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrFramePacket_t, giftag, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrFramePacket_t, frame, 0x30);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrFramePacket_t, zbuf, 0x40);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrFramePacket_t, frameSet, 0x50);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrFramePacket_t, frameMask, 0x54);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrFramePacket_t, zbuffMask, 0x58);
+SDF_STATIC_ASSERT_OFFSETOF(sdfGrFramePacket_t, context, 0x5C);
+
+struct frDrawEnvPkt_t {
+    sdfDmaTag_t dmatag;
+    sdfGifTag_t giftag;
+    sdfGrTagStdReg_t texflush;
+    sdfGrTagStdReg_t alpha1;
+    sdfGrTagStdReg_t pabe;
+    sdfGrTagStdReg_t texa;
+    sdfGrTagStdReg_t fba1;
+    sdfGrTagStdReg_t test1;
+};
+SDF_STATIC_ASSERT_SIZE(frDrawEnvPkt_t, 128);
+SDF_STATIC_ASSERT_OFFSETOF(frDrawEnvPkt_t, dmatag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(frDrawEnvPkt_t, giftag, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(frDrawEnvPkt_t, texflush, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(frDrawEnvPkt_t, alpha1, 0x30);
+SDF_STATIC_ASSERT_OFFSETOF(frDrawEnvPkt_t, pabe, 0x40);
+SDF_STATIC_ASSERT_OFFSETOF(frDrawEnvPkt_t, texa, 0x50);
+SDF_STATIC_ASSERT_OFFSETOF(frDrawEnvPkt_t, fba1, 0x60);
+SDF_STATIC_ASSERT_OFFSETOF(frDrawEnvPkt_t, test1, 0x70);
+
+struct sdfPrimBitBltElem_t {
+    sdfGrTagStdReg_t bitbltbuf;
+    sdfGrTagStdReg_t trxpos;
+    sdfGrTagStdReg_t trxreg;
+    sdfGrTagStdReg_t trxdir;
+};
+SDF_STATIC_ASSERT_SIZE(sdfPrimBitBltElem_t, 64);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimBitBltElem_t, bitbltbuf, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimBitBltElem_t, trxpos, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimBitBltElem_t, trxreg, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimBitBltElem_t, trxdir, 0x30);
+
+/// sdfPrimSetBitBltPacket
+struct sdfPrimBitBltPacket_t {
+    sdfDmaTag_t dmatag;
+    sdfGifTag_t giftag;
+    sdfPrimBitBltElem_t bitblt;
+};
+SDF_STATIC_ASSERT_SIZE(sdfPrimBitBltPacket_t, 96);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimBitBltPacket_t, dmatag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimBitBltPacket_t, giftag, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimBitBltPacket_t, bitblt, 0x20);
+
+/// sdfSetLoadImage: a host-to-GS transfer.
+struct sdfLoadImagePacket_t {
+    sdfDmaTag_t dmatag;
+    sdfGifTag_t giftag;
+    sdfPrimBitBltElem_t bitblt;
+    sdfGifTag_t giftagData;
+    sdfDmaTag_t dmatagData;
+    sdfDmaTag_t dmatagFlush;
+    sdfGifTag_t giftagFlush;
+    sdfGrTagStdReg_t texflush;
+};
+SDF_STATIC_ASSERT_SIZE(sdfLoadImagePacket_t, 176);
+SDF_STATIC_ASSERT_OFFSETOF(sdfLoadImagePacket_t, dmatag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfLoadImagePacket_t, giftag, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfLoadImagePacket_t, bitblt, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdfLoadImagePacket_t, giftagData, 0x60);
+SDF_STATIC_ASSERT_OFFSETOF(sdfLoadImagePacket_t, dmatagData, 0x70);
+SDF_STATIC_ASSERT_OFFSETOF(sdfLoadImagePacket_t, dmatagFlush, 0x80);
+SDF_STATIC_ASSERT_OFFSETOF(sdfLoadImagePacket_t, giftagFlush, 0x90);
+SDF_STATIC_ASSERT_OFFSETOF(sdfLoadImagePacket_t, texflush, 0xA0);
+
+/// sdfSetStoreImage: a GS-to-host readback, with where it lands and the callback to run.
+struct sdfStoreImagePacket_t {
+    sdfDmaTag_t dmaAnchor;
+    u64 anchor[2];
+    sdfDmaTag_t dmaFinish;
+    sdfGifTag_t gifFinish;
+    sdfGrTagStdReg_t finish;
+    sdfDmaTag_t dmaBitblt;
+    sdfGifTag_t gifBitblt;
+    sdfPrimBitBltElem_t bitblt;
+    u32 qwc;
+    sdfVoidPtr_t addr;
+    u32 callback;
+    sdfVoidPtr_t callbackParam;
+    sdfDmaTag_t dmaFooter;
+    sdfGifTag_t gifFooter;
+    sdfGrTagStdReg_t footer;
+};
+SDF_STATIC_ASSERT_SIZE(sdfStoreImagePacket_t, 240);
+SDF_STATIC_ASSERT_OFFSETOF(sdfStoreImagePacket_t, dmaAnchor, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfStoreImagePacket_t, anchor, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfStoreImagePacket_t, dmaFinish, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdfStoreImagePacket_t, gifFinish, 0x30);
+SDF_STATIC_ASSERT_OFFSETOF(sdfStoreImagePacket_t, finish, 0x40);
+SDF_STATIC_ASSERT_OFFSETOF(sdfStoreImagePacket_t, dmaBitblt, 0x50);
+SDF_STATIC_ASSERT_OFFSETOF(sdfStoreImagePacket_t, gifBitblt, 0x60);
+SDF_STATIC_ASSERT_OFFSETOF(sdfStoreImagePacket_t, bitblt, 0x70);
+SDF_STATIC_ASSERT_OFFSETOF(sdfStoreImagePacket_t, qwc, 0xB0);
+SDF_STATIC_ASSERT_OFFSETOF(sdfStoreImagePacket_t, addr, 0xB4);
+SDF_STATIC_ASSERT_OFFSETOF(sdfStoreImagePacket_t, callback, 0xB8);
+SDF_STATIC_ASSERT_OFFSETOF(sdfStoreImagePacket_t, callbackParam, 0xBC);
+SDF_STATIC_ASSERT_OFFSETOF(sdfStoreImagePacket_t, dmaFooter, 0xC0);
+SDF_STATIC_ASSERT_OFFSETOF(sdfStoreImagePacket_t, gifFooter, 0xD0);
+SDF_STATIC_ASSERT_OFFSETOF(sdfStoreImagePacket_t, footer, 0xE0);
+
+/// sdfTexSetPacket: a texture handle's registers, which sdfTexGetTex0Reg reads TEX0 back out of.
+struct sdfTexPacket_t {
+    sdfGifTag_t giftag;
+    sdfGrTagStdReg_t tex1;
+    sdfGrTagStdReg_t tex0;
+    sdfGrTagStdReg_t clamp;
+};
+SDF_STATIC_ASSERT_SIZE(sdfTexPacket_t, 64);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexPacket_t, giftag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexPacket_t, tex1, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexPacket_t, tex0, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexPacket_t, clamp, 0x30);
+
+using sdfTexPacketPtr_t = guest_ptr<sdfTexPacket_t>;
+
+/// sdf2DMakeTexPacket
+struct sdf2DTexPacket_t {
+    sdfDmaTag_t tag;
+    sdfGifTag_t giftag;
+    sdfGrTagStdReg_t tex1;
+    sdfGrTagStdReg_t tex0;
+    sdfGrTagStdReg_t clamp;
+};
+SDF_STATIC_ASSERT_SIZE(sdf2DTexPacket_t, 80);
+SDF_STATIC_ASSERT_OFFSETOF(sdf2DTexPacket_t, tag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdf2DTexPacket_t, giftag, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdf2DTexPacket_t, tex1, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdf2DTexPacket_t, tex0, 0x30);
+SDF_STATIC_ASSERT_OFFSETOF(sdf2DTexPacket_t, clamp, 0x40);
+
+struct sdfPrimTransElem_t {
+    sdfGrTagStdReg_t test;
+    sdfGrTagStdReg_t alpha;
+};
+SDF_STATIC_ASSERT_SIZE(sdfPrimTransElem_t, 32);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimTransElem_t, test, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimTransElem_t, alpha, 0x10);
+
+/// sdfPrimSetOpaquePacket
+struct sdfPrimTransPacket_t {
+    sdfDmaTag_t tag;
+    sdfGifTag_t giftag;
+    sdfPrimTransElem_t elem;
+};
+SDF_STATIC_ASSERT_SIZE(sdfPrimTransPacket_t, 64);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimTransPacket_t, tag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimTransPacket_t, giftag, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfPrimTransPacket_t, elem, 0x20);
+
+/// frCreateDrawFontPacket_20550848
+struct frGlyphPacket_t {
+    sdfDmaTag_t dmatag;
+    sdfGifTag_t giftag;
+    sdfGrTagStdReg_t reg[3];
+    sdfGifTag_t primtag;
+    u64 prim[6];
+};
+SDF_STATIC_ASSERT_SIZE(frGlyphPacket_t, 144);
+SDF_STATIC_ASSERT_OFFSETOF(frGlyphPacket_t, dmatag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(frGlyphPacket_t, giftag, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(frGlyphPacket_t, reg, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(frGlyphPacket_t, primtag, 0x50);
+SDF_STATIC_ASSERT_OFFSETOF(frGlyphPacket_t, prim, 0x60);
+
+/// dds3LinkZClearDrawTag
+struct dds3ZClearPacket_t {
+    sdfDmaTag_t dmatag;
+    sdfGifTag_t testTag;
+    sdfGrTagStdReg_t test;
+    sdfGifTag_t spriteTag;
+    sdfGrTagStdReg_t vertex[4];
+    sdfGifTag_t restoreTag;
+    sdfGrTagStdReg_t restore[2];
+};
+SDF_STATIC_ASSERT_SIZE(dds3ZClearPacket_t, 176);
+SDF_STATIC_ASSERT_OFFSETOF(dds3ZClearPacket_t, dmatag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(dds3ZClearPacket_t, testTag, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(dds3ZClearPacket_t, test, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(dds3ZClearPacket_t, spriteTag, 0x30);
+SDF_STATIC_ASSERT_OFFSETOF(dds3ZClearPacket_t, vertex, 0x40);
+SDF_STATIC_ASSERT_OFFSETOF(dds3ZClearPacket_t, restoreTag, 0x80);
+SDF_STATIC_ASSERT_OFFSETOF(dds3ZClearPacket_t, restore, 0x90);
+
+/// REGLIST primitives, typed by the function that allocates them. `data` is the register list.
+struct dds3PrimFrameRectPacket_t {
+    sdfDmaTag_t dmatag;
+    sdfGifTag_t giftag;
+    u64 data[12];
+};
+SDF_STATIC_ASSERT_SIZE(dds3PrimFrameRectPacket_t, 128);
+SDF_STATIC_ASSERT_OFFSETOF(dds3PrimFrameRectPacket_t, dmatag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(dds3PrimFrameRectPacket_t, giftag, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(dds3PrimFrameRectPacket_t, data, 0x20);
+
+struct dds3PrimLinePacket_t {
+    sdfDmaTag_t dmatag;
+    sdfGifTag_t giftag;
+    u64 data[6];
+};
+SDF_STATIC_ASSERT_SIZE(dds3PrimLinePacket_t, 80);
+SDF_STATIC_ASSERT_OFFSETOF(dds3PrimLinePacket_t, dmatag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(dds3PrimLinePacket_t, giftag, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(dds3PrimLinePacket_t, data, 0x20);
+
+struct dds3PrimLine3DPacket_t {
+    sdfDmaTag_t dmatag;
+    sdfGifTag_t giftag;
+    u64 data[84];
+};
+SDF_STATIC_ASSERT_SIZE(dds3PrimLine3DPacket_t, 704);
+SDF_STATIC_ASSERT_OFFSETOF(dds3PrimLine3DPacket_t, dmatag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(dds3PrimLine3DPacket_t, giftag, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(dds3PrimLine3DPacket_t, data, 0x20);
+
+struct effPkt2DAllocF4Packet_t {
+    sdfDmaTag_t dmatag;
+    sdfGifTag_t giftag;
+    u64 data[12];
+};
+SDF_STATIC_ASSERT_SIZE(effPkt2DAllocF4Packet_t, 128);
+SDF_STATIC_ASSERT_OFFSETOF(effPkt2DAllocF4Packet_t, dmatag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(effPkt2DAllocF4Packet_t, giftag, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(effPkt2DAllocF4Packet_t, data, 0x20);
+
+struct pbAllocPrimPacketPacket_t {
+    sdfDmaTag_t dmatag;
+    sdfGifTag_t giftag;
+    u64 data[12];
+};
+SDF_STATIC_ASSERT_SIZE(pbAllocPrimPacketPacket_t, 128);
+SDF_STATIC_ASSERT_OFFSETOF(pbAllocPrimPacketPacket_t, dmatag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(pbAllocPrimPacketPacket_t, giftag, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(pbAllocPrimPacketPacket_t, data, 0x20);
+
+/// sdf3DMakeViewportPacket: VU1's camera, uploaded by the UNPACK in the tag's upper words.
+struct sdf3DViewportPacket_t {
+    sdfDmaTag_t dmatag;
+    sdfMatrix4_t cameraTm;
+    sdfMatrix4_t TM;
+    sdfVector4_t scale;
+    sdfVector4_t trans;
+    sdfVector4_t cameraPos;
+    u32 itop;
+    u32 mscal;
+    u32 pad[2];
+};
+SDF_STATIC_ASSERT_SIZE(sdf3DViewportPacket_t, 208);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DViewportPacket_t, dmatag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DViewportPacket_t, cameraTm, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DViewportPacket_t, TM, 0x50);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DViewportPacket_t, scale, 0x90);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DViewportPacket_t, trans, 0xA0);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DViewportPacket_t, cameraPos, 0xB0);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DViewportPacket_t, itop, 0xC0);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DViewportPacket_t, mscal, 0xC4);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DViewportPacket_t, pad, 0xC8);
+
+/// sdf3DPrimSetTmPacket and sdfModelAllocTmPacket
+struct sdf3DTmPacketData_t {
+    sdfVector4_t tm[7];
+    u32 cmd[4];
+};
+SDF_STATIC_ASSERT_SIZE(sdf3DTmPacketData_t, 128);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DTmPacketData_t, tm, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DTmPacketData_t, cmd, 0x70);
+
+/// The microcode upload. Untyped in the database too, since a type would swallow the 23
+/// vu1_entry* names inside it.
+struct sdf3DVu1MicroPacket_t {
+    u64 data[1956];
+};
+SDF_STATIC_ASSERT_SIZE(sdf3DVu1MicroPacket_t, 15648);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DVu1MicroPacket_t, data, 0x00);
+
+/// Model packets that are one REF tag: a material, a transform, the chain's end.
+using sdfMatRefPacket_t = sdfDmaTag_t;
+
+using sdfModelTmRefPacket_t = sdfDmaTag_t;
+
+using sdfModelTermPacket_t = sdfDmaTag_t;
+
+/// The per-draw colour and face-division terms VU1 reads, closing a node's or a temp packet's draw.
+struct sdfModelDrawParmPacket_t {
+    sdfDmaTag_t next;
+    u32 unpackColor;
+    u32 color;
+    u32 unpackParm;
+    f32 zBias;
+    f32 faceDivSoften;
+    f32 faceDivBias;
+    u32 itop;
+    u32 mscal;
+};
+SDF_STATIC_ASSERT_SIZE(sdfModelDrawParmPacket_t, 48);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelDrawParmPacket_t, next, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelDrawParmPacket_t, unpackColor, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelDrawParmPacket_t, color, 0x14);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelDrawParmPacket_t, unpackParm, 0x18);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelDrawParmPacket_t, zBias, 0x1C);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelDrawParmPacket_t, faceDivSoften, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelDrawParmPacket_t, faceDivBias, 0x24);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelDrawParmPacket_t, itop, 0x28);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelDrawParmPacket_t, mscal, 0x2C);
+
+/// sdfModelLinkOt, per node
+struct sdfModelNodeDrawPacket_t {
+    sdfModelTmRefPacket_t tmRef;
+    sdfModelDrawParmPacket_t parm;
+};
+SDF_STATIC_ASSERT_SIZE(sdfModelNodeDrawPacket_t, 64);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelNodeDrawPacket_t, tmRef, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelNodeDrawPacket_t, parm, 0x10);
+
+/// sdfModelSetNormalDrawPacket: one material REF and one mesh body REF.
+struct sdfModelNormalDrawPacket_t {
+    sdfDmaTag_t matRef;
+    sdfDmaTag_t dataRef;
+};
+SDF_STATIC_ASSERT_SIZE(sdfModelNormalDrawPacket_t, 32);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelNormalDrawPacket_t, matRef, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelNormalDrawPacket_t, dataRef, 0x10);
+
+/// sdfModelSetOneSkinDrawPacket
+struct sdfModelOneSkinDrawPacket_t {
+    sdfDmaTag_t matRef;
+    // sdfDmaTag_t ref[] follows
+};
+SDF_STATIC_ASSERT_SIZE(sdfModelOneSkinDrawPacket_t, 16);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelOneSkinDrawPacket_t, matRef, 0x00);
+
+/// sdfModelTempPacketLinkOt, per entry
+struct sdfModelTempDrawPacket_t {
+    sdfDmaTag_t matRef;
+    sdfDmaTag_t dataRef;
+    sdfDmaTag_t next;
+};
+SDF_STATIC_ASSERT_SIZE(sdfModelTempDrawPacket_t, 48);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelTempDrawPacket_t, matRef, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelTempDrawPacket_t, dataRef, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelTempDrawPacket_t, next, 0x20);
+
+/// sdfModelTempPacketLinkOt, once per group
+struct sdfModelTempTmPacket_t {
+    sdfDmaTag_t tag;
+    sdf3DTmPacketData_t tm;
+    sdfModelDrawParmPacket_t parm;
+};
+SDF_STATIC_ASSERT_SIZE(sdfModelTempTmPacket_t, 192);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelTempTmPacket_t, tag, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelTempTmPacket_t, tm, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelTempTmPacket_t, parm, 0x90);
 
 struct sdfDrawTag_t {
     sdfDrawTagPtr_t next;
@@ -319,13 +1048,17 @@ struct sdfModelShapeEntry_t {
 };
 SDF_STATIC_ASSERT_SIZE(sdfModelShapeEntry_t, 8);
 
+using sdfModelShapeListPtr_t = guest_ptr<struct sdfModelShapeList_t>;
+
 struct sdfModelShapeList_t {
-    guest_ptr<struct sdfModelShapeList_t> next;
+    sdfModelShapeListPtr_t next;
     u16 count;
     u16 pad;
     sdfModelShapeEntry_t entry[1];
 };
-using sdfModelShapeListPtr_t = guest_ptr<sdfModelShapeList_t>;
+SDF_STATIC_ASSERT_SIZE(sdfModelShapeList_t, 16);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelShapeList_t, count, 0x04);
+SDF_STATIC_ASSERT_OFFSETOF(sdfModelShapeList_t, entry, 0x08);
 
 struct sdfModelNodeDef_t {
     u16 format;
@@ -393,9 +1126,7 @@ SDF_STATIC_ASSERT_OFFSETOF(sdfShape_t, faceColorListHandle, 0x80);
 SDF_STATIC_ASSERT_OFFSETOF(sdfShape_t, faceColorList, 0x84);
 SDF_STATIC_ASSERT_OFFSETOF(sdfShape_t, packetPtr, 0x94);
 
-using sdfMatPtr_t = guest_ptr<struct sdfMat_t>;
 using sdfTexHandlePtr_t = guest_ptr<struct sdfTexHandle_t>;
-using sdfGsMemSlicePtr_t = guest_ptr<struct sdfGsMemSlice_t>;
 
 /// One allocation in GS memory, in the linked list sdfGsMemAllocFromHead keeps. A frame buffer and
 /// a texture are the same kind of slice, which is why a texture's region can end up under one.
@@ -417,7 +1148,7 @@ struct sdfMat_t {
     u16 flags;
     u8 duty;
     u8 pad;
-    sdfVoidPtr_t packet[2];
+    sdfMatPacketPtr_t packet[2];
     u32 ambient;
     u32 diffuse;
     u32 multiTexDiffuse;
@@ -488,8 +1219,6 @@ SDF_STATIC_ASSERT_OFFSETOF(sdfCorePacket_t, prim, 0x10);
 constexpr u16 sdfCoreShapeCount(const sdfCorePacket_t& p) { return u16(p.header.extData[0]); }
 constexpr u16 sdfCoreMorphIndex(const sdfCorePacket_t& p) { return u16(p.header.extData[0] >> 16); }
 
-// attrBits is the GS PRIM word in its low bits, with the engine's own flags above it. The three
-// pass bits are what corePktEmitAllPasses and corePktOpenAndEmit branch on.
 using sdfBillBoardBatchPtr_t = guest_ptr<struct sdfBillBoardBatch_t>;
 using dds3BillResourcePtr_t = guest_ptr<struct dds3BillResource_t>;
 
@@ -525,39 +1254,163 @@ SDF_STATIC_ASSERT_OFFSETOF(dds3BillboardNode_t, otIndex, 60);
 SDF_STATIC_ASSERT_OFFSETOF(dds3BillboardNode_t, batch, 68);
 SDF_STATIC_ASSERT_OFFSETOF(dds3BillboardNode_t, next, 72);
 
-/// A quad's texture coordinates, one pair per corner in 12.4 fixed point.
-struct sdfBillBoardUv_t {
-    struct {
-        s16 u;
-        s16 v;
-    } corner[4];
+/// A texel coordinate in 12.4 fixed point.
+struct UV_t {
+    u16 u;
+    u16 v;
 };
+SDF_STATIC_ASSERT_SIZE(UV_t, 4);
+SDF_STATIC_ASSERT_OFFSETOF(UV_t, u, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(UV_t, v, 0x02);
 
-/// A quad's corner offsets from its centre, which dds3BillboardTagLink builds from the resource's
-/// width, height and centre and then rotates: the pair is a rotated basis rather than a box.
-struct sdfBillBoardQuad_t {
-    sdfVector2_t corner[4];
+struct VTX_t {
+    f32 x;
+    f32 y;
 };
+SDF_STATIC_ASSERT_SIZE(VTX_t, 8);
+SDF_STATIC_ASSERT_OFFSETOF(VTX_t, x, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(VTX_t, y, 0x04);
 
-using sdfSprite3DPtr_t = guest_ptr<struct sdfSprite3D_t>;
+/// sdfBillBoardMake1
+struct sdfBillBoard1Packet_t {
+    u16 dma_qwc;
+    u8 dma_pad;
+    u8 dma_id;
+    u32 dma_addr;
+    u32 vif_unpack1;
+    u32 count;
+    u32 giftag_h;
+    u32 giftag_reg_l;
+    u32 giftag_reg_h;
+    u32 vif_unpack2;
+    u32 prim;
+    u32 vif_unpack3;
+    f32 center[3];
+    u32 vif_unpack4;
+    u32 color;
+    u32 vif_unpack5;
+    u32 uv[4];
+    u32 vif_unpack6;
+    f32 xyOffset[8];
+    u32 vif_itop;
+    u32 vif_mscal;
+    u32 pad;
+};
+SDF_STATIC_ASSERT_SIZE(sdfBillBoard1Packet_t, 128);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoard1Packet_t, dma_qwc, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoard1Packet_t, dma_pad, 0x02);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoard1Packet_t, dma_id, 0x03);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoard1Packet_t, dma_addr, 0x04);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoard1Packet_t, vif_unpack1, 0x08);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoard1Packet_t, count, 0x0C);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoard1Packet_t, giftag_h, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoard1Packet_t, giftag_reg_l, 0x14);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoard1Packet_t, giftag_reg_h, 0x18);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoard1Packet_t, vif_unpack2, 0x1C);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoard1Packet_t, prim, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoard1Packet_t, vif_unpack3, 0x24);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoard1Packet_t, center, 0x28);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoard1Packet_t, vif_unpack4, 0x34);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoard1Packet_t, color, 0x38);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoard1Packet_t, vif_unpack5, 0x3C);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoard1Packet_t, uv, 0x40);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoard1Packet_t, vif_unpack6, 0x50);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoard1Packet_t, xyOffset, 0x54);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoard1Packet_t, vif_itop, 0x74);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoard1Packet_t, vif_mscal, 0x78);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoard1Packet_t, pad, 0x7C);
+
+/// sdfBillBoardVcMake1
+struct sdfBillBoardVc1Packet_t {
+    u16 dma_qwc;
+    u8 dma_pad;
+    u8 dma_id;
+    u32 dma_addr;
+    u32 vif_unpack1;
+    u32 count;
+    u32 giftag_h;
+    u32 giftag_reg_l;
+    u32 giftag_reg_h;
+    u32 vif_unpack2;
+    u32 prim;
+    u32 vif_unpack3;
+    f32 center[3];
+    u32 vif_unpack4;
+    u32 color[4];
+    u32 vif_unpack5;
+    u32 uv[4];
+    u32 vif_unpack6;
+    f32 xyOffset[8];
+    u32 vif_itop;
+    u32 vif_mscal;
+    u32 pad[2];
+};
+SDF_STATIC_ASSERT_SIZE(sdfBillBoardVc1Packet_t, 144);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardVc1Packet_t, dma_qwc, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardVc1Packet_t, dma_pad, 0x02);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardVc1Packet_t, dma_id, 0x03);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardVc1Packet_t, dma_addr, 0x04);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardVc1Packet_t, vif_unpack1, 0x08);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardVc1Packet_t, count, 0x0C);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardVc1Packet_t, giftag_h, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardVc1Packet_t, giftag_reg_l, 0x14);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardVc1Packet_t, giftag_reg_h, 0x18);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardVc1Packet_t, vif_unpack2, 0x1C);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardVc1Packet_t, prim, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardVc1Packet_t, vif_unpack3, 0x24);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardVc1Packet_t, center, 0x28);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardVc1Packet_t, vif_unpack4, 0x34);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardVc1Packet_t, color, 0x38);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardVc1Packet_t, vif_unpack5, 0x48);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardVc1Packet_t, uv, 0x4C);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardVc1Packet_t, vif_unpack6, 0x5C);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardVc1Packet_t, xyOffset, 0x60);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardVc1Packet_t, vif_itop, 0x80);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardVc1Packet_t, vif_mscal, 0x84);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardVc1Packet_t, pad, 0x88);
+
+/// sdfBillBoardMakeTMPacket
+struct sdfBillBoardTMPacket_t {
+    u16 dma_qwc;
+    u8 dma_pad;
+    u8 dma_id;
+    u32 dma_addr;
+    u32 vif_unpack;
+    f32 tm[6];
+    u32 vif_itop;
+    u32 vif_mscal;
+    u32 pad[3];
+};
+SDF_STATIC_ASSERT_SIZE(sdfBillBoardTMPacket_t, 56);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardTMPacket_t, dma_qwc, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardTMPacket_t, dma_pad, 0x02);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardTMPacket_t, dma_id, 0x03);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardTMPacket_t, dma_addr, 0x04);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardTMPacket_t, vif_unpack, 0x08);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardTMPacket_t, tm, 0x0C);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardTMPacket_t, vif_itop, 0x24);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardTMPacket_t, vif_mscal, 0x28);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardTMPacket_t, pad, 0x2C);
+
+using Sprite3DPtr_t = guest_ptr<struct Sprite3D_t>;
 
 /// One camera-facing quad with its orientation, which sdfBillBoardMake1 never sees: drawSprite3D
 /// feeds the rotation to SetRotateMatrixZ and only the centre, uvs and offsets go on.
 /// @fn drawSprite3D
 /// @note SLUS-20911 0x0012A2D0
-struct sdfSprite3D_t {
-    sdfVector3_t centre;
-    f32 pad;
-    sdfBillBoardUv_t uv;
-    sdfBillBoardQuad_t offset;
-    u32 color;
-    f32 rotation;
+struct Sprite3D_t {
+    sdfVector4_t pos;
+    UV_t uv[4];
+    VTX_t vt[4];
+    s32 col;
+    f32 rot;
 };
-SDF_STATIC_ASSERT_SIZE(sdfSprite3D_t, 0x48);
-SDF_STATIC_ASSERT_OFFSETOF(sdfSprite3D_t, uv, 0x10);
-SDF_STATIC_ASSERT_OFFSETOF(sdfSprite3D_t, offset, 0x20);
-SDF_STATIC_ASSERT_OFFSETOF(sdfSprite3D_t, color, 0x40);
-SDF_STATIC_ASSERT_OFFSETOF(sdfSprite3D_t, rotation, 0x44);
+SDF_STATIC_ASSERT_SIZE(Sprite3D_t, 72);
+SDF_STATIC_ASSERT_OFFSETOF(Sprite3D_t, pos, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(Sprite3D_t, uv, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(Sprite3D_t, vt, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(Sprite3D_t, col, 0x40);
+SDF_STATIC_ASSERT_OFFSETOF(Sprite3D_t, rot, 0x44);
 
 /// One batch of camera-facing quads, filled a quad at a time by dds3BillboardTagLink. The arrays
 /// are one allocation, which is why sdfBillBoardMakeN takes four pointers into it.
@@ -565,53 +1418,65 @@ SDF_STATIC_ASSERT_OFFSETOF(sdfSprite3D_t, rotation, 0x44);
 struct sdfBillBoardBatch_t {
     sdfVector4_t centre[15];
     u32 color[15];
-    sdfBillBoardUv_t uv[15];
-    sdfBillBoardQuad_t offset[15];
+    UV_t uv[15][4];
+    VTX_t offset[15][4];
     s32 count;
 };
-
 SDF_STATIC_ASSERT_SIZE(sdfBillBoardBatch_t, 1024);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardBatch_t, centre, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardBatch_t, color, 0xF0);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardBatch_t, uv, 0x12C);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardBatch_t, offset, 0x21C);
+SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardBatch_t, count, 0x3FC);
 
-using sdf3DPolyPtr_t = guest_ptr<struct sdf3DPoly_t>;
+using sdf3DPrimPolyParmPtr_t = guest_ptr<struct sdf3DPrimPolyParm_t>;
 
 /// A polygon as its counts, PRIM word and one array per attribute, which is what the packet it
 /// builds is derived from rather than read back.
 /// @fn sdf3DPrimMakePoly
 /// @note SLUS-20911 0x002BAAB8
-struct sdf3DPoly_t {
-    s16 extraQwords;
-    s16 vertexCount;
+struct sdf3DPrimPolyParm_t {
+    s16 faceCount;
+    s16 pointCount;
 
     /// The GS PRIM word, or'd with 0x68, and gaining 0x10 for UVs, 0x1000 for a second UV set and
     /// 0x800 for colors as each array below turns out non-null.
-    u16 prim;
-    u16 mask;
+    u16 attr;
+    u16 attrInhibit;
 
-    /// Measured 0x8080F080 and 0x408080F0, so a packed color rather than the pointer the packet
-    /// write at +20 suggested.
-    u32 colorWord;
-
-    /// Both hold guest pointers on every call measured, where the arrays below are null, so this
-    /// is where the 96-stride default path keeps its data. Which is which is not yet established.
-    u32 unk0C;
-    u32 unk10;
+    u32 color;
+    guest_ptr<u32> faceIndex;
+    sdfVector4Ptr_t vertex;
 
     /// Non-null takes the per-vertex stride from 96 to 224 and the base PRIM from 18 to 19. Null on
-    /// every call measured on the field scenes, so the extended mode is not what fldSdwDraw uses.
-    sdfVector3Ptr_t position;
+    /// every call measured on the field scenes.
+    sdfVector4Ptr_t normal;
+
     sdfVector2Ptr_t uv;
-    sdfVector2Ptr_t uv2;
-    guest_ptr<u32> color;
+    sdfVector2Ptr_t multiUv;
+    guest_ptr<u32> vertexColor;
 
     /// Called instead of sdfGrAllocPacketBuff when it is set.
     u32 allocator;
-    f32 depth;
+    f32 zBias;
 };
-SDF_STATIC_ASSERT_SIZE(sdf3DPoly_t, 0x2C);
-SDF_STATIC_ASSERT_OFFSETOF(sdf3DPoly_t, position, 0x14);
-SDF_STATIC_ASSERT_OFFSETOF(sdf3DPoly_t, color, 0x20);
-SDF_STATIC_ASSERT_OFFSETOF(sdf3DPoly_t, depth, 0x28);
+SDF_STATIC_ASSERT_SIZE(sdf3DPrimPolyParm_t, 44);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, faceCount, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, pointCount, 0x02);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, attr, 0x04);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, attrInhibit, 0x06);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, color, 0x08);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, faceIndex, 0x0C);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, vertex, 0x10);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, normal, 0x14);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, uv, 0x18);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, multiUv, 0x1C);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, vertexColor, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, allocator, 0x24);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DPrimPolyParm_t, zBias, 0x28);
 
+// attrBits is the GS PRIM word in its low bits, with the engine's own flags above it. The three
+// pass bits are what corePktEmitAllPasses and corePktOpenAndEmit branch on.
 enum sdfCoreAttrBit_t : u16 {
     sdfCoreAttrRefMapPass = 0x0001,
 
@@ -714,8 +1579,6 @@ enum sdfAfail_t : u32 { sdfAfailKeep = 0, sdfAfailFbOnly = 1, sdfAfailZbOnly = 2
 
 // The GS registers the material packet carries, which sdfMatUpdatePacketBasic copies out of the
 // texture handle rather than the material.
-using sdfMatPacketPtr_t = guest_ptr<struct sdfMatPacket_t>;
-
 struct sdfMatPacket_t {
     u32 vifcode0;
     u32 ambient;
@@ -748,12 +1611,12 @@ SDF_STATIC_ASSERT_OFFSETOF(sdfMatPacket_t, tex0Data, 0x40);
 SDF_STATIC_ASSERT_OFFSETOF(sdfMatPacket_t, clampData, 0x48);
 SDF_STATIC_ASSERT_OFFSETOF(sdfMatPacket_t, texTm, 0x68);
 
-using sdfCorePacketCbPtr_t = guest_ptr<struct sdfCorePacketCb_t>;
+using corePktCbPtr_t = guest_ptr<struct corePktCb_t>;
 
-// This build carries 64 bytes ahead of faceCount where the reconstructed HD header has only
-// tmSave, so every field from matPacketPtr on sits 0x3C past its HD offset.
-struct sdfCorePacketCb_t {
-    u8 header[0x40];
+// This build carries 64 bytes ahead of faceCount where the reconstructed HD sdfCorePacketCb_t has
+// only tmSave, so every field from faceCount to pointBuff sits 0x3C past its HD offset.
+struct corePktCb_t {
+    u8 head[64];
     s16 faceCount;
     s16 pointCount;
     s32 attrBits;
@@ -766,13 +1629,55 @@ struct sdfCorePacketCb_t {
     f32 fdSoften;
     f32 fdBias;
     u32 pointBuff;
+    u32 pointBuf1;
+    u32 pointBuf2;
+    u32 pointCount0;
+    u32 pointCount1;
+    u32 unk120;
+    u32 unk124;
+    u32 unk128;
+    u32 unk132;
+    u32 unk136;
+    u32 unk140;
+    sdfVoidPtr_t payload;
+    u32 unk148;
+    u8 unk152[20];
+    f32 unk172;
+    u32 unk176;
+    sdfMatPacketPtr_t matPacket2;
+    u8 unk184[136];
 };
-SDF_STATIC_ASSERT_OFFSETOF(sdfCorePacketCb_t, pointCount, 0x42);
-SDF_STATIC_ASSERT_OFFSETOF(sdfCorePacketCb_t, matPacketPtr, 0x54);
-SDF_STATIC_ASSERT_OFFSETOF(sdfCorePacketCb_t, color, 0x58);
-SDF_STATIC_ASSERT_OFFSETOF(sdfCorePacketCb_t, fdSoften, 0x5C);
-SDF_STATIC_ASSERT_OFFSETOF(sdfCorePacketCb_t, fdBias, 0x60);
-SDF_STATIC_ASSERT_OFFSETOF(sdfCorePacketCb_t, pointBuff, 0x64);
+SDF_STATIC_ASSERT_SIZE(corePktCb_t, 320);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, head, 0x00);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, faceCount, 0x40);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, pointCount, 0x42);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, attrBits, 0x44);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, packetBits, 0x48);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, orgAttrBits, 0x4C);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, drawFaceCount, 0x50);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, backfaceCount, 0x52);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, matPacketPtr, 0x54);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, color, 0x58);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, fdSoften, 0x5C);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, fdBias, 0x60);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, pointBuff, 0x64);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, pointBuf1, 0x68);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, pointBuf2, 0x6C);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, pointCount0, 0x70);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, pointCount1, 0x74);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, unk120, 0x78);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, unk124, 0x7C);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, unk128, 0x80);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, unk132, 0x84);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, unk136, 0x88);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, unk140, 0x8C);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, payload, 0x90);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, unk148, 0x94);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, unk152, 0x98);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, unk172, 0xAC);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, unk176, 0xB0);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, matPacket2, 0xB4);
+SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, unk184, 0xB8);
 
 // TEX0's texture function and whether the texture carries alpha.
 constexpr u32 sdfTex0Tfx(u64 r) { return u32((r >> 35) & 3); }
@@ -801,14 +1706,11 @@ enum sdfVifCommand_t : u32 {
     sdfVifUnpack = 0x60,
 };
 
-// One blend shape a morph controller drives, and how far towards it the model currently is.
-
-// The parallel-light packet VU1 shades with: three directions, a base term and a color each, all
-// in the GS's own 0..255 units.
-
 /// sdfCorePacketGen's own threshold for a blend shape being worth applying.
 constexpr f32 sdfMorphEpsilon = 0.000001f;
 
+/// The parallel-light packet VU1 shades with: three directions, a base term and a color each, all
+/// in the GS's own 0..255 units.
 struct sdf3DLightParallelPacket_t {
     u64 dmatag;
     u64 vifcode;
@@ -849,14 +1751,12 @@ SDF_STATIC_ASSERT_SIZE(sdf3DFogPacket_t, 80);
 SDF_STATIC_ASSERT_OFFSETOF(sdf3DFogPacket_t, fogParm, 0x10);
 SDF_STATIC_ASSERT_OFFSETOF(sdf3DFogPacket_t, fogColor, 0x30);
 
+/// One blend shape a morph controller drives, and how far towards it the model currently is.
 struct sdfModelMorphParm_t {
     u32 targetId;
     f32 blend;
 };
 SDF_STATIC_ASSERT_SIZE(sdfModelMorphParm_t, 8);
-
-// Two at a time, which is all sdfCorePacketGen applies.
-using sdfModelMorphPtr_t = guest_ptr<struct sdfModelMorph_t>;
 
 /// A morph controller mixes at most two targets, which is what bounds the shaped packet's chain.
 constexpr u32 kMorphTargets = 2;
@@ -865,15 +1765,6 @@ struct sdfModelMorph_t {
     sdfModelMorphParm_t target[kMorphTargets];
 };
 SDF_STATIC_ASSERT_SIZE(sdfModelMorph_t, 16);
-
-struct sdfModelMorphList_t {
-    sdfMemHandlePtr_t memHandle;
-    s16 count;
-    s16 capacity;
-    s16 elemSize;
-    s16 growStep;
-};
-SDF_STATIC_ASSERT_SIZE(sdfModelMorphList_t, 12);
 
 // What sdfModelLinkOt switches on to pick a geometry path.
 enum sdfPacketKind_t : u8 {
@@ -930,12 +1821,6 @@ SDF_STATIC_ASSERT_OFFSETOF(sdfGrSpritePrim_t, xyz0, 0x20);
 SDF_STATIC_ASSERT_OFFSETOF(sdfGrSpritePrim_t, uv1, 0x30);
 SDF_STATIC_ASSERT_OFFSETOF(sdfGrSpritePrim_t, xyz1, 0x40);
 
-// What sdf2DGetPrimPtr skips: the DMA tag and the GIF tag sdf2DMakePrimPacketHeader wrote.
-constexpr u32 sdf2DPrimOffset = 32;
-
-// Where sdfTexGetTex0Reg finds the register inside a texture's own upload packet.
-constexpr u32 kTex0InPacket = 32;
-
 /// The GS TEX0 register, which is all that is left describing a texture once the engine has dropped
 /// its main-memory copy.
 struct GsTex0 {
@@ -961,31 +1846,6 @@ struct GsTex0 {
     constexpr bool isPaletted() const { return (psm & 0x13) == 0x13 || psm == 0x14 || psm == 0x24 || psm == 0x2C; }
     constexpr bool isFourBit() const { return psm == 0x14 || psm == 0x24 || psm == 0x2C; }
 };
-
-// The GIF tag every linked packet carries, at +16 past its DMA tag. Says what the packet draws,
-// which is what makes sdfDrawTagLink a complete inventory of the frame rather than a call count.
-using sdfGifTagWordsPtr_t = guest_ptr<struct sdfGifTagWords_t>;
-
-struct sdfGifTagWords_t {
-    u64 tag;
-    u64 regs;
-};
-SDF_STATIC_ASSERT_SIZE(sdfGifTagWords_t, 16);
-
-constexpr u32 sdfGifTagOffset = 16;
-
-/// One A+D write: the value, then the GS register it names in the low byte.
-struct sdfGifAdWrite_t {
-    u64 value;
-    u64 reg;
-};
-using sdfGifAdWritePtr_t = guest_ptr<sdfGifAdWrite_t>;
-
-constexpr u32 sdfGifNloop(const sdfGifTagWords_t& t) { return u32(t.tag & 0x7FFF); }
-constexpr u32 sdfGifPre(const sdfGifTagWords_t& t) { return u32((t.tag >> 46) & 1); }
-constexpr u32 sdfGifPrim(const sdfGifTagWords_t& t) { return u32((t.tag >> 47) & 0x7FF); }
-constexpr u32 sdfGifFlg(const sdfGifTagWords_t& t) { return u32((t.tag >> 58) & 3); }
-constexpr u32 sdfGifNreg(const sdfGifTagWords_t& t) { return u32((t.tag >> 60) & 0xF); }
 
 // PRIM's own fields, the ones that decide how a packet is read back.
 constexpr u32 sdfPrimType(u32 prim) { return prim & 7; }
@@ -1078,14 +1938,14 @@ struct sdfTexHandle_t {
     u8 texWrapMode;
     u32 texId;
     u32 clutId;
-    sdfVoidPtr_t packet;
-    sdfVoidPtr_t packetCtx2;
+    sdfTexPacketPtr_t packet;
+    sdfTexPacketPtr_t packetCtx2;
     sdfVoidPtr_t clutData;
     u32 clutDataSize;
     u32 clutColor;
     u8 monoClutData;
     u8 pad[3];
-    u32 hashname;
+    guest_ptr<char> hashname;
     // Not an EE pointer on a loaded texture: it reads 0x10000000, and pixelGsHandle is what names
     // where the pixels actually are. Only clutData stays in main memory.
     u32 image;
@@ -1094,6 +1954,7 @@ SDF_STATIC_ASSERT_SIZE(sdfTexHandle_t, 72);
 SDF_STATIC_ASSERT_OFFSETOF(sdfTexHandle_t, width, 0x0C);
 SDF_STATIC_ASSERT_OFFSETOF(sdfTexHandle_t, pixelFormat, 0x1A);
 SDF_STATIC_ASSERT_OFFSETOF(sdfTexHandle_t, texId, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdfTexHandle_t, packet, 0x28);
 SDF_STATIC_ASSERT_OFFSETOF(sdfTexHandle_t, clutData, 0x30);
 SDF_STATIC_ASSERT_OFFSETOF(sdfTexHandle_t, hashname, 0x40);
 SDF_STATIC_ASSERT_OFFSETOF(sdfTexHandle_t, image, 0x44);
@@ -1197,9 +2058,9 @@ using frGsTex_PTR_t = guest_ptr<struct frGsTex_t>;
 
 struct frGsTex_t {
     u32 Width;
-    u32 Width2;
+    u32 WidthLog2;
     u32 Height;
-    u32 Height2;
+    u32 HeightLog2;
     u32 Addr;
     u32 BufWidth;
 };

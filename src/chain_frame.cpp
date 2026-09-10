@@ -137,21 +137,20 @@ ChainFrameCounts buildFrameFromChain(u32 aTagHead, HookContext& h, Frame* frame)
 
     constexpr u32 kMaxChainTags = 65536;
     for (u32 steps = 0; at && steps < kMaxChainTags; steps++) {
-        const u32* tag = u32Ptr_t{at}.slice(2);
+        const sdfDmaTagPtr_t tag{at};
         if (!tag) break;
-        const u32 qwc = tag[0] & 0xFFFF;
-        const u32 id = (tag[0] >> 28) & 7;
-        const u32 addr = tag[1] & 0x0FFFFFFFu;
-        const bool byRef = id == sdfDmaTagRef || id == sdfDmaTagRefs || id == sdfDmaTagRefe;
-        const u32 data = byRef ? addr : at + sdfQwordBytes;
+        const u32 qwc = tag->qwc;
+        const u32 id = sdfDmaId(*tag);
+        const u32 addr = tag->addr & 0x0FFFFFFFu;
+        const u32 data = sdfDmaIsRef(*tag) ? addr : at + sdfQwordBytes;
         counts.entries++;
 
         if (qwc) {
-            const sdfGifTagWords_t words = sdfGifTagWordsPtr_t{data}.valueOr();
+            const sdfGifTag_t words = sdfGifTagPtr_t{data}.valueOr();
             const u32 nreg = sdfGifNreg(words);
             const u32 nloop = sdfGifNloop(words);
             const bool packed = sdfGifFlg(words) == 0 && nreg && nloop
-                                && ((words.tag >> 16) & 0x3FFFFFFF) == 0
+                                && ((words.parm >> 16) & 0x3FFFFFFF) == 0
                                 && u64(nloop) * nreg + 1 <= qwc;
             if (packed && nreg == 1 && (words.regs & 0xF) == gifRegAd) {
                 counts.registerWrites++;

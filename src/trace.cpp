@@ -413,7 +413,7 @@ void Trace::onSprite(const DrawSprite& sprite) {
     // of the handle's own upload packet the way sdfTexGetTex0Reg does.
     u64 tex0 = 0;
     if (const sdfTexHandle_t* handle = sprite.texHandle.operator->()) {
-        tex0 = guest_ptr<u64>{handle->packet.addr + kTex0InPacket}.valueOr();
+        tex0 = handle->packet.valueOr().tex0.data;
     }
     const u16 attrBits = u16(sdfPrimSprite | (sprite.texHandle ? 0x10 : 0) |
                              (sprite.alpha != GsAlpha::Opaque ? 0x40 : 0));
@@ -513,7 +513,7 @@ void Trace::onPrimEntry(const char* name, u32 arg) {
               .take());
 }
 
-void Trace::onPacket(const LinkedPacket& packet, const char* by, const DmaTag& tag, u64 verts) {
+void Trace::onPacket(const LinkedPacket& packet, const char* by, const sdfDmaTag_t& tag, u64 verts) {
     write(JsonObject()
               .addString("ev", "packet")
               .addUint("seq", mSeq++)
@@ -522,7 +522,7 @@ void Trace::onPacket(const LinkedPacket& packet, const char* by, const DmaTag& t
               .addString("by", by)
               .addUint("verts", verts)
               .addUint("qwc", u64(tag.qwc))
-              .addUint("dmaId", u64(tag.id))
+              .addUint("dmaId", u64(sdfDmaId(tag)))
               .take());
 }
 

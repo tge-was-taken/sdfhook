@@ -35,7 +35,7 @@ void ModelHooks::setFaceDivTerms(f32 soften, f32 bias) {
 }
 // 0x2B6DF4 and 0x2B6E30 read the coordinate's scale from [0].w and its offset from [0].y, and
 // 0x2B6E80 interpolates [16] to [16]+[32] across it.
-void ModelHooks::readFaceDivParm(sdfCorePacketCbPtr_t aCb, sdfVector4Ptr_t aParm) {
+void ModelHooks::readFaceDivParm(corePktCbPtr_t aCb, sdfVector4Ptr_t aParm) {
     const sdfVector4_t* parm = aParm.slice(3);
     if (!parm || !aCb) return;
     const u32 aMatPacket = aCb->matPacketPtr.addr;
@@ -123,7 +123,7 @@ void ModelHooks::readMaterialPacket(const sdfMat_t& material, DrawMesh& mesh,
     // The finished buffer, not the one about to be rewritten: our walk runs at sdfModelLinkOt's
     // entry, so the index the frame id names is the one sdfMatListUpdatePacket is about to fill.
     const u32 frameId = mParser.mSdfFrameId ? (*mParser.mSdfFrameId & 1) ^ 1 : 0;
-    const sdfMatPacketPtr_t packet{material.packet[frameId].addr};
+    const sdfMatPacketPtr_t packet = material.packet[frameId];
     if (!packet) return;
     mesh.specular = Rgba::fromPacked(packet->specularColor);
     mParser.mTrace.countSpecular(mesh.attrBits, packet->specularColor);
@@ -140,8 +140,7 @@ void ModelHooks::readMaterialPacket(const sdfMat_t& material, DrawMesh& mesh,
             // survives. The overlay's real texture is never uploaded. See TODO V7.
             mesh.specularTex = mParser.mTextures->getHandle(TexHandle{handleAddr}, frame);
             if (handle) {
-                mesh.specularTex0 =
-                    guest_ptr<u64>{handle->packet.addr + kTex0InPacket}.valueOr();
+                mesh.specularTex0 = handle->packet.valueOr().tex0.data;
             }
         }
     }
@@ -268,23 +267,22 @@ void ModelHooks::sdfModelLinkOt(sdfModelRootNodePtr_t aRoot, Frame* frame) {
 
     const sdfModelNodeListPtr_t list = root->nodeList;
     if (!list) return;
-    mParser.mNodeListAddr = root->nodeList.addr;
+    mParser.mNodeList = root->nodeList;
 
     // A chain names a material by its sdfMatMakePacket address, so the lookup is built once.
     mParser.mMatByPacket.clear();
     if (const sdfMatListPtr_t matList = root->matList) {
         for (s16 m = 0; m < matList->count; m++) {
-            const sdfMatPtr_t material{readListItem(root->matList.addr, u32(m))};
+            const sdfMatPtr_t material{readListItem(root->matList, u32(m))};
             if (!material) continue;
-            for (const sdfVoidPtr_t& packet : material->packet) {
+            for (const sdfMatPacketPtr_t& packet : material->packet) {
                 if (packet.addr) mParser.mMatByPacket[packet.addr] = material.addr;
             }
         }
     }
 
     for (s16 i = 0; i < list->count; i++) {
-        const u32 nodeAddr = readListItem(root->nodeList.addr, u32(i));
-        const sdfModelNodePtr_t node{nodeAddr};
+        const sdfModelNodePtr_t node = readListItem(root->nodeList, u32(i));
         if (!node) {
             mParser.mTrace.countNode(ModelTrace::Node::Unreadable);
             continue;
@@ -468,8 +466,8 @@ void ModelHooks::sdfModelTempPacketLinkOt(guest_ref<sdfModelRootNode_t> root, Fr
     // 0x2B1A2C..0x2B1A7C, 0x2B1D60: this walk draws only nodes whose shape is a format 1
     // definition carrying a group array, and whose flags hide neither it nor its children.
     for (s16 i = 0; i < list->count; i++) {
-        // @optout 0x2B1A40 elsewhere(readListItem): the list header's inline items
-        const sdfModelNodePtr_t node{readListItem(root->nodeList.addr, u32(i))};
+        // @optout 0x2B1A40 elsewhere(readListItem): the list's item array
+        const sdfModelNodePtr_t node = readListItem(root->nodeList, u32(i));
         if (!node || !node->shape || node->shape->format != 1) continue;
         const u32 groups = node->shape->shape[0].addr;
         if (!groups) continue;
@@ -519,7 +517,7 @@ void ModelHooks::sdfModelTempPacketLinkOt(guest_ref<sdfModelRootNode_t> root, Fr
                     continue;
                 }
                 // @optout 0x2B1C78..0x2B1CE3 dma: builds the material REF packet and links it
-                const sdfMatPtr_t mat{readListItem(root->matList.addr, packet->matIndex)};
+                const sdfMatPtr_t mat{readListItem(root->matList, packet->matIndex)};
                 if (!mParser.readVifStreamMesh(packet->dataPtr.addr,
                                        packet->dataPtr.addr + 16u * packet->qwc, packetDraw, mat,
                                        frame)) {
@@ -546,9 +544,10 @@ void ModelHooks::sdfModelLinkShapedDrawPacket(guest_ref<sdfModelRootNode_t> root
     const u16 matIndex = u16(word1 >> 16);
     const u16 shapeLists = u16(guest_ptr<u32>{dataAddr + 8}.valueOr() & 0xFFFF);
 
-    const u32 morphItems = guest_ptr<u32>{root->morphList.addr + sdfListItems}.valueOr();
+    const sdfModelMorphListPtr_t morphList = root->morphList;
+    const u32 morphItems = morphList ? morphList->items.addr : 0;
     const sdfModelMorphPtr_t morph{morphItems + u32(sizeof(sdfModelMorph_t)) * morphIndex};
-    if (!morph) {
+    if (!morphItems || !morph) {
         reportUnsupported("sdfModelLinkShapedDrawPacket morph index", morphIndex);
         return;
     }
@@ -560,7 +559,7 @@ void ModelHooks::sdfModelLinkShapedDrawPacket(guest_ref<sdfModelRootNode_t> root
         if (target.blend > sdfMorphEpsilon) targets[used++] = u16(target.targetId);
     }
 
-    const sdfMatPtr_t mat{readListItem(root->matList.addr, matIndex)};
+    const sdfMatPtr_t mat{readListItem(root->matList, matIndex)};
     for (u16 l = 0; l < shapeLists; l++) {
         sdfModelShapeListPtr_t list{guest_ptr<u32>{dataAddr + 12u + 4u * l}.valueOr()};
         if (!list) {
@@ -588,9 +587,9 @@ void ModelHooks::sdfModelLinkShapedDrawPacket(guest_ref<sdfModelRootNode_t> root
 /// One camera-facing quad, rotated in its own plane by the angle sdfBillBoardMake1 never sees.
 /// @fn drawSprite3D
 /// @note SLUS-20911 0x0012A2D0
-void ModelHooks::drawSprite3D(TexHandle aTexHandle, sdfSprite3DPtr_t aSprite, Frame* frame) {
+void ModelHooks::drawSprite3D(TexHandle aTexHandle, Sprite3DPtr_t aSprite, Frame* frame) {
     if (!frame || !aSprite) return;
-    const sdfSprite3D_t& sprite = *aSprite;
+    const Sprite3D_t& sprite = *aSprite;
 
     // A billboard faces the camera by construction, so the screen matrix's columns are exact.
     const auto axis = [](f32 x, f32 y, f32 z, f32 out[3]) {
@@ -609,7 +608,7 @@ void ModelHooks::drawSprite3D(TexHandle aTexHandle, sdfSprite3DPtr_t aSprite, Fr
     Matrix4 identity{};
     for (int i = 0; i < 4; i++) identity.m[i][i] = 1.0f;
     mesh.bones.push_back(identity);
-    mesh.color = Rgba::fromPacked(sprite.color);
+    mesh.color = Rgba::fromPacked(u32(sprite.col));
     mesh.lighting = mParser.mLighting;
     mesh.fog = mParser.mFog;
     // Stamped alongside the state, or the row reports table 0 beside table 2's registers.
@@ -623,8 +622,8 @@ void ModelHooks::drawSprite3D(TexHandle aTexHandle, sdfSprite3DPtr_t aSprite, Fr
 
     // 0x12A344: SetRotateMatrixZ turns the offsets in the quad's own plane before the camera
     // axes, which is why this call is the hook rather than sdfBillBoardMake1.
-    const f32 turn = std::cos(sprite.rotation);
-    const f32 lean = std::sin(sprite.rotation);
+    const f32 turn = std::cos(sprite.rot);
+    const f32 lean = std::sin(sprite.rot);
     const TexHandle bound{mesh.texHandle.addr};
     const f32 width = bound ? f32(bound->width) : 0.0f;
     const f32 height = bound ? f32(bound->height) : 0.0f;
@@ -634,16 +633,16 @@ void ModelHooks::drawSprite3D(TexHandle aTexHandle, sdfSprite3DPtr_t aSprite, Fr
     mesh.vertices.resize(4);
     for (u32 c = 0; c < 4; c++) {
         MeshVertex& out = mesh.vertices[c];
-        const sdfVector2_t& at = sprite.offset.corner[c];
+        const VTX_t& at = sprite.vt[c];
         const f32 x = at.x * turn - at.y * lean;
         const f32 y = at.x * lean + at.y * turn;
         setRigidInfluence(out,
-                          sdfVector3_t{sprite.centre.x + right[0] * x + up[0] * y,
-                                       sprite.centre.y + right[1] * x + up[1] * y,
-                                       sprite.centre.z + right[2] * x + up[2] * y},
+                          sdfVector3_t{sprite.pos.x + right[0] * x + up[0] * y,
+                                       sprite.pos.y + right[1] * x + up[1] * y,
+                                       sprite.pos.z + right[2] * x + up[2] * y},
                           nullptr);
-        out.u = f32(sprite.uv.corner[c].u) * uScale;
-        out.v = f32(sprite.uv.corner[c].v) * vScale;
+        out.u = f32(sprite.uv[c].u) * uScale;
+        out.v = f32(sprite.uv[c].v) * vScale;
     }
     static constexpr u16 kQuad[6] = {0, 2, 1, 0, 3, 2};
     mesh.indices.assign(std::begin(kQuad), std::end(kQuad));
@@ -651,22 +650,29 @@ void ModelHooks::drawSprite3D(TexHandle aTexHandle, sdfSprite3DPtr_t aSprite, Fr
     frame->addMesh(std::move(mesh));
 }
 /// An indexed triangle list in world space: the vertices are quadword-strided with only xyz used,
-/// and +0x0C holds one byte index per lane, three to a word, with the word count at +0x00.
+/// and each face is a word of three byte indices.
 /// @fn sdf3DPrimMakePoly
 /// @note SLUS-20911 0x002BAAB8
-void ModelHooks::sdf3DPrimMakePoly(sdf3DPolyPtr_t aPoly, Frame* frame) {
+void ModelHooks::sdf3DPrimMakePoly(sdf3DPrimPolyParmPtr_t aPoly, Frame* frame) {
     if (!frame || !aPoly) return;
-    const u32 vertexCount = u32(aPoly->vertexCount);
-    const u32 triangles = u32(aPoly->extraQwords);
+    const u32 vertexCount = u32(aPoly->pointCount);
+    const u32 triangles = u32(aPoly->faceCount);
     if (!vertexCount || !triangles) return;
 
-    const sdfVector4_t* point = sdfVector4Ptr_t{aPoly->position.addr}.slice(vertexCount);
-    if (!point) point = sdfVector4Ptr_t{aPoly->unk10}.slice(vertexCount);
-    const u32* index = u32Ptr_t{aPoly->unk0C}.slice(triangles);
-    if (!point || !index) {
-        reportUnsupported("sdf3DPrimMakePoly without geometry", aPoly.addr);
+    const sdfVector4_t* point = aPoly->vertex.slice(vertexCount);
+    const u32* index = aPoly->faceIndex.slice(triangles);
+    if (!point) {
+        reportUnsupported("sdf3DPrimMakePoly without vertices", aPoly.addr);
         return;
     }
+    // fldDrawPoly3 leaves faceIndex null.
+    if (!index) {
+        reportUnsupported("sdf3DPrimMakePoly without face indices", aPoly->faceCount);
+        return;
+    }
+    const u32 unread = (aPoly->normal.addr ? 1 : 0) | (aPoly->uv.addr ? 2 : 0) |
+                       (aPoly->multiUv.addr ? 4 : 0) | (aPoly->vertexColor.addr ? 8 : 0);
+    if (unread) reportUnsupported("sdf3DPrimMakePoly arrays (normal 1, uv 2, multiUv 4, color 8)", unread);
 
     DrawMesh mesh;
     Matrix4 identity{};
@@ -682,14 +688,14 @@ void ModelHooks::sdf3DPrimMakePoly(sdf3DPolyPtr_t aPoly, Frame* frame) {
         mesh.gs.test = mParser.mState->test;
     }
     // 0x2BAAF4: the prim word is the descriptor's own or'd with 0x68, which is IIP, FGE and ABE.
-    mesh.attrBits = u16(aPoly->prim | 0x68);
+    mesh.attrBits = u16(aPoly->attr | 0x68);
     const GsAlpha alpha = mParser.mState ? mParser.mState->alpha : GsAlpha::Blend;
     if (alpha == GsAlpha::Opaque) {
         mesh.attrBits = u16(mesh.attrBits & ~u16(sdfCoreAttrBlend));
     } else {
         mesh.gs.alpha = u64(alpha);
     }
-    mesh.color = Rgba::fromPacked(aPoly->colorWord);
+    mesh.color = Rgba::fromPacked(aPoly->color);
     mesh.lit = false;
     mesh.packetType = sdfPacketGenerated;
 
@@ -866,8 +872,8 @@ void ModelHooks::sdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Fram
 
     for (u32 i = 0; i < aNum; i++) {
         const sdfVector4_t& centre = batch.centre[i];
-        const sdfBillBoardQuad_t& offset = batch.offset[i];
-        const sdfBillBoardUv_t& uv = batch.uv[i];
+        const VTX_t* offset = batch.offset[i];
+        const UV_t* uv = batch.uv[i];
 
         DrawMesh mesh;
         Matrix4 identity{};
@@ -892,13 +898,13 @@ void ModelHooks::sdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Fram
         mesh.vertices.resize(4);
         for (u32 c = 0; c < 4; c++) {
             MeshVertex& out = mesh.vertices[c];
-            const sdfVector2_t& at = offset.corner[c];
+            const VTX_t& at = offset[c];
             const sdfVector3_t world{centre.x + right[0] * at.x + up[0] * at.y,
                                      centre.y + right[1] * at.x + up[1] * at.y,
                                      centre.z + right[2] * at.x + up[2] * at.y};
             setRigidInfluence(out, world, nullptr);
-            out.u = f32(uv.corner[c].u) * uScale;
-            out.v = f32(uv.corner[c].v) * vScale;
+            out.u = f32(uv[c].u) * uScale;
+            out.v = f32(uv[c].v) * vScale;
         }
         // Wound the way the engine lists the corners, which is the reverse of a GL front face.
         static constexpr u16 kQuad[6] = {0, 2, 1, 0, 3, 2};
@@ -968,8 +974,8 @@ bool ModelHooks::readWeightedBatches(u32 at, const sdfCorePacket_t& packet,
     if (!nodeIndices) return false;
     mesh.bones.resize(usedNodeCount);
     for (u16 n = 0; n < usedNodeCount; n++) {
-        const u32 nodeAddr = readListItem(mParser.mNodeListAddr, nodeIndices[n]);
-        const Matrix4Ptr_t tm{nodeAddr + u32(offsetof(sdfModelNode_t, tm))};
+        const sdfModelNodePtr_t node = readListItem(mParser.mNodeList, nodeIndices[n]);
+        const Matrix4Ptr_t tm{node.addr + u32(offsetof(sdfModelNode_t, tm))};
         if (!tm) return false;
         mesh.bones[n] = *tm;
     }

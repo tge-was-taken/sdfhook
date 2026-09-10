@@ -273,7 +273,7 @@ private:
     // Per material packet, so the second pass interpolates the engine's endpoints, not ours.
     std::unordered_map<u32, MeshRamp> mFaceDivRamps;
 
-    u32 mNodeListAddr = 0;
+    sdfModelNodeListPtr_t mNodeList;
     MeshLighting mLighting{};
     MeshFog mFog{};
     sdfGsState_t mGsState{};

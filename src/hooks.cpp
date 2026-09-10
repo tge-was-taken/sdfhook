@@ -474,7 +474,7 @@ void sdfTexSetExPost(pcsx2hook_regs* regs, void* user) {
 int corePktApplyFaceDivColorHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
-    const sdfCorePacketCbPtr_t cb{c.getArg(0)};
+    const corePktCbPtr_t cb{c.getArg(0)};
     const sdfVector4Ptr_t aParm{c.getArg(1)};
     h.modelHooks.readFaceDivParm(cb, aParm);
     return PCSX2HOOK_CONTINUE;
@@ -630,7 +630,7 @@ int drawSprite3DHook(pcsx2hook_regs* regs, void* user) {
     HookContext& h = *static_cast<HookContext*>(user);
 
     const TexHandle aTexHandle{c.getArg(0)};
-    const sdfSprite3DPtr_t aSprite{c.getArg(1)};
+    const Sprite3DPtr_t aSprite{c.getArg(1)};
 
     drawSprite3D(h, aTexHandle, aSprite);
     return PCSX2HOOK_CONTINUE;
@@ -643,7 +643,7 @@ int drawSprite3DHook(pcsx2hook_regs* regs, void* user) {
 int sdf3DPrimMakePolyHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
-    const sdf3DPolyPtr_t aPoly{c.getArg(0)};
+    const sdf3DPrimPolyParmPtr_t aPoly{c.getArg(0)};
 
     sdf3DPrimMakePoly(h, aPoly);
     return PCSX2HOOK_CONTINUE;

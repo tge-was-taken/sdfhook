@@ -2324,6 +2324,22 @@ right.
       `smt3_field_underground_facility` has no `vifData` or `transform` at all: that state sits on
       a load or menu and does not exercise the 3D path.
 
+- [ ] **P2: the packet writes the typed IDB exposed.** With the packets typed in the IDB,
+      `ida_facts.py` sees what `sdfModelLinkOt` (13 facts, 0x2B2018..0x2B20E4) and
+      `sdfModelTempPacketLinkOt` (12, 0x2B1BD0..0x2B1C9C) write into `sdfModelNodeDrawPacket_t`,
+      `sdfModelTempTmPacket_t` and `sdfModelDrawParmPacket_t`. They were invisible while the buffer
+      was untyped. Each needs modelling or its own opt-out, since the spans around them bind blocks
+      only. `rsetTest` reads through `sdfGrRegPacket_t+0x20`, the flexible `reg[]`, which no C++
+      member names. guestcheck's unaccounted count went from 563 to 586 on this alone.
+
+- [ ] **P3: `sdf3DPrimMakePoly` reads only `vertex` and `faceIndex`.** `fldDrawPoly3` leaves
+      `faceIndex` null (its memset of 0x2C, never set) and sets `vertexColor`, so each of its polys
+      reports "without face indices" and is drawn only by the `fldDrawPoly3` hook: 12852 on the
+      battle scene, 4320 and 3744 on the two field scenes. `normal`, `uv`, `multiUv` and
+      `vertexColor` report as a mask when set; the unknown realm field has 1404 indexed polys with
+      `vertexColor` set that draw flat in the material colour. Read the guest's null-`faceIndex`
+      path before drawing it here.
+
 ## Done
 
 - **Every branch of `sdfModelLinkOt` is modelled**, including the ones no sample scene reaches, so

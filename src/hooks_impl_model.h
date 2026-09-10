@@ -23,7 +23,7 @@ public:
     /// packet the cb names.
     /// @fn corePktApplyFaceDivColor
     /// @note SLUS-20911 0x002B72D8
-    void readFaceDivParm(sdfCorePacketCbPtr_t aCb, sdfVector4Ptr_t aParm);
+    void readFaceDivParm(corePktCbPtr_t aCb, sdfVector4Ptr_t aParm);
 
     /// Offsets are a rotated pair of view-space axes per corner, so a quad carries size and spin.
     /// @fn sdfBillBoardMakeN
@@ -43,9 +43,9 @@ public:
     /// @note SLUS-20911 0x001193E8
     bool fldSdwDraw(u32 aPacket, u32 aEnd, const sdfGsState_t& aState, Frame* frame);
 
-    void sdf3DPrimMakePoly(sdf3DPolyPtr_t aPoly, Frame* frame);
+    void sdf3DPrimMakePoly(sdf3DPrimPolyParmPtr_t aPoly, Frame* frame);
 
-    void drawSprite3D(TexHandle aTexHandle, sdfSprite3DPtr_t aSprite, Frame* frame);
+    void drawSprite3D(TexHandle aTexHandle, Sprite3DPtr_t aSprite, Frame* frame);
 
     /// @fn sdfMatMakePacket
     /// @note SLUS-20911 0x002B3558

@@ -7,7 +7,7 @@
 namespace sdfhook {
 
 /// Reading a packet that yielded nothing, rather than guessing at it.
-void dumpPacket(const LinkedPacket& packet, const char* by, const DmaTag& tag);
+void dumpPacket(const LinkedPacket& packet, const char* by, const sdfDmaTag_t& tag);
 
 /// Producers whose draws reach the renderer through their own entry point.
 bool isHandled(const char* producer);
@@ -116,13 +116,13 @@ void sdfBillBoardMakeN(HookContext& h, const sdfBillBoardBatchPtr_t aCenter, con
 /// only reaches the transform packet through VU0.
 /// @fn drawSprite3D
 /// @note SLUS-20911 0x0012A2D0
-void drawSprite3D(HookContext& h, const TexHandle aTexHandle, const sdfSprite3DPtr_t aSprite);
+void drawSprite3D(HookContext& h, const TexHandle aTexHandle, const Sprite3DPtr_t aSprite);
 
 /// sdf3DPrimMakePoly(aPoly): counts, a PRIM word and one array per attribute. Every sdf3DPrim
 /// producer builds through it.
 /// @fn sdf3DPrimMakePoly
 /// @note SLUS-20911 0x002BAAB8
-void sdf3DPrimMakePoly(HookContext& h, const sdf3DPolyPtr_t aPoly);
+void sdf3DPrimMakePoly(HookContext& h, const sdf3DPrimPolyParmPtr_t aPoly);
 
 /// fldDrawPoly3(...): one gouraud triangle. The largest unhandled producer by packets, and
 /// invisible to a vertex ranking since its geometry only exists after VU1 runs.

@@ -159,17 +159,6 @@ u32 payloadQwords(u32 flg, u32 nloop, u32 nreg) {
 
 }  // namespace
 
-bool readDmaTag(u32 packetAddr, DmaTag& out) {
-    const u8* packet = u8Ptr_t{packetAddr}.slice(sdfQwordBytes);
-    if (!packet) return false;
-    u64 tag = 0;
-    std::memcpy(&tag, packet, sizeof(tag));
-    out.qwc = u32(tag & 0xFFFF);
-    out.id = u32((tag >> 28) & 7);
-    out.addr = u32(tag >> 32);
-    return true;
-}
-
 class GifParser::State {
 public:
     explicit State(GifCounts* counts) : walk(counts), counts(counts) {}
@@ -187,19 +176,17 @@ void GifParser::parse(u32 packetAddr) {
     GeometryWalk& walk = mState->walk;
     walk.clearTbps();
     GifCounts& counts = *mState->counts;
-    DmaTag tag{};
-    if (!readDmaTag(packetAddr, tag) || !tag.qwc) return;
+    const sdfDmaTagPtr_t tagPtr{packetAddr};
+    if (!tagPtr || !tagPtr->qwc) return;
+    const sdfDmaTag_t tag = *tagPtr;
 
-
-    // REF-family tags leave their quadwords at ADDR; the rest carry them straight after the tag.
-    const bool byRef = tag.id == sdfDmaTagRef || tag.id == sdfDmaTagRefs || tag.id == sdfDmaTagRefe;
-    const u32 dataAddr = byRef ? tag.addr : packetAddr + sdfQwordBytes;
+    const u32 dataAddr = sdfDmaIsRef(tag) ? tag.addr : packetAddr + sdfQwordBytes;
     const u8* data = u8Ptr_t{dataAddr}.slice(tag.qwc * sdfQwordBytes);
     if (!data) return;
 
     u32 left = tag.qwc;
     while (left) {
-        sdfGifTagWords_t gif{};
+        sdfGifTag_t gif{};
         std::memcpy(&gif, data, sizeof(gif));
         data += sdfQwordBytes;
         left--;
@@ -238,27 +225,27 @@ void GifParser::parse(u32 packetAddr) {
 }
 
 bool applyGsRegisterWrites(u32 packetAddr, sdfGsState_t& state) {
-    DmaTag tag{};
-    if (!readDmaTag(packetAddr, tag)) return false;
+    const sdfDmaTagPtr_t tag{packetAddr};
+    if (!tag) return false;
 
     // A REF tag names its data elsewhere; anything else carries it straight after the tag.
-    const u32 at = tag.id == sdfDmaTagRef ? tag.addr : packetAddr + 16;
-    const sdfGifTagWordsPtr_t gif{at};
+    const u32 at = sdfDmaId(*tag) == sdfDmaTagRef ? tag->addr : packetAddr + sdfQwordBytes;
+    const sdfGifTagPtr_t gif{at};
     if (!gif) return false;
     if (sdfGifFlg(*gif) != 0 || sdfGifNreg(*gif) != 1) return false;
     if (sdfGifRegAt(gif->regs, 0) != sdfGifRegAD) return false;
 
     const u32 count = sdfGifNloop(*gif);
-    const sdfGifAdWrite_t* writes = sdfGifAdWritePtr_t{at + 16}.slice(count);
+    const sdfGrTagStdReg_t* writes = sdfGrTagStdRegPtr_t{at + sdfQwordBytes}.slice(count);
     if (!writes) return false;
     for (u32 i = 0; i < count; i++) {
         switch (u32(writes[i].reg & 0xFF)) {
             case sdfGsAddrAlpha1:
-            case sdfGsAddrAlpha2: state.alpha = writes[i].value; break;
+            case sdfGsAddrAlpha2: state.alpha = writes[i].data; break;
             case sdfGsAddrTest1:
-            case sdfGsAddrTest2: state.test = writes[i].value; break;
+            case sdfGsAddrTest2: state.test = writes[i].data; break;
             case sdfGsAddrFrame1:
-            case sdfGsAddrFrame2: state.frameMask = sdfFrameMask(writes[i].value); break;
+            case sdfGsAddrFrame2: state.frameMask = sdfFrameMask(writes[i].data); break;
             default: break;
         }
     }

@@ -58,14 +58,14 @@ enum : u32 {
 
 /// A GIF tag has reserved bits, a bounded register count and a payload that has to fit the DMA
 /// tag's own quadword count. Without the last of those a block of floats passes as a tag.
-bool looksLikeGifTag(const sdfGifTagWords_t& words, u32 aQwc) {
+bool looksLikeGifTag(const sdfGifTag_t& words, u32 aQwc) {
     if (sdfGifNloop(words) == 0) return false;
     // Bits 60..63 are NREG, and zero means sixteen, which SDF never writes.
     const u32 nreg = sdfGifNreg(words);
     if (nreg == 0) return false;
     // Bits 16..45 are reserved and the hardware requires them clear. PRIM is 47..57, so a test
     // over those rejects every tag that sets one.
-    if (((words.tag >> 16) & 0x3FFFFFFF) != 0) return false;
+    if (((words.parm >> 16) & 0x3FFFFFFF) != 0) return false;
     // PACKED writes one quadword per register per loop; the transfer has to hold them.
     if (sdfGifFlg(words) == 0 && u64(sdfGifNloop(words)) * nreg + 1 > aQwc) return false;
     return true;
@@ -145,7 +145,7 @@ void scanVif(u32 aData, u32 aQwc, u32* aCalls, u32* aUnpacks, u32* aMicrocode) {
 PacketType classifySelf(u32 aData, u32 aQwc) {
     if (!aQwc) return PacketType::Empty;
 
-    const sdfGifTagWords_t words = sdfGifTagWordsPtr_t{aData}.valueOr();
+    const sdfGifTag_t words = sdfGifTagPtr_t{aData}.valueOr();
     if (looksLikeGifTag(words, aQwc)) {
         // NREG 1 naming A+D (0xE) is a run of register writes and draws nothing itself.
         const bool registersOnly = sdfGifNreg(words) == 1 && (words.regs & 0xF) == 0xE;
@@ -218,11 +218,8 @@ void censusLinked(const std::vector<LinkedPacket>& aLinked, SymbolCache& aSymbol
                   const std::unordered_map<u32, PacketType>& aTypes) {
     static const char* const kLinkKind[] = {"packet", "ref", "call"};
     for (const LinkedPacket& packet : aLinked) {
-        DmaTag tag{};
-        readDmaTag(packet.addr, tag);
-        const bool byRef = tag.id == sdfDmaTagRef || tag.id == sdfDmaTagRefs
-                           || tag.id == sdfDmaTagRefe;
-        const u32 data = byRef ? tag.addr : packet.addr + sdfQwordBytes;
+        const sdfDmaTag_t tag = sdfDmaTagPtr_t{packet.addr}.valueOr();
+        const u32 data = sdfDmaIsRef(tag) ? tag.addr : packet.addr + sdfQwordBytes;
 
         const char* producer = aSymbols.getFunction(packet.caller);
         TypedBy how = TypedBy::Nothing;
@@ -235,7 +232,7 @@ void censusLinked(const std::vector<LinkedPacket>& aLinked, SymbolCache& aSymbol
                      .addUint("frame", aFrame)
                      .addHexDigits("at", packet.addr, 8)
                      .addString("link", kLinkKind[u8(packet.kind)])
-                     .addUint("dmaId", tag.id)
+                     .addUint("dmaId", sdfDmaId(tag))
                      .addUint("qwc", tag.qwc)
                      .addString("type", packetTypeName(type))
                      .addString("how", typedByName(how))
@@ -255,19 +252,18 @@ void censusChain(u32 aTag, const std::vector<LinkedPacket>& aLinked, SymbolCache
 
     u32 stack[16] = {};
     u32 depth = 0;
-    u32 at = u32Ptr_t{aTag + 4}.valueOr() & 0x0FFFFFFFu;
+    const sdfDrawTagPtr_t drawTag{aTag};
+    u32 at = drawTag ? drawTag->head.addr & 0x0FFFFFFFu : 0;
 
     constexpr u32 kMaxChainTags = 65536;
     u32 steps = 0;
     for (; at && steps < kMaxChainTags; steps++) {
-        const u32* tag = u32Ptr_t{at}.slice(2);
+        const sdfDmaTagPtr_t tag{at};
         if (!tag) break;
-        const u32 qwc = tag[0] & 0xFFFF;
-        const u32 id = (tag[0] >> 28) & 7;
-        const u32 addr = tag[1] & 0x0FFFFFFFu;
-        // A tag that names its data carries it elsewhere; a CNT tag's data follows the tag.
-        const bool byRef = id == sdfDmaTagRef || id == sdfDmaTagRefs || id == sdfDmaTagRefe;
-        const u32 data = byRef ? addr : at + sdfQwordBytes;
+        const u32 qwc = tag->qwc;
+        const u32 id = sdfDmaId(*tag);
+        const u32 addr = tag->addr & 0x0FFFFFFFu;
+        const u32 data = sdfDmaIsRef(*tag) ? addr : at + sdfQwordBytes;
 
         const auto owner = byAddr.find(at);
         const char* producer = owner == byAddr.end() ? "-" : aSymbols.getFunction(owner->second);

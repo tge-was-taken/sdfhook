@@ -27,14 +27,13 @@ LogChannel log("hooks");
 }  // namespace
 
 // Reading a packet that yielded nothing, rather than guessing at it.
-void dumpPacket(const LinkedPacket& packet, const char* by, const DmaTag& tag) {
-    const bool byRef = tag.id == 0 || tag.id == 3 || tag.id == 4;
-    const u32 base = byRef ? tag.addr : packet.addr + 16;
+void dumpPacket(const LinkedPacket& packet, const char* by, const sdfDmaTag_t& tag) {
+    const u32 base = sdfDmaIsRef(tag) ? tag.addr : packet.addr + sdfQwordBytes;
     JsonObject row;
     row.addString("dump", "packet")
         .addString("by", by)
         .addHexDigits("at", packet.addr, 8)
-        .addUint("dmaId", tag.id)
+        .addUint("dmaId", sdfDmaId(tag))
         .addUint("qwc", tag.qwc)
         .addHexDigits("data", base, 8)
         .beginArray("qwords");
@@ -82,17 +81,18 @@ std::unordered_map<u32, sdfGsState_t> replayTransmitOrder(u32 aTag,
     sdfGsState_t gs{};
     u32 stack[16] = {};
     u32 depth = 0;
-    u32 at = u32Ptr_t{aTag + 4}.valueOr() & 0x0FFFFFFFu;
+    const sdfDrawTagPtr_t drawTag{aTag};
+    u32 at = drawTag ? drawTag->head.addr & 0x0FFFFFFFu : 0;
 
     // A frame links a few thousand tags; beyond that the chain loops or was read out of data.
     constexpr u32 kMaxChainTags = 65536;
     u32 steps = 0;
     for (; at && steps < kMaxChainTags; steps++) {
-        const u32* tag = u32Ptr_t{at}.slice(2);
+        const sdfDmaTagPtr_t tag{at};
         if (!tag) break;
-        const u32 qwc = tag[0] & 0xFFFF;
-        const u32 id = (tag[0] >> 28) & 7;
-        const u32 addr = tag[1] & 0x0FFFFFFFu;
+        const u32 qwc = tag->qwc;
+        const u32 id = sdfDmaId(*tag);
+        const u32 addr = tag->addr & 0x0FFFFFFFu;
 
         applyGsRegisterWrites(at, gs);
         settled[at] = gs;
@@ -253,8 +253,7 @@ void collectPackets(HookContext& h) {
         parser.parse(packet.addr);
         if (!h.trace->isOpen()) continue;
 
-        DmaTag tag{};
-        readDmaTag(packet.addr, tag);
+        const sdfDmaTag_t tag = sdfDmaTagPtr_t{packet.addr}.valueOr();
         u64 verts = 0;
         for (int i = 0; i < 8; i++) verts += h.coverage.gif.verts[i] - before.verts[i];
         const char* by = h.symbols.getFunction(packet.caller);
@@ -605,7 +604,7 @@ void sdfBillBoardMakeN(HookContext& h, const sdfBillBoardBatchPtr_t aCenter, con
 /// only reaches the transform packet through VU0.
 /// @fn drawSprite3D
 /// @note SLUS-20911 0x0012A2D0
-void drawSprite3D(HookContext& h, const TexHandle aTexHandle, const sdfSprite3DPtr_t aSprite) {
+void drawSprite3D(HookContext& h, const TexHandle aTexHandle, const Sprite3DPtr_t aSprite) {
     h.coverage.apiDraws++;
     if (h.config->noBillboards) return;
     h.modelHooks.drawSprite3D(aTexHandle, aSprite, h.frames.getFrame());
@@ -615,7 +614,7 @@ void drawSprite3D(HookContext& h, const TexHandle aTexHandle, const sdfSprite3DP
 /// producer builds through it.
 /// @fn sdf3DPrimMakePoly
 /// @note SLUS-20911 0x002BAAB8
-void sdf3DPrimMakePoly(HookContext& h, const sdf3DPolyPtr_t aPoly) {
+void sdf3DPrimMakePoly(HookContext& h, const sdf3DPrimPolyParmPtr_t aPoly) {
     h.coverage.apiDraws++;
     if (!aPoly) return;
 

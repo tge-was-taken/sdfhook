@@ -19,13 +19,6 @@ struct GifCounts {
     u64 unparsed = 0;  // packets whose quadwords are not a GIF list, mostly VU1 chains
 };
 
-// What a packet's leading DMA tag says, which decides where its quadwords are.
-struct DmaTag {
-    u32 qwc;
-    u32 id;
-    u32 addr;
-};
-
 /// Spans a whole frame rather than one packet, because GS state does.
 class GifParser {
 public:
@@ -42,9 +35,6 @@ private:
     class State;
     std::unique_ptr<State> mState;
 };
-
-/// Exposed so a trace can say what shape a packet was when it yielded nothing.
-bool readDmaTag(u32 packetAddr, DmaTag& out);
 
 /// Applies a packet's A+D register writes to the running GS state.
 /// @todo Nothing calls this yet, so every mesh is still stamped from sdfGsStateForOt. See TODO.md E1.

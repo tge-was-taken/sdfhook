@@ -369,7 +369,7 @@ bool TextureCache::recoverFromGs(TexHandle handle) {
     }
 
     // sdfTexGetTex0Reg reads the register out of the packet the texture was uploaded with.
-    return recoverTex0(handle, u64Ptr_t{entry->packet.addr + kTex0InPacket}.valueOr());
+    return recoverTex0(handle, entry->packet->tex0.data);
 }
 
 bool TextureCache::recoverTex0(TexHandle handle, u64 reg) {

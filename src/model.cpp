@@ -685,10 +685,10 @@ bool ModelParser::readBlendShapes(u32 at, const sdfCorePacket_t& packet,
         mTrace.countInfluences(1);
     }
 
-    const u32 morphItems = u32Ptr_t{root->morphList.addr + sdfListItems}.valueOr();
     const sdfModelMorphListPtr_t morphList = root->morphList;
+    const u32 morphItems = morphList ? morphList->items.addr : 0;
     const sdfModelMorphPtr_t morph{morphItems + u32(sizeof(sdfModelMorph_t)) * morphIndex};
-    if (!morphItems || !morphList || morphIndex >= morphList->count || !morph) {
+    if (!morphItems || morphIndex >= morphList->count || !morph) {
         mTrace.countReject(sdfCorePacketTypeBlendShape, ModelTrace::Reject::NoMorph);
     } else {
         for (const sdfModelMorphParm_t& target : morph->target) {
@@ -730,7 +730,7 @@ bool ModelParser::readBlendShapes(u32 at, const sdfCorePacket_t& packet,
 bool ModelParser::finishMesh(guest_ref<sdfModelRootNode_t> root,
                            const sdfCorePacket_t& packet, sdfCorePacketType_t type, DrawMesh& mesh,
                            Frame* frame) {
-    const sdfMatPtr_t material{readListItem(root->matList.addr, packet.header.matIndex)};
+    const sdfMatPtr_t material{readListItem(root->matList, packet.header.matIndex)};
     if (!material) {
         mTrace.countReject(type, ModelTrace::Reject::NoMaterial);
         return false;

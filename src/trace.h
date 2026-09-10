@@ -37,7 +37,7 @@ public:
     void onSdfGrSetClearPacket(u32 packetAddr);
     void onPrimEntry(const char* name, u32 arg);
     // Every packet the frame links, with the function that linked it and what its GIF tag draws.
-    void onPacket(const LinkedPacket& packet, const char* by, const DmaTag& tag, u64 verts);
+    void onPacket(const LinkedPacket& packet, const char* by, const sdfDmaTag_t& tag, u64 verts);
 
     /// Carries the ranges that say whether the stream was read at the right stride. Written once
     /// the frame's chain exists, so it names the frame the mesh decoded in, not the current one.

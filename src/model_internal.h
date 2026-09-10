@@ -77,10 +77,12 @@ inline void transformPoint(const Matrix4& m, f32 x, f32 y, f32 z, f32 out[4]) {
     }
 }
 
-// Both lists keep a pointer to their item array at sdfListItems, so an item costs two loads.
-inline u32 readListItem(u32 listAddr, u32 index) {
-    const u32 items = u32Ptr_t{listAddr + sdfListItems}.valueOr();
-    return items ? u32Ptr_t{items + 4 * index}.valueOr() : 0;
+// A list's item array is allocated apart from its header, so an item costs two loads.
+template <typename List>
+auto readListItem(guest_ptr<List> aList, u32 aIndex) {
+    const auto items = aList ? aList->items : decltype(List::items){};
+    using Item = std::remove_pointer_t<decltype(items.operator->())>;
+    return items.addr ? guest_ptr<Item>{items.addr + u32(sizeof(Item)) * aIndex}.valueOr() : Item{};
 }
 
 /// A VIF code, as the mesh body carries it: an immediate, a count, then the command.
