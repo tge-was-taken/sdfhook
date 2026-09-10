@@ -329,6 +329,9 @@ void recordBuiltPacket(HookContext& h, const char* aBuilder, const u32 (&aArgs)[
     if (made.trailing != PacketType::Unknown) h.packetTypes[packet + sdfQwordBytes] = made.trailing;
 }
 
+/// Records the texture the packet binds, for the chain walk.
+/// @fn sdf2DMakeTexPacket
+/// @note SLUS-20911 0x002B9C20
 void sdf2DMakeTexPacket(HookContext& h, u32 aPacket, TexHandle aTexHndl, u32 aCtx) {
     if (aCtx) {
         reportUnsupported("2D texture packet for GS context 2", aCtx);
