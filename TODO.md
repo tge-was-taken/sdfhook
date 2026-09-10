@@ -2336,6 +2336,16 @@ right.
       - `release_movieobj2`, 1 a frame on the title screen: a quad sent as A+D writes, vertices
         included.
 
+- [ ] **P5: VU1's light and fog from the chain, for the draws VU1 lights.** Billboards, polys and the
+      type 1 streams copy the lighting and fog of whichever root `sdfModelLinkOt` read last, which is
+      arbitrary for anything that is not that root's. VU1 keeps the last light and fog uploaded, and
+      `sdfGrJoinDrawTag` adds a tag's `lightPacket` and `fogPacket` through `sdfGrAddExPacket` only
+      when they differ from the previous tag's, chained in with a NEXT. Replaying them for every mesh
+      is wrong: `sdfCorePacketGen` lights on the EE at generation (`corePktCurrLight`), and doing it
+      anyway cost battle 4.653 -> 5.417, underground 4.267 -> 8.710, unknown realm 5.126 -> 8.494.
+      The walk that checked only entry addresses is kept in `dumps/scratch/chain/chain-lighting.patch`;
+      it misses a light reached through an ex packet's REF.
+
 - [ ] **P2: the packet writes the typed IDB exposed.** With the packets typed in the IDB,
       `ida_facts.py` sees what `sdfModelLinkOt` (13 facts, 0x2B2018..0x2B20E4) and
       `sdfModelTempPacketLinkOt` (12, 0x2B1BD0..0x2B1C9C) write into `sdfModelNodeDrawPacket_t`,

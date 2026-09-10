@@ -109,6 +109,9 @@ force there. The renderer draws `order` as it stands, switching pass run by run.
   texture a 2D texture packet binds, are replayed at each draw's packet; a producer says only whether
   its PRIM blends and which texture it names. Two-sided polys took `rsetTest`'s 0x33801 at the call,
   and the GS trace has no batch under it.
+- **Lighting and fog are not chain state for a generated mesh.** `sdfCorePacketGen` lights on the
+  EE with `corePktCurrLight`, which `sdfCoreDrawSetLight` sets at generation time, so a mesh keeps its
+  root's light. Replaying light and fog packets from the chain for every mesh cost 0.8 to 4.4 points.
 - **A GIF tag's writes can arrive in the next DMA transfer.** `sdfGrSetRefGifPacket` sends the A+D
   tag in its own packet and REFs the writes, which is how the frame-mask pair reaches FRAME. A
   transfer is state only if no write kicks a vertex: `dds3DrawFade` sends its quad as A+D.
