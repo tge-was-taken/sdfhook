@@ -263,7 +263,8 @@ def emit(out, name):
 
     members = {}
     try:
-        cfunc = ida_hexrays.decompile(fn)
+        # Uncached: a cached body keeps the member offsets of a type changed since.
+        cfunc = ida_hexrays.decompile(fn, flags=ida_hexrays.DECOMP_NO_CACHE)
         if cfunc:
             v = Members()
             v.apply_to(cfunc.body, None)

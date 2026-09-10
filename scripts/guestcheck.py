@@ -9,6 +9,7 @@ calls resolve a global to its member. Only a branch needs a citation, in vucheck
 Usage: scripts/guestcheck.py [function ...] (defaults to every function in the facts file)
 """
 import glob
+import math
 import re
 import sys
 
@@ -181,7 +182,7 @@ def globals_(paths):
 ALIAS = re.compile(r"using\s+(\w+)\s*=\s*guest_ptr<(?:struct\s+)?(\w+)>\s*;")
 STRUCT = re.compile(r"struct\s+(\w+)\s*\{(.*?)\n\};", re.S)
 MEMBER = re.compile(r"^\s*(?:const\s+)?([\w:<>]+)\s+([\w,\s\[\]]+);", re.M)
-DECLARATOR = re.compile(r"(\w+)\s*(?:\[(\d+)\])?")
+DECLARATOR = re.compile(r"(\w+)((?:\s*\[\d+\])*)")
 # A raw `T* name` too: the shadow declares its parameters the way the guest declares its own.
 DECL = re.compile(r"\b(?:const\s+)?(guest_ref<(\w+)>|guest_ptr<(\w+)>|(\w+_t))\s*[*&]?\s*(\w+)\s*[={;,)]")
 # A guest struct is reached through a reference as often as a pointer, and a read is a read
@@ -238,9 +239,11 @@ def types(paths):
         for struct, fields in STRUCT.findall(text):
             for type_, names in MEMBER.findall(fields):
                 # One declaration can name several fields: f32 x, y, z, w;
-                for field, count in DECLARATOR.findall(names):
+                for field, dims in DECLARATOR.findall(names):
                     member[(struct, field)] = type_
-                    decl.setdefault(struct, []).append((type_, field, int(count or 1)))
+                    # uv[15][4] is sixty elements, not fifteen.
+                    count = math.prod(int(n) for n in re.findall(r"\d+", dims))
+                    decl.setdefault(struct, []).append((type_, field, count))
     resolve = lambda t: alias.get(t, t)
     # A pointer alias is four bytes whatever it points at.
     for name in alias:
