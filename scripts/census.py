@@ -40,9 +40,9 @@ def main(argv):
         print("   identified: %d of %d (%.1f%%)   by %s"
               % (len(identified), len(carrying), 100.0 * len(identified) / len(carrying),
                  ", ".join("%s %d" % kv for kv in how.most_common()) or "nothing"))
-        if untyped:
-            for name, n in collections.Counter(r["by"] for r in untyped).most_common(6):
-                print("      untyped from %-34s %d" % (name, n))
+        unidentified = [r for r in carrying if r["how"] in ("payload", "-")]
+        for name, n in collections.Counter(r["by"] for r in unidentified).most_common(8):
+            print("      unidentified from %-30s %d" % (name, n))
 
         plumbing = collections.Counter(ID[r["dmaId"]] for r in one if not r["qwc"])
         print("   plumbing (qwc 0): " + ", ".join("%s %d" % kv for kv in plumbing.most_common()))

@@ -731,6 +731,18 @@ int packetTypeHook(pcsx2hook_regs* regs, void* user) {
     return PCSX2HOOK_CONTINUE;
 }
 
+/// A packet builder that was traced before it was a builder, so it keeps its trace row.
+int packetTypeTraceHook(pcsx2hook_regs* regs, void* user) {
+    Context c{regs};
+    HookContext& h = *static_cast<HookContext*>(user);
+
+    const u32 args[4] = {c.getArg(0), c.getArg(1), c.getArg(2), c.getArg(3)};
+
+    h.trace->onPrimEntry(h.symbols.getFunction(c.getPc()), args[0]);
+    recordBuiltPacket(h, h.symbols.getFunction(c.getPc()), args);
+    return PCSX2HOOK_CONTINUE;
+}
+
 /// A packet builder that returns its packet.
 void packetTypePost(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
@@ -804,9 +816,9 @@ constexpr Entry kEngineEntries[] = {
     {"sdfTexMakeGIFPacket", &observeHook, &observePost},
     {"sdfTexNew", &observeHook, nullptr},
     {"sdfGrSetClearPacket", &sdfGrSetClearPacketHook, nullptr},
-    {"sdf2DAllocSprite", &observeHook, nullptr},
-    {"sdf2DMakeStdPacket", &traceEntryHook, nullptr},
-    {"sdf2DMakeTexPacket", &traceEntryHook, nullptr},
+    {"sdf2DAllocSprite", &observeHook, &packetTypePost},
+    {"sdf2DMakeStdPacket", &packetTypeTraceHook, nullptr},
+    {"sdf2DMakeTexPacket", &packetTypeTraceHook, nullptr},
     {"sdf2DLinkTexPacket", &sdf2DLinkTexPacketHook, nullptr},
     {"sdfPrimLinkF3", &observeHook, nullptr},
     {"sdfPrimLinkF4", &observeHook, nullptr},
@@ -815,8 +827,7 @@ constexpr Entry kEngineEntries[] = {
     {"sdfPrimLinkG3", &observeHook, nullptr},
     {"sdfPrimLinkBoxLine", &observeHook, nullptr},
     {"sdfPrimLinkBitBltPacket", &observeHook, nullptr},
-    {"sdfBillBoardMake1", &traceEntryHook, nullptr},
-    {"sdfBillBoardMakeN", &sdfBillBoardMakeNHook, nullptr},
+    {"sdfBillBoardMakeN", &sdfBillBoardMakeNHook, &packetTypePost},
     {"dds3BillboardTagLink", &dds3BillboardTagLinkHook, nullptr},
     {"dds3BillboardLinkOt", &dds3BillboardLinkOtHook, nullptr},
     {"sdfGrLinkDispFrameTex", &traceEntryHook, nullptr},
@@ -856,6 +867,30 @@ constexpr Entry kGameEntries[] = {
     {"sdfMatMakePacket", &packetTypeHook, nullptr},
     {"sdfGrSetFramePacket", &packetTypeHook, nullptr},
     {"MakeLightPacket", &packetTypeHook, nullptr},
+    {"sdfBillBoardMakeTMPacket", &packetTypeHook, nullptr},
+    {"sdfBillBoardMake1", &packetTypeHook, nullptr},
+    {"sdfBillBoardVcMake1", &packetTypeHook, nullptr},
+    {"sdfBillBoardVcMakeN", &packetTypeHook, &packetTypePost},
+    {"sdf2DGetPrimPtr", &packetTypeHook, nullptr},
+    {"sdf2DMakePrimPacketHeader", &packetTypeHook, nullptr},
+    {"effPkt2DGetPrimPtr", &packetTypeHook, nullptr},
+    {"sdfPrimSetOpaquePacket", &packetTypeHook, nullptr},
+    {"sdfPrimSetBitBltPacket", &packetTypeHook, nullptr},
+    {"sdf3DSetDefaultFog", &packetTypeHook, nullptr},
+    {"frCreateDrawEnvPacket", &packetTypeHook, nullptr},
+    {"sdfSetStoreImage", &packetTypeHook, nullptr},
+    {"sdfSetLoadImage", &packetTypeHook, nullptr},
+    {"sdfMultiBillBoardMakeN", &packetTypeHook, &packetTypePost},
+    {"sdfMultiBillBoardVcMakeN", &packetTypeHook, &packetTypePost},
+    {"dds3PrimFrameRect", &packetTypeHook, &packetTypePost},
+    {"dds3PrimLine", &packetTypeHook, &packetTypePost},
+    {"dds3PrimLine3D", &packetTypeHook, &packetTypePost},
+    {"effPkt2DAllocF4", &packetTypeHook, &packetTypePost},
+    {"pbMakePrimPacket", &packetTypeHook, &packetTypePost},
+    {"pbAllocPrimPacket", &packetTypeHook, &packetTypePost},
+    {"pbMakeSpritePacket", &packetTypeHook, &packetTypePost},
+    {"sdfDrawModelWithMatrix", &packetTypeHook, &packetTypePost},
+    {"sdfDevVprintf", &packetTypeHook, &packetTypePost},
     {"sdfModelSetMatRefPacket", &packetTypeHook, nullptr},
     {"sdfModelSetOneSkinDrawPacket", &packetTypeHook, nullptr},
     {"sdfModelNewPacketHeader", &packetTypeHook, &packetTypePost},
@@ -889,7 +924,7 @@ constexpr Entry kGameEntries[] = {
     {"itfMiscDrawSpritePlanePrim", &traceEntryHook, nullptr},
     {"itfMiscDrawRectanglePrim", &traceEntryHook, nullptr},
     {"itfMiscDrawTexPoly", &traceEntryHook, nullptr},
-    {"effPkt2DAllocTriStrip", &traceEntryHook, nullptr},
+    {"effPkt2DAllocTriStrip", &traceEntryHook, &packetTypePost},
     {"eglLinkBox", &traceEntryHook, nullptr},
 };
 

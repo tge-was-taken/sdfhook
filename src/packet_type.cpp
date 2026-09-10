@@ -39,6 +39,20 @@ PacketBuilder packetBuilderFor(const char* symbol) {
         {"sdfModelSetOneSkinDrawPacket", PacketType::MeshSkinned, 2},
         {"sdfGrLinkDrawFrameTex", PacketType::FrameTex, 2},
         {"sdfGrSetRefGifPacket", PacketType::RefGif, 0},
+        {"sdfBillBoardMakeTMPacket", PacketType::BillboardTransform, 0},
+        {"sdfBillBoardMake1", PacketType::BillboardBatch, 0},
+        {"sdfBillBoardVcMake1", PacketType::BillboardBatch, 0},
+        {"sdf2DGetPrimPtr", PacketType::Packet2D, 0},
+        {"sdf2DMakePrimPacketHeader", PacketType::Packet2D, 0},
+        {"sdf2DMakeStdPacket", PacketType::Packet2D, 0},
+        {"effPkt2DGetPrimPtr", PacketType::Packet2D, 0},
+        {"sdf2DMakeTexPacket", PacketType::TexBind, 0},
+        {"sdfPrimSetOpaquePacket", PacketType::AlphaState, 0},
+        {"sdfPrimSetBitBltPacket", PacketType::BitBlt, 0},
+        {"sdf3DSetDefaultFog", PacketType::Fog, 0},
+        {"frCreateDrawEnvPacket", PacketType::DrawEnv, 0},
+        {"sdfSetStoreImage", PacketType::TextureUpload, 0},
+        {"sdfSetLoadImage", PacketType::TextureUpload, 0},
     };
     for (const Entry& entry : kBuilders) {
         if (std::strcmp(entry.symbol, symbol) != 0) continue;
@@ -48,15 +62,31 @@ PacketBuilder packetBuilderFor(const char* symbol) {
         if (entry.type == PacketType::TransformRef) made.trailing = PacketType::DrawParams;
         return made;
     }
-    if (std::strcmp(symbol, "sdfModelAllocTmPacket") == 0) {
-        return {PacketType::Transform, 0, false, true};
-    }
-    if (std::strcmp(symbol, "sdfModelNewPacketHeader") == 0) {
-        return {PacketType::PacketHeader, 0, false, true};
-    }
-    if (std::strcmp(symbol, "sdf3DPrimMakePoly") == 0 ||
-        std::strcmp(symbol, "effPkt3DPrimMakePoly") == 0) {
-        return {PacketType::PolyStream, 0, false, true};
+    // Builders that return the packet. The ones without an IDB type (dds3PrimLine3D, the pb*
+    // functions) are here because the link sites link their return value.
+    static constexpr Entry kReturners[] = {
+        {"sdfModelAllocTmPacket", PacketType::Transform, 0},
+        {"sdfModelNewPacketHeader", PacketType::PacketHeader, 0},
+        {"sdf3DPrimMakePoly", PacketType::PolyStream, 0},
+        {"effPkt3DPrimMakePoly", PacketType::PolyStream, 0},
+        {"sdfBillBoardMakeN", PacketType::BillboardBatch, 0},
+        {"sdfBillBoardVcMakeN", PacketType::BillboardBatch, 0},
+        {"sdfMultiBillBoardMakeN", PacketType::BillboardBatch, 0},
+        {"sdfMultiBillBoardVcMakeN", PacketType::BillboardBatch, 0},
+        {"sdf2DAllocSprite", PacketType::Packet2D, 0},
+        {"dds3PrimFrameRect", PacketType::Primitive2D, 0},
+        {"dds3PrimLine", PacketType::Primitive2D, 0},
+        {"effPkt2DAllocTriStrip", PacketType::Primitive2D, 0},
+        {"effPkt2DAllocF4", PacketType::Primitive2D, 0},
+        {"pbMakePrimPacket", PacketType::Primitive2D, 0},
+        {"pbAllocPrimPacket", PacketType::Primitive2D, 0},
+        {"pbMakeSpritePacket", PacketType::Sprite, 0},
+        {"dds3PrimLine3D", PacketType::Primitive3D, 0},
+        {"sdfDrawModelWithMatrix", PacketType::Primitive3D, 0},
+        {"sdfDevVprintf", PacketType::DebugText, 0},
+    };
+    for (const Entry& entry : kReturners) {
+        if (std::strcmp(entry.symbol, symbol) == 0) return {entry.type, 0, false, true};
     }
     // Handed no packet: sdfMatUpdatePacket takes the material, MakeLightPacket a unit handle,
     // sdfTexMakeGIFPacket a texture handle, sdf3DPrimLinkMat and sdf3DPrimLinkTm only link.

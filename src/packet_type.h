@@ -34,6 +34,12 @@ enum class PacketType : u8 {
     TexBind,
     ZClear,
     Fade,
+    BillboardBatch,
+    BillboardTransform,
+    Packet2D,
+    Primitive3D,
+    BitBlt,
+    DebugText,
     PacketHeader,
     Terminator,
     DrawEnv,
@@ -81,6 +87,12 @@ constexpr const char* packetTypeName(PacketType type) {
         case PacketType::TexBind: return "texBind";
         case PacketType::ZClear: return "zClear";
         case PacketType::Fade: return "fade";
+        case PacketType::BillboardBatch: return "billboardBatch";
+        case PacketType::BillboardTransform: return "billboardTransform";
+        case PacketType::Packet2D: return "packet2D";
+        case PacketType::Primitive3D: return "primitive3D";
+        case PacketType::BitBlt: return "bitBlt";
+        case PacketType::DebugText: return "debugText";
         case PacketType::PacketHeader: return "packetHeader";
         case PacketType::Terminator: return "terminator";
         case PacketType::DrawEnv: return "drawEnv";

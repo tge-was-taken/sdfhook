@@ -165,17 +165,24 @@ PacketType classify(u32 aPacket, u32 aData, u32 aQwc, const char* aProducer,
                     const std::unordered_map<u32, PacketType>& aTypes, TypedBy* aHow,
                     bool aInMeshCall) {
     // What the engine said it built is the only thing that identifies a packet outright.
-    *aHow = TypedBy::Builder;
+    PacketType built = PacketType::Unknown;
     for (const u32 probe : {aPacket, aData, aPacket + 16, aData + 16}) {
         const auto found = aTypes.find(probe);
-        if (found != aTypes.end()) return found->second;
+        if (found != aTypes.end()) { built = found->second; break; }
     }
 
-    // A single-purpose linker is as good as the builder: sdfDrawTagLinkCall has one caller in the
-    // whole game, so what linked the packet says what it is.
-    *aHow = TypedBy::Linker;
+    // The 2D helpers say only that a packet is 2D; the single-site function that linked it says
+    // which, so it wins over them and over nothing else.
     const PacketType byLinker = packetTypeForLinker(aProducer);
-    if (byLinker != PacketType::Unknown) return byLinker;
+    if (byLinker != PacketType::Unknown && (built == PacketType::Unknown ||
+                                            built == PacketType::Packet2D)) {
+        *aHow = TypedBy::Linker;
+        return byLinker;
+    }
+    if (built != PacketType::Unknown) {
+        *aHow = TypedBy::Builder;
+        return built;
+    }
 
     // sdfDrawTagLinkCall's only caller is sdfModelLinkOt, so a call chain is a type 1 stream body.
     if (aInMeshCall && aQwc) {
