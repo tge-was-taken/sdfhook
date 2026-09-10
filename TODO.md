@@ -2343,8 +2343,9 @@ right.
       when they differ from the previous tag's, chained in with a NEXT. Replaying them for every mesh
       is wrong: `sdfCorePacketGen` lights on the EE at generation (`corePktCurrLight`), and doing it
       anyway cost battle 4.653 -> 5.417, underground 4.267 -> 8.710, unknown realm 5.126 -> 8.494.
-      The walk that checked only entry addresses is kept in `dumps/scratch/chain/chain-lighting.patch`;
-      it misses a light reached through an ex packet's REF.
+      That attempt checked only entry addresses, so it also missed a light an ex packet REFs. The
+      viewport is the same split: the frame has one `screenTm` from `sdf3DScreenTm`, while the chain
+      carries the env's `ViewportPacket` and `HighViewportPacket` for the VU1 draws after each.
 
 - [ ] **P2: the packet writes the typed IDB exposed.** With the packets typed in the IDB,
       `ida_facts.py` sees what `sdfModelLinkOt` (13 facts, 0x2B2018..0x2B20E4) and
