@@ -24,6 +24,12 @@ void collectPackets(HookContext& h);
 /// forgets the frame's packet types either way.
 void censusFrame(HookContext& h, u32 aTag);
 
+/// A builder ran, handed its four argument registers. Records the packet it makes by address.
+void recordBuiltPacket(HookContext& h, const char* aBuilder, const u32 (&aArgs)[4]);
+
+/// A builder returned its packet.
+void recordReturnedPacket(HookContext& h, const char* aBuilder, u32 aPacket);
+
 /// One sceDmaSend. Only the send that carries the frame's chain builds a chain frame, and only
 /// the first of the two the engine makes per chain.
 void chainFrameSend(HookContext& h, u32 aRa, u32 aAddr);

@@ -160,6 +160,21 @@ void settleMeshState(HookContext& h, u32 aTag) {
     h.model.traceMeshes(*frame);
 }
 
+void recordBuiltPacket(HookContext& h, const char* aBuilder, const u32 (&aArgs)[4]) {
+    const PacketBuilder made = packetBuilderFor(aBuilder);
+    h.builderCalls[aBuilder]++;
+    if (!made.takesPacket) return;
+    const u32 packet = aArgs[made.argument];
+    if (!packet) return;
+    h.packetTypes[packet] = made.type;
+    if (made.trailing != PacketType::Unknown) h.packetTypes[packet + sdfQwordBytes] = made.trailing;
+}
+
+void recordReturnedPacket(HookContext& h, const char* aBuilder, u32 aPacket) {
+    const PacketBuilder made = packetBuilderFor(aBuilder);
+    if (made.returnsPacket && aPacket) h.packetTypes[aPacket] = made.type;
+}
+
 void censusFrame(HookContext& h, u32 aTag) {
     // Packet buffers are reused every other frame, so a type is only good for the frame that
     // recorded it.
@@ -169,6 +184,10 @@ void censusFrame(HookContext& h, u32 aTag) {
     } reset{h.packetTypes};
     if (!h.config->dumpChainCensus) return;
 
+    for (const char* global : {"sdf3DPrimIdentityTm", "vu1MicroPacket"}) {
+        const u32 at = pcsx2hook_find_symbol(h.runtime, global);
+        if (at) h.packetTypes[at] = packetTypeForGlobal(global);
+    }
     // sdfCorePacketGen builds these, and the frame builder already pairs each with its link.
     for (const u32 link : h.frames.getGeneratedLinks()) {
         if (link) h.packetTypes[link] = PacketType::MeshGenerated;

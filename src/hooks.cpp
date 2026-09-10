@@ -720,33 +720,23 @@ int dmaSendHook(pcsx2hook_regs* regs, void* user) {
     return PCSX2HOOK_CONTINUE;
 }
 
-/// Records what a packet is, at the builder that makes it. Which argument holds the packet comes
-/// from the engine's own declaration, since it is argument 0 for some and argument 2 for others.
+/// A packet builder. Which argument holds the packet depends on the builder.
 int packetTypeHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
 
-    const char* builder = h.symbols.getFunction(c.getPc());
-    const PacketBuilder made = packetBuilderFor(builder);
+    const u32 args[4] = {c.getArg(0), c.getArg(1), c.getArg(2), c.getArg(3)};
 
-    h.builderCalls[builder]++;
-    if (!made.takesPacket) return PCSX2HOOK_CONTINUE;
-    const u32 aPacket = c.getArg(made.argument);
-    if (!aPacket) return PCSX2HOOK_CONTINUE;
-    h.packetTypes[aPacket] = made.type;
-    if (made.trailing != PacketType::Unknown) h.packetTypes[aPacket + sdfQwordBytes] = made.trailing;
+    recordBuiltPacket(h, h.symbols.getFunction(c.getPc()), args);
     return PCSX2HOOK_CONTINUE;
 }
 
-/// For the builders that return their packet rather than take one.
+/// A packet builder that returns its packet.
 void packetTypePost(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
 
-    const PacketBuilder made = packetBuilderFor(h.symbols.getFunction(c.getPc()));
-    const u32 packet = c.getResult();
-
-    if (made.returnsPacket && packet) h.packetTypes[packet] = made.type;
+    recordReturnedPacket(h, h.symbols.getFunction(c.getPc()), c.getResult());
 }
 
 int traceEntryHook(pcsx2hook_regs* regs, void* user) {
@@ -892,9 +882,9 @@ constexpr Entry kGameEntries[] = {
     {"fclDrawSpriteAngleCore", &traceEntryHook, nullptr},
     {"itfMiscDrawSpritePrim", &traceEntryHook, nullptr},
     {"drawSprite3D", &drawSprite3DHook, nullptr},
-    {"sdf3DPrimMakePoly", &sdf3DPrimMakePolyHook, nullptr},
+    {"sdf3DPrimMakePoly", &sdf3DPrimMakePolyHook, &packetTypePost},
     // The effect build of the same function, reading the same descriptor field for field.
-    {"effPkt3DPrimMakePoly", &sdf3DPrimMakePolyHook, nullptr},
+    {"effPkt3DPrimMakePoly", &sdf3DPrimMakePolyHook, &packetTypePost},
     {"itfMiscDrawSpritePrim2", &traceEntryHook, nullptr},
     {"itfMiscDrawSpritePlanePrim", &traceEntryHook, nullptr},
     {"itfMiscDrawRectanglePrim", &traceEntryHook, nullptr},

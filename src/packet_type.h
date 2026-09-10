@@ -23,6 +23,17 @@ enum class PacketType : u8 {
     MeshStream,
     MeshGenerated,
     DrawParams,
+    PolyStream,
+    VuMicrocode,
+    Sprite,
+    Glyph,
+    Primitive2D,
+    TestState,
+    AlphaState,
+    TexaState,
+    TexBind,
+    ZClear,
+    Fade,
     PacketHeader,
     Terminator,
     DrawEnv,
@@ -59,6 +70,17 @@ constexpr const char* packetTypeName(PacketType type) {
         case PacketType::MeshStream: return "meshStream";
         case PacketType::MeshGenerated: return "meshGenerated";
         case PacketType::DrawParams: return "drawParams";
+        case PacketType::PolyStream: return "polyStream";
+        case PacketType::VuMicrocode: return "vuMicrocode";
+        case PacketType::Sprite: return "sprite";
+        case PacketType::Glyph: return "glyph";
+        case PacketType::Primitive2D: return "primitive2D";
+        case PacketType::TestState: return "testState";
+        case PacketType::AlphaState: return "alphaState";
+        case PacketType::TexaState: return "texaState";
+        case PacketType::TexBind: return "texBind";
+        case PacketType::ZClear: return "zClear";
+        case PacketType::Fade: return "fade";
         case PacketType::PacketHeader: return "packetHeader";
         case PacketType::Terminator: return "terminator";
         case PacketType::DrawEnv: return "drawEnv";
@@ -100,24 +122,23 @@ struct PacketBuilder {
 
 PacketBuilder packetBuilderFor(const char* symbol);
 
-/// Producers that build their packet inline, so no builder function exists to hook and the call
-/// that linked it is what names it. Unknown for everything else.
-PacketType packetTypeForProducer(const char* symbol);
 
 /// A packet named by its own contents, for the ones a savestate inherits from before the hooks
 /// attached and whose builder call can never be seen. Inference, so it is the last resort and the
 /// census counts it apart from what the engine told us.
 PacketType packetTypeForShape(u32 aData, u32 aQwc);
 
-/// The call that linked a packet, where that call has one purpose. sdfDrawTagLinkCall has a single
-/// caller in the whole game and sdfDrawTagLink2 six, so what links a packet often says what it is
-/// where the packet itself does not.
+/// The function a link hook's $ra names, where that function has exactly one link site and no
+/// callee that tail-calls one, so everything linked from it is one kind of packet.
 PacketType packetTypeForLinker(const char* symbol);
+
+/// The engine globals a packet can reference outright, such as sdf3DPrimIdentityTm.
+PacketType packetTypeForGlobal(const char* symbol);
 
 /// How a packet's type was settled. Everything but Payload identifies a packet; Payload
 /// merely describes its encoding, which says nothing about what the packet means, so census.py
 /// counts it as unidentified.
-enum class TypedBy : u8 { Nothing, Payload, Builder, Linker, Container, Producer, Shape };
+enum class TypedBy : u8 { Nothing, Payload, Builder, Linker, Container, Shape };
 
 constexpr const char* typedByName(TypedBy how) {
     switch (how) {
@@ -126,7 +147,6 @@ constexpr const char* typedByName(TypedBy how) {
         case TypedBy::Builder: return "builder";
         case TypedBy::Linker: return "linker";
         case TypedBy::Container: return "container";
-        case TypedBy::Producer: return "producer";
         case TypedBy::Shape: return "shape";
     }
     return "invalid";

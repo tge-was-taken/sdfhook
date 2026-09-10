@@ -54,6 +54,10 @@ PacketBuilder packetBuilderFor(const char* symbol) {
     if (std::strcmp(symbol, "sdfModelNewPacketHeader") == 0) {
         return {PacketType::PacketHeader, 0, false, true};
     }
+    if (std::strcmp(symbol, "sdf3DPrimMakePoly") == 0 ||
+        std::strcmp(symbol, "effPkt3DPrimMakePoly") == 0) {
+        return {PacketType::PolyStream, 0, false, true};
+    }
     // Handed no packet: sdfMatUpdatePacket takes the material, MakeLightPacket a unit handle,
     // sdfTexMakeGIFPacket a texture handle, sdf3DPrimLinkMat and sdf3DPrimLinkTm only link.
     return {};
@@ -64,21 +68,35 @@ PacketType packetTypeForLinker(const char* symbol) {
         const char* symbol;
         PacketType type;
     };
-    // Each of these links one kind of packet and nothing else, read off the call sites of the five
-    // sdfDrawTagLink* entry points.
+    // One sdfDrawTagLink* site each and no callee that tail-calls one, checked over the IDB. A
+    // function that tail-calls its link (sdf3DPrimLinkMat, sdfGrLinkDrawFrameTex) never shows up
+    // here, since $ra names its caller.
     static constexpr Entry kLinkers[] = {
-        {"sdf3DPrimLinkMat", PacketType::Material},
-        {"sdf3DPrimLinkResetTm", PacketType::Transform},
-        {"sdf3DLinkInitPacket", PacketType::DrawEnv},
-        {"sdfGrLinkDispFrameTex", PacketType::FrameTex},
-        {"sdfGrLinkDrawFrameTex", PacketType::FrameTex},
+        {"DrwSprite2D", PacketType::Sprite},
+        {"DrwSprite2DF", PacketType::Sprite},
+        {"fclDrawSpriteCore", PacketType::Sprite},
+        {"nbPnlSprite", PacketType::Sprite},
+        {"cmpDrawSprite", PacketType::Sprite},
+        {"cmpDrawSprite2", PacketType::Sprite},
+        {"frCreateDrawFontPacket_20550848", PacketType::Glyph},
+        {"aDrawBoxG", PacketType::Primitive2D},
+        {"aDrawBoxF", PacketType::Primitive2D},
+        {"aDrawBoxF_Direct", PacketType::Primitive2D},
+        {"cmpDrawBoxG", PacketType::Primitive2D},
+        {"cmpDrawTriG", PacketType::Primitive2D},
+        {"rsetTest", PacketType::TestState},
+        {"nbPnl_rsetTest", PacketType::TestState},
+        {"rsetAlpha", PacketType::AlphaState},
+        {"nbPnl_rsetAlpha", PacketType::AlphaState},
+        {"rsetTexa", PacketType::TexaState},
+        {"sdf2DLinkTexPacket", PacketType::TexBind},
+        {"sdfModelSetDrawEnv", PacketType::DrawEnv},
+        {"dds3LinkZClearDrawTag", PacketType::ZClear},
+        {"dds3DrawFade", PacketType::Fade},
         {"rsetFrameMaskRgbOn", PacketType::FrameMask},
         {"rsetFrameMaskRgbOff", PacketType::FrameMask},
         {"cmpDisableRGB", PacketType::FrameMask},
         {"sdfModelLinkShapedDrawPacket", PacketType::MeshShaped},
-        {"sdfLinkStoreImage", PacketType::TextureUpload},
-        {"sdfLinkStoreFrameImage", PacketType::TextureUpload},
-        {"sdfLinkLoadImage", PacketType::TextureUpload},
     };
     for (const Entry& entry : kLinkers) {
         if (std::strcmp(entry.symbol, symbol) == 0) return entry.type;
@@ -86,14 +104,10 @@ PacketType packetTypeForLinker(const char* symbol) {
     return PacketType::Unknown;
 }
 
-PacketType packetTypeForProducer(const char* symbol) {
-    // Each links an 8-quadword block whose leading words match sdf3DPrimSetTmPacket's output
-    // exactly, so what they inline is the transform packet.
-    static constexpr const char* kInlineTransform[] = {"fldDrawPoly3", "fldSdwDraw",
-                                                       "dds3TrackPolyLinkOt"};
-    for (const char* name : kInlineTransform) {
-        if (std::strcmp(name, symbol) == 0) return PacketType::Transform;
-    }
+PacketType packetTypeForGlobal(const char* symbol) {
+    // sdf3DPrimLinkResetTm references the identity matrix, sdf3DLinkInitPacket the VU1 microcode.
+    if (std::strcmp(symbol, "sdf3DPrimIdentityTm") == 0) return PacketType::Transform;
+    if (std::strcmp(symbol, "vu1MicroPacket") == 0) return PacketType::VuMicrocode;
     return PacketType::Unknown;
 }
 

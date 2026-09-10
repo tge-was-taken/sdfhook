@@ -183,15 +183,9 @@ PacketType classify(u32 aPacket, u32 aData, u32 aQwc, const char* aProducer,
         return PacketType::MeshStream;
     }
 
-    // The producer and the shape rules only apply where the payload is opaque. A producer links
-    // several kinds of packet, so letting it name a VIF stream would type the stream as whatever
-    // else that producer also builds.
+    // Inference by shape only applies where the payload is opaque.
     const PacketType encoding = classifySelf(aData, aQwc);
     if (encoding == PacketType::Unknown) {
-        *aHow = TypedBy::Producer;
-        const PacketType byProducer = packetTypeForProducer(aProducer);
-        if (byProducer != PacketType::Unknown) return byProducer;
-
         *aHow = TypedBy::Shape;
         const PacketType byShape = packetTypeForShape(aData, aQwc);
         if (byShape != PacketType::Unknown) return byShape;
