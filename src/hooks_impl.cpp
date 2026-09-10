@@ -92,6 +92,9 @@ private:
     std::unordered_map<u32, std::vector<DrawRef>> mByPacket;
     std::unordered_map<u32, LinkedPacket> mLinked;
     GsRegisterReplay mRegs;
+
+    /// TEX0 as the last 2D texture packet left it, which a sprite naming no texture samples.
+    TexHandle mBoundTexture;
     u64 mPlaced = 0;
 };
 
@@ -162,6 +165,12 @@ void FrameWalk::place(u32 packet) {
         h.coverage.placedDraws[producerOf(mFrame, ref)]++;
         if (ref.kind == DrawRef::Kind::Sprite) {
             DrawSprite& sprite = mFrame.sprites[ref.index];
+            if (sprite.boundTexture) {
+                sprite.texHandle = h.textures.getHandle(mBoundTexture, &mFrame);
+                if (mBoundTexture.addr && !sprite.texHandle.addr) {
+                    h.coverage.unresolvedTextures[sprite.producer]++;
+                }
+            }
             // Without ABE in its PRIM the GS never reads ALPHA, which the producer knows.
             if (sprite.alpha != GsAlpha::Opaque) sprite.alpha = GsAlpha(u32(gs.alpha & 0xFF));
             sprite.test = u32(gs.test);
@@ -245,6 +254,8 @@ void FrameWalk::run(u32 aTag) {
 
         const sdfGsState_t was = mRegs.getContext(0);
         const bool stateOnly = mRegs.apply(at);
+        const auto binds = h.texturePackets.find(at);
+        if (binds != h.texturePackets.end()) mBoundTexture = TexHandle{binds->second};
         if (h.config->dumpDrawEnv) dumpStateChange(was, at);
 
         const u64 placedBefore = mPlaced;
@@ -318,6 +329,14 @@ void recordBuiltPacket(HookContext& h, const char* aBuilder, const u32 (&aArgs)[
     if (made.trailing != PacketType::Unknown) h.packetTypes[packet + sdfQwordBytes] = made.trailing;
 }
 
+void sdf2DMakeTexPacket(HookContext& h, u32 aPacket, TexHandle aTexHndl, u32 aCtx) {
+    if (aCtx) {
+        reportUnsupported("2D texture packet for GS context 2", aCtx);
+        return;
+    }
+    h.texturePackets[aPacket] = aTexHndl.addr;
+}
+
 void recordReturnedPacket(HookContext& h, const char* aBuilder, u32 aPacket) {
     const PacketBuilder made = packetBuilderFor(aBuilder);
     if (made.returnsPacket && aPacket) h.packetTypes[aPacket] = made.type;
@@ -327,13 +346,13 @@ void censusFrame(HookContext& h, u32 aTag) {
     // Packet buffers are reused every other frame, so a type is only good for the frame that
     // recorded it.
     struct Reset {
-        std::unordered_map<u32, PacketType>& types;
-        std::vector<LinkedPacket>& linked;
+        HookContext& h;
         ~Reset() {
-            types.clear();
-            linked.clear();
+            h.packetTypes.clear();
+            h.texturePackets.clear();
+            h.frames.getPackets().clear();
         }
-    } reset{h.packetTypes, h.frames.getPackets()};
+    } reset{h};
     if (!h.config->dumpChainCensus) return;
 
     for (const char* global : {"sdf3DPrimIdentityTm", "vu1MicroPacket"}) {
@@ -368,8 +387,7 @@ void submitSprite(HookContext& h, const char* producer, f32 x, f32 y, f32 w, f32
                 f32 uw, f32 vh, Rgba color, u32 texFileHandle) {
     const ProducerDraws draws(h.frames);
     Frame* frame = h.frames.getFrame();
-    // A producer naming no texture draws with the one sdf2DLinkTexPacket bound ahead of it.
-    const TexHandle named{texFileHandle ? texFileHandle : h.state.texture};
+    const TexHandle named{texFileHandle};
     const TexHandle texHandle = h.textures.getHandle(named, frame);
     // A named texture we never decoded draws flat. Counted by producer, so the gap names it.
     if (named.addr && !texHandle.addr) h.coverage.unresolvedTextures[producer]++;
@@ -379,6 +397,8 @@ void submitSprite(HookContext& h, const char* producer, f32 x, f32 y, f32 w, f32
     sprite.producer = producer;
     sprite.setColor(color);
     sprite.texHandle = texHandle;
+    // A producer naming no texture draws with the one sdf2DLinkTexPacket bound ahead of it.
+    sprite.boundTexture = !named.addr;
     frame->addSprite(sprite);
 }
 
@@ -499,7 +519,7 @@ void sdfPrimLinkFt4(HookContext& h, const u32 aColor, const u32 aPrim, const s32
     place(1, aX1, aY1, aU1, aV1);
     place(3, aX2, aY2, aU2, aV2);
     place(2, aX3, aY3, aU3, aV3);
-    sprite.texHandle = h.textures.getHandle(TexHandle{h.state.texture}, frame);
+    sprite.boundTexture = true;
     sprite.alpha = sdfPrimAbe(aPrim) ? GsAlpha::Blend : GsAlpha::Opaque;
     sprite.producer = "sdfPrimLinkFt4";
     frame->addSprite(sprite);

@@ -80,10 +80,19 @@ int spriteFloatHook(pcsx2hook_regs* regs, void* user) {
 }
 
 
-int sdf2DLinkTexPacketHook(pcsx2hook_regs* regs, void* user) {
+/// sdf2DMakeTexPacket(aPacket, aTexHndl, aCtx) writes TEX1, TEX0 and CLAMP for the handle.
+int sdf2DMakeTexPacketHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
-    const u32 texFileHandle = c.getArg(1);
-    static_cast<HookContext*>(user)->state.texture = texFileHandle;
+    HookContext& h = *static_cast<HookContext*>(user);
+
+    const u32 aPacket = c.getArg(0);
+    const TexHandle aTexHndl{c.getArg(1)};
+    const u32 aCtx = c.getArg(2);
+
+    h.trace->onPrimEntry("sdf2DMakeTexPacket", aPacket);
+    const u32 args[4] = {aPacket, aTexHndl.addr, aCtx, 0};
+    recordBuiltPacket(h, "sdf2DMakeTexPacket", args);
+    sdf2DMakeTexPacket(h, aPacket, aTexHndl, aCtx);
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -764,8 +773,7 @@ constexpr Entry kEngineEntries[] = {
     {"sdfGrSetClearPacket", &sdfGrSetClearPacketHook, nullptr},
     {"sdf2DAllocSprite", &observeHook, &packetTypePost},
     {"sdf2DMakeStdPacket", &packetTypeTraceHook, nullptr},
-    {"sdf2DMakeTexPacket", &packetTypeTraceHook, nullptr},
-    {"sdf2DLinkTexPacket", &sdf2DLinkTexPacketHook, nullptr},
+    {"sdf2DMakeTexPacket", &sdf2DMakeTexPacketHook, nullptr},
     {"sdfPrimLinkF3", &observeHook, nullptr},
     {"sdfPrimLinkF4", &observeHook, nullptr},
     {"sdfPrimLinkFt3", &observeHook, nullptr},

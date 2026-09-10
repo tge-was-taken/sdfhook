@@ -61,6 +61,10 @@ struct DrawSprite {
     u32 linkAddr = 0;
     TexHandle texHandle;
 
+    /// The producer named no texture, so the sprite samples whatever the chain has bound at its
+    /// packet.
+    bool boundTexture = false;
+
     /// Opaque when the producer's PRIM has no ABE, since the GS then never reads ALPHA. Otherwise
     /// the ALPHA the chain has in force at the sprite's packet.
     GsAlpha alpha = GsAlpha::Blend;

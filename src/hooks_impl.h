@@ -21,6 +21,9 @@ void censusFrame(HookContext& h, u32 aTag);
 /// A builder ran, handed its four argument registers. Records the packet it makes by address.
 void recordBuiltPacket(HookContext& h, const char* aBuilder, const u32 (&aArgs)[4]);
 
+/// sdf2DMakeTexPacket(aPacket, aTexHndl, aCtx): the texture a 2D texture packet binds.
+void sdf2DMakeTexPacket(HookContext& h, u32 aPacket, TexHandle aTexHndl, u32 aCtx);
+
 /// A builder returned its packet.
 void recordReturnedPacket(HookContext& h, const char* aBuilder, u32 aPacket);
 

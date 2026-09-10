@@ -105,8 +105,13 @@ force there. The renderer draws `order` as it stands, switching pass run by run.
   draws by producer; the expected losses are `sdfCorePacketGen` meshes the engine never links.
 - **Unhandled means transmitted and unrendered**: a packet of a draw-carrying type with nothing placed
   at it, at its REF target, or in the chain it calls. That is the `[todo]` ranking.
-- **The chain's state beat the call-time state where they disagreed**: two-sided polys took
-  `rsetTest`'s 0x33801 at the call, and the GS trace has no batch under it.
+- **GS state is the chain's, never the call's.** ALPHA, TEST and the FRAME mask per context, and the
+  texture a 2D texture packet binds, are replayed at each draw's packet; a producer says only whether
+  its PRIM blends and which texture it names. Two-sided polys took `rsetTest`'s 0x33801 at the call,
+  and the GS trace has no batch under it.
+- **A GIF tag's writes can arrive in the next DMA transfer.** `sdfGrSetRefGifPacket` sends the A+D
+  tag in its own packet and REFs the writes, which is how the frame-mask pair reaches FRAME. A
+  transfer is state only if no write kicks a vertex: `dds3DrawFade` sends its quad as A+D.
 
 ## Naming and attribution
 

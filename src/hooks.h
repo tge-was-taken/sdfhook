@@ -264,6 +264,10 @@ struct HookContext {
     /// processed without running the hardware that consumes it, so this has to be exhaustive.
     std::unordered_map<u32, PacketType> packetTypes;
 
+    /// The texture each 2D texture packet binds, by the packet's address, so the chain walk knows
+    /// what a sprite that names none samples.
+    std::unordered_map<u32, u32> texturePackets;
+
 
     /// How often each builder ran, so a hook that claims nothing can be told from one that never
     /// fires.
