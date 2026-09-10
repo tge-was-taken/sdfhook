@@ -42,8 +42,29 @@ struct GsContexts {
     sdfGsState_t context[2];
 };
 
-/// Applies the A+D register writes a packet opens with to the running GS state.
-/// @return Whether they are the whole packet: pure register writes draw nothing.
-bool applyGsRegisterWrites(u32 packetAddr, GsContexts& state);
+/// The A+D register writes a chain carries, replayed transfer by transfer in transmit order. A
+/// GIF tag's writes can arrive in a later transfer than the tag: sdfGrSetRefGifPacket sends the
+/// tag in its own packet and REFs the writes.
+class GsRegisterReplay {
+public:
+    /// @return Whether the transfer held A+D tags and writes and nothing else, none of them to a
+    /// register that kicks a vertex: the fade quad sends its geometry as A+D.
+    bool apply(u32 packetAddr);
+
+    const sdfGsState_t& getContext(u32 context) const { return mState.context[context]; }
+
+private:
+    /// @return Whether a write kicked a vertex.
+    bool write(u32 at, u32 count);
+
+    GsContexts mState;
+
+    /// Writes a tag announced that its own transfer did not hold. Only the next transfer carries
+    /// them on.
+    u32 mPending = 0;
+};
+
+/// Whether a packet is A+D state writes and nothing else, judged on its own.
+bool isRegisterWrites(u32 packetAddr);
 
 }  // namespace sdfhook

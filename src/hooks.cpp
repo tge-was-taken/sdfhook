@@ -87,45 +87,6 @@ int sdf2DLinkTexPacketHook(pcsx2hook_regs* regs, void* user) {
     return PCSX2HOOK_CONTINUE;
 }
 
-int rsetAlphaHook(pcsx2hook_regs* regs, void* user) {
-    Context c{regs};
-    const u32 mode = c.getArg(0);
-    static_cast<HookContext*>(user)->state.alpha = alphaForMode(mode);
-    return PCSX2HOOK_CONTINUE;
-}
-
-/// rsetFrameMaskRgbOn/Off, still ooyTestRGBMaskOn/Off in the map. They bracket the silhouette
-/// pass in call order, where our walk runs, so the flag needs no transmit-order settling.
-/// @fn rsetFrameMaskRgbOn
-/// @note SLUS-20911 0x0012A3F0
-int frameMaskOnHook(pcsx2hook_regs*, void* user) {
-    static_cast<HookContext*>(user)->state.frameMask = sdfFrameMaskRgb;
-    return PCSX2HOOK_CONTINUE;
-}
-
-int frameMaskOffHook(pcsx2hook_regs*, void* user) {
-    static_cast<HookContext*>(user)->state.frameMask = 0;
-    return PCSX2HOOK_CONTINUE;
-}
-
-// rsetTest(ate, atst, aref, afail, date, datm, zte, ztst), assembled the way the engine does.
-int rsetTestHook(pcsx2hook_regs* regs, void* user) {
-    HookContext& h = *static_cast<HookContext*>(user);
-    Context c{regs};
-    const u32 ate = c.getArg(0);
-    const u32 atst = c.getArg(1);
-    const u32 aref = c.getArg(2);
-    const u32 afail = c.getArg(3);
-    const u32 date = c.getArg(4);
-    const u32 datm = c.getArg(5);
-    const u32 ztst = c.getArg(7);
-
-    rsetTest(h, ate, atst, aref, afail, date, datm, ztst);
-    return PCSX2HOOK_CONTINUE;
-}
-
-
-
 // aDrawBoxG(x, y, w, h, four corner colors): a trifan quad, in the draw space's own vertical
 // scale rather than the doubled one the sprite calls use.
 int aDrawBoxGHook(pcsx2hook_regs* regs, void* user) {
@@ -281,9 +242,8 @@ int fclDrawSpriteCoreHook(pcsx2hook_regs* regs, void* user) {
     const u32 pCol = c.getArg(4);
     const u32 pSprite = c.getArg(5);
     const u32 FlipFlag = c.getArg(6);
-    const u32 AlphaFlag = c.getArg(7);
 
-    fclDrawSpriteCore(h, X, Y, W, H, pCol, pSprite, FlipFlag, AlphaFlag);
+    fclDrawSpriteCore(h, X, Y, W, H, pCol, pSprite, FlipFlag);
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -826,13 +786,7 @@ constexpr Entry kGameEntries[] = {
     {"frTranslateUserData", &frTranslateUserDataHook, &frTranslateUserDataPost},
     {"frCopyFontClutToVram", &frCopyFontClutToVramHook, nullptr},
     {"DrwSprite2D", &spriteHook, nullptr},
-    {"rsetAlpha", &rsetAlphaHook, nullptr},
-    {"rsetTest", &rsetTestHook, nullptr},
     {"fldDrawPoly3", &fldDrawPoly3Hook, nullptr},
-    {"rsetFrameMaskRgbOn", &frameMaskOnHook, nullptr},
-    {"rsetFrameMaskRgbOff", &frameMaskOffHook, nullptr},
-    // Picks the table the 2D draws after it are filed into, which the chain walk sees as order.
-    {"rsetOtOfs", &traceEntryHook, nullptr},
     {"rsetTexa", &traceEntryHook, nullptr},
     {"frCreateDrawFontPacket_20550848", &frCreateDrawFontPacketHook, nullptr},
     {"aDrawBoxG", &aDrawBoxGHook, nullptr},
@@ -972,7 +926,7 @@ void installHooks(HookContext& context, Trace& trace, RenderThread* render) {
     context.symbols.attach(runtime);
     context.frames.attach(render, &context.textures, &trace);
     context.textures.attach(runtime, *context.config);
-    context.model.attach(runtime, *context.config, &context.textures, &trace, &context.state);
+    context.model.attach(runtime, *context.config, &context.textures, &trace);
 
     usize installed = 0;
     usize unnamed = 0;

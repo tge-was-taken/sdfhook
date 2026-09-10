@@ -89,7 +89,7 @@ struct Config {
     /// packet, and cost 24 points as opaque grey.
     bool drawShadows = false;
 
-    /// Meshes keep the ALPHA and TEST of their ordering table instead of the chain's.
+    /// Meshes keep the ALPHA, TEST and FRAME mask of their ordering table instead of the chain's.
     bool noTransmitState = false;
 
     /// Without a keypress, for scripting and for checking a capture resumes.

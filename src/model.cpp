@@ -307,8 +307,7 @@ void ModelTrace::report() const {
 }
 
 void ModelParser::attach(pcsx2hook_ctx* runtime, const Config& config, TextureCache* textures,
-                         Trace* trace, const RenderState* state) {
-    mState = state;
+                         Trace* trace) {
     mConfig = &config;
     mRuntime = runtime;
     mTextures = textures;
@@ -493,7 +492,6 @@ bool ModelParser::readVifStreamMesh(u32 at, u32 end, const NodeDraw& draw, sdfMa
     mesh.lighting = mLighting;
     mesh.fog = mFog;
     mesh.gs = sdfGsStateForOt(mesh.otIndex);
-    mesh.gs.frameMask = mState ? mState->frameMask : 0;
     mesh.reverseFacing = draw.reverse;
     mesh.worldGeometry = true;
     mesh.packetType = sdfPacketDmaCall;
@@ -737,7 +735,6 @@ bool ModelParser::finishMesh(guest_ref<sdfModelRootNode_t> root,
     mesh.lighting = mLighting;
     mesh.fog = mFog;
     mesh.gs = sdfGsStateForOt(mesh.otIndex);
-    mesh.gs.frameMask = mState ? mState->frameMask : 0;
     mesh.linkIndex = mCurrentLink;
     mesh.producer = "sdfCorePacketGen";
     mesh.lit = (packet.prim.packetBits & sdfCorePacketNormals) != 0;

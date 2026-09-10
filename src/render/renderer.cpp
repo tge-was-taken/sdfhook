@@ -1015,6 +1015,9 @@ void Renderer::drawSprites(const Frame& frame, const std::vector<u32>& indices) 
                                            v.color.a / 255.0f});
         }
         applyBlend(sprite.alpha);
+        const u64 mask = sprite.frameMask;
+        glColorMask((mask & 0x0000FF) != 0x0000FF, (mask & 0x00FF00) != 0x00FF00,
+                    (mask & 0xFF0000) != 0xFF0000, (mask & 0xFF000000u) != 0xFF000000u);
         glUniform1i(textured, hasTexture ? 1 : 0);
         if (hasTexture) {
             glActiveTexture(GL_TEXTURE0);
@@ -1025,6 +1028,7 @@ void Renderer::drawSprites(const Frame& frame, const std::vector<u32>& indices) 
                      GL_STREAM_DRAW);
         glDrawArrays(GL_TRIANGLES, 0, GLsizei(mVerts.size()));
     }
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 }
 
 std::vector<u8> Renderer::readPixels(int* width, int* height) const {

@@ -5,15 +5,9 @@
 
 namespace sdfhook {
 
-/// The GS state the rset* calls put in force, which a draw is submitted under.
+/// What producers read at call time that no packet of theirs carries. GS state is not here: the
+/// chain walk replays it at each draw's packet.
 struct RenderState {
-    GsAlpha alpha = GsAlpha::Blend;  // what rsetAlpha defaults to
-    u32 test = 0;
-
-    /// FRAME's write mask while the frame-mask pair is open: the silhouette pass draws the model
-    /// again with RGB masked, to lay its shape into the alpha the bloom reads.
-    u64 frameMask = 0;
-
     /// Bound by sdf2DLinkTexPacket ahead of the draw that uses it, which is how a producer that
     /// takes no texture argument still names one.
     u32 texture = 0;

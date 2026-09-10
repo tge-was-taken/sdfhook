@@ -91,7 +91,7 @@ private:
     GifParser mParser;
     std::unordered_map<u32, std::vector<DrawRef>> mByPacket;
     std::unordered_map<u32, LinkedPacket> mLinked;
-    GsContexts mGs;
+    GsRegisterReplay mRegs;
     u64 mPlaced = 0;
 };
 
@@ -108,8 +108,7 @@ PacketType FrameWalk::typeOf(const LinkedPacket& packet) const {
 u32 FrameWalk::claimedPacket(const FrameBuilder::DrawClaim& claim) const {
     for (const LinkedPacket& packet : claim.packets) {
         if (!carriesDraw(typeOf(packet))) continue;
-        GsContexts scratch;
-        if (applyGsRegisterWrites(packet.addr, scratch)) continue;
+        if (isRegisterWrites(packet.addr)) continue;
         return packet.addr;
     }
     return 0;
@@ -156,23 +155,20 @@ void FrameWalk::keyDraws() {
 void FrameWalk::place(u32 packet) {
     const auto found = mByPacket.find(packet);
     if (found == mByPacket.end()) return;
-    const sdfGsState_t& gs = mGs.context[0];
+    const sdfGsState_t& gs = mRegs.getContext(0);
     for (const DrawRef ref : found->second) {
         mFrame.order.push_back(ref);
         mPlaced++;
         h.coverage.placedDraws[producerOf(mFrame, ref)]++;
-        if (h.config->noTransmitState) continue;
         if (ref.kind == DrawRef::Kind::Sprite) {
             DrawSprite& sprite = mFrame.sprites[ref.index];
             // Without ABE in its PRIM the GS never reads ALPHA, which the producer knows.
             if (sprite.alpha != GsAlpha::Opaque) sprite.alpha = GsAlpha(u32(gs.alpha & 0xFF));
             sprite.test = u32(gs.test);
+            sprite.frameMask = gs.frameMask;
             continue;
         }
-        DrawMesh& mesh = mFrame.meshes[ref.index];
-        const u64 mask = mesh.gs.frameMask;
-        mesh.gs = gs;
-        mesh.gs.frameMask = mask;
+        if (!h.config->noTransmitState) mFrame.meshes[ref.index].gs = gs;
     }
     mByPacket.erase(found);
 }
@@ -181,7 +177,7 @@ void FrameWalk::place(u32 packet) {
 /// chain sends it, under the state in force there.
 bool FrameWalk::readShadow(u32 at, const sdfDmaTag_t& tag) {
     const u32 data = at + sdfQwordBytes;
-    if (!h.modelHooks.fldSdwDraw(data, data + sdfQwordBytes * tag.qwc, mGs.context[0], &mFrame)) {
+    if (!h.modelHooks.fldSdwDraw(data, data + sdfQwordBytes * tag.qwc, mRegs.getContext(0), &mFrame)) {
         h.coverage.shadowRejects++;
         return false;
     }
@@ -216,7 +212,7 @@ void FrameWalk::account(const LinkedPacket& packet, bool stateOnly, bool drew) {
 }
 
 void FrameWalk::dumpStateChange(const sdfGsState_t& was, u32 at) {
-    const sdfGsState_t& gs = mGs.context[0];
+    const sdfGsState_t& gs = mRegs.getContext(0);
     if (gs.alpha == was.alpha && gs.test == was.test && gs.frameMask == was.frameMask) return;
     const auto linked = mLinked.find(at);
     log.dump(JsonObject()
@@ -247,8 +243,8 @@ void FrameWalk::run(u32 aTag) {
         const u32 id = sdfDmaId(tag);
         const u32 addr = tag.addr & 0x0FFFFFFFu;
 
-        const sdfGsState_t was = mGs.context[0];
-        const bool stateOnly = applyGsRegisterWrites(at, mGs);
+        const sdfGsState_t was = mRegs.getContext(0);
+        const bool stateOnly = mRegs.apply(at);
         if (h.config->dumpDrawEnv) dumpStateChange(was, at);
 
         const u64 placedBefore = mPlaced;
@@ -380,40 +376,10 @@ void submitSprite(HookContext& h, const char* producer, f32 x, f32 y, f32 w, f32
     h.coverage.apiDraws++;
     if (!frame) return;
     DrawSprite sprite = DrawSprite::fromRect(x, y * 0.5f, w, height * 0.5f, u, v, u + uw, v + vh);
-    sprite.test = h.state.test;
     sprite.producer = producer;
     sprite.setColor(color);
     sprite.texHandle = texHandle;
-    sprite.alpha = h.state.alpha;
     frame->addSprite(sprite);
-}
-
-// rsetAlpha takes a mode rather than a register, and resolves it through this table.
-GsAlpha alphaForMode(u32 mode) {
-    switch (mode) {
-        case 1: return GsAlpha::Additive;
-        case 2:
-        case 6: return GsAlpha::ReverseSubtract;
-        case 3: return GsAlpha(0x84);
-        case 4: return GsAlpha(0x06);
-        case 5: return GsAlpha(0x89);
-        case 10: return GsAlpha(0x2A);
-        case 20: return GsAlpha(0x4A);
-        case 0:
-        case 7:
-        case 8:
-        case 9:
-        case 11:
-        case 12:
-        case 13:
-        case 14:
-        case 15:
-        case 16:
-        case 17:
-        case 18:
-        case 19: return GsAlpha::Blend;
-        default: reportUnsupported("rsetAlpha mode", mode); return GsAlpha::Blend;
-    }
 }
 
 // The frame already presented, put back over the screen at a fixed alpha or the caller's.
@@ -432,14 +398,6 @@ void submitFrameFeedback(HookContext& h, u8 alpha) {
     frame->addSprite(sprite);
 }
 
-// rsetTest(ate, atst, aref, afail, date, datm, zte, ztst), assembled the way the engine does.
-void rsetTest(HookContext& h, const u32 ate, const u32 atst, const u32 aref, const u32 afail,
-              const u32 date, const u32 datm, const u32 ztst) {
-    const u32 test = ate | (atst << 1) | (aref << 4) | (afail << 12) | (date << 14) |
-                     (datm << 15) | 0x10000u | (ztst << 17);
-    h.state.test = test;
-}
-
 // aDrawBoxG(x, y, w, h, four corner colors): a trifan quad, in the draw space's own vertical
 // scale rather than the doubled one the sprite calls use.
 void aDrawBoxG(HookContext& h, const s32 x, const s32 y, const s32 w, const s32 height,
@@ -456,8 +414,6 @@ void aDrawBoxG(HookContext& h, const s32 x, const s32 y, const s32 w, const s32 
     sprite.corner[1].color = Rgba{u8(r1), u8(g1), u8(b1), u8(a1)};
     sprite.corner[2].color = Rgba{u8(r2), u8(g2), u8(b2), u8(a2)};
     sprite.corner[3].color = Rgba{u8(r3), u8(g3), u8(b3), u8(a3)};
-    sprite.alpha = h.state.alpha;
-    sprite.test = h.state.test;
     sprite.producer = "aDrawBoxG";
     frame->addSprite(sprite);
 }
@@ -472,7 +428,6 @@ void aDrawBoxF(HookContext& h, const s32 x, const s32 y, const s32 w, const s32 
 
     DrawSprite sprite = DrawSprite::fromRect(f32(x), f32(y), f32(w), f32(height), 0, 0, 0, 0);
     sprite.setColor(Rgba{u8(r), u8(g), u8(b), u8(a)});
-    sprite.alpha = h.state.alpha;
     sprite.producer = "aDrawBoxF";
     frame->addSprite(sprite);
 }
@@ -493,9 +448,7 @@ void aDrawBoxF_Direct(HookContext& h, const s32 x0, const s32 y0, const s32 x1, 
     for (f32 y : edge) {
         DrawSprite sprite = DrawSprite::fromRect(left, y, right - left, 1.0f, 0, 0, 0, 0);
         sprite.setColor(Rgba{u8(r), u8(g), u8(b), u8(a)});
-        sprite.alpha = h.state.alpha;
-        sprite.test = h.state.test;
-            sprite.producer = "aDrawBoxF_Direct";
+                    sprite.producer = "aDrawBoxF_Direct";
         frame->addSprite(sprite);
     }
 }
@@ -521,7 +474,6 @@ void frCreateDrawFontPacket(HookContext& h, const s32 X, const s32 Y, const s32 
                                              f32(Height), uv(0), uv(1), uv(2), uv(3));
     sprite.setColor(color);
     sprite.texHandle = h.textures.getFontSheet(sheet.Width, frame);
-    sprite.alpha = h.state.alpha;
     sprite.producer = "frCreateDrawFontPacket";
     frame->addSprite(sprite);
 }
@@ -548,7 +500,7 @@ void sdfPrimLinkFt4(HookContext& h, const u32 aColor, const u32 aPrim, const s32
     place(3, aX2, aY2, aU2, aV2);
     place(2, aX3, aY3, aU3, aV3);
     sprite.texHandle = h.textures.getHandle(TexHandle{h.state.texture}, frame);
-    sprite.alpha = sdfPrimAbe(aPrim) ? h.state.alpha : GsAlpha::Opaque;
+    sprite.alpha = sdfPrimAbe(aPrim) ? GsAlpha::Blend : GsAlpha::Opaque;
     sprite.producer = "sdfPrimLinkFt4";
     frame->addSprite(sprite);
 }
@@ -572,7 +524,7 @@ void sdfPrimLinkG4(HookContext& h, const u32 aPrim, const s32 aX0, const s32 aY0
     place(1, aX1, aY1, aColor1);
     place(3, aX2, aY2, aColor2);
     place(2, aX3, aY3, aColor3);
-    sprite.alpha = sdfPrimAbe(aPrim) ? h.state.alpha : GsAlpha::Opaque;
+    sprite.alpha = sdfPrimAbe(aPrim) ? GsAlpha::Blend : GsAlpha::Opaque;
     sprite.producer = "sdfPrimLinkG4";
     frame->addSprite(sprite);
 }
@@ -580,7 +532,7 @@ void sdfPrimLinkG4(HookContext& h, const u32 aPrim, const s32 aX0, const s32 aY0
 // fclDrawSpriteCore(...). X and Y are 12.4 in the draw space; extents are pixels, H in the
 // doubled vertical scale.
 void fclDrawSpriteCore(HookContext& h, const s32 X, const s32 Y, const s32 W, const s32 H,
-                       const u32 pCol, const u32 pSprite, const u32 FlipFlag, const u32 AlphaFlag) {
+                       const u32 pCol, const u32 pSprite, const u32 FlipFlag) {
     const ProducerDraws draws(h.frames);
     h.coverage.apiDraws++;
     Frame* frame = h.frames.getFrame();
@@ -604,9 +556,6 @@ void fclDrawSpriteCore(HookContext& h, const s32 X, const s32 Y, const s32 W, co
         pCol ? u32Ptr_t{pCol}.valueOr() : u32Ptr_t{pSprite + u32(offsetof(fclSprite_t, Col))}.valueOr();
     sprite.setColor(Rgba::fromColorWord(colorWord));
     sprite.texHandle = h.textures.getHandle(sprite2d->TexHandle, frame);
-    sprite.alpha = AlphaFlag == 1   ? GsAlpha::Additive
-                   : AlphaFlag == 2 ? GsAlpha::ReverseSubtract
-                                    : GsAlpha::Blend;
     sprite.producer = "fclDrawSpriteCore";
     frame->addSprite(sprite);
 }
@@ -629,7 +578,6 @@ void cmpDrawBoxG(HookContext& h, const s32 x, const s32 y, const s32 w, const s3
         sprite.corner[kCorner[i]].color =
             Rgba::fromColorWord(u32Ptr_t{pCol + u32(i) * 4}.valueOr());
     }
-    sprite.alpha = h.state.alpha;
     sprite.producer = "cmpDrawBoxG";
     frame->addSprite(sprite);
 }
@@ -655,7 +603,6 @@ void cmpDrawTriG(HookContext& h, const u32 pX, const u32 pY, const u32 pCol) {
     }
     // A sprite carries four corners, so the last repeats and its triangle collapses.
     sprite.corner[3] = sprite.corner[2];
-    sprite.alpha = h.state.alpha;
     sprite.producer = "cmpDrawTriG";
     frame->addSprite(sprite);
 }

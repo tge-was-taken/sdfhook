@@ -615,7 +615,6 @@ void ModelHooks::drawSprite3D(TexHandle aTexHandle, Sprite3DPtr_t aSprite, Frame
     // Stamped alongside the state, or the row reports table 0 beside table 2's registers.
     mesh.otIndex = 2;
     mesh.gs = sdfGsStateForOt(mesh.otIndex);
-    mesh.gs.frameMask = mParser.mState ? mParser.mState->frameMask : 0;
     mesh.attrBits = sdfCoreAttrTextured | sdfCoreAttrBlend | sdfPrimTriangle;
     mesh.lit = false;
     mesh.packetType = sdfPacketGenerated;
@@ -682,21 +681,11 @@ void ModelHooks::sdf3DPrimMakePoly(sdf3DPrimPolyParmPtr_t aPoly, Frame* frame) {
     mesh.bones.push_back(identity);
     mesh.lighting = mParser.mLighting;
     mesh.fog = mParser.mFog;
+    // Its callers set their own ALPHA and TEST through rsetAlpha and rsetTest rather than taking an
+    // ordering table's pair, and the chain walk replaces this with what is in force at the packet.
     mesh.gs = sdfGsStateForOt(0);
-    // fldSdwDraw sets its own blend and test through rsetAlpha and rsetTest rather than taking an
-    // ordering table's pair, so the state in force at the call is the one this draw runs under.
-    if (mParser.mState) {
-        mesh.gs.frameMask = mParser.mState->frameMask;
-        mesh.gs.test = mParser.mState->test;
-    }
     // 0x2BAAF4: the prim word is the descriptor's own or'd with 0x68, which is IIP, FGE and ABE.
     mesh.attrBits = u16(aPoly->attr | 0x68);
-    const GsAlpha alpha = mParser.mState ? mParser.mState->alpha : GsAlpha::Blend;
-    if (alpha == GsAlpha::Opaque) {
-        mesh.attrBits = u16(mesh.attrBits & ~u16(sdfCoreAttrBlend));
-    } else {
-        mesh.gs.alpha = u64(alpha);
-    }
     mesh.color = Rgba::fromPacked(aPoly->color);
     mesh.lit = false;
     mesh.packetType = sdfPacketGenerated;
@@ -891,7 +880,6 @@ void ModelHooks::sdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Fram
         mesh.fog = mParser.mFog;
         mesh.otIndex = u8(otIndex);
         mesh.gs = sdfGsStateForOt(otIndex);
-        mesh.gs.frameMask = mParser.mState ? mParser.mState->frameMask : 0;
         mesh.attrBits = sdfCoreAttrTextured | sdfCoreAttrBlend | sdfPrimTriangle;
         mesh.lit = false;
         mesh.billboard = true;

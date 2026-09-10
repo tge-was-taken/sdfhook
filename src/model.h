@@ -6,7 +6,6 @@
 #include "pcsx2hook/pcsx2hook.h"
 #include "guest_ptr.h"
 #include "config.h"
-#include "render_state.h"
 #include "libsdf.h"
 #include "json.h"
 #include "render/frame.h"
@@ -177,8 +176,7 @@ public:
     friend class ModelHooks;
 
     void setHooks(ModelHooks* hooks) { mHooks = hooks; }
-    void attach(pcsx2hook_ctx* runtime, const Config& config, TextureCache* textures,
-                Trace* trace, const RenderState* state);
+    void attach(pcsx2hook_ctx* runtime, const Config& config, TextureCache* textures, Trace* trace);
 
     /// Says whether a producer hands world or projected coordinates. Magnitude alone cannot.
     /// @todo TODO.md V19: nothing calls it while that entry's remaining producers are unhooked.
@@ -243,7 +241,6 @@ private:
     TextureCache* mTextures = nullptr;
     const Config* mConfig = nullptr;
     Trace* mEvents = nullptr;
-    const RenderState* mState = nullptr;
     // The engine's own globals, resolved once from the symbol map and named for it.
     Matrix4Ptr_t mSdf3DScreenTm;
     guest_ptr<u32> mSdf3DSpecularTex;

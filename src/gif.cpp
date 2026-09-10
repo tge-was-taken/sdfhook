@@ -224,33 +224,58 @@ void GifParser::parse(u32 packetAddr) {
     }
 }
 
-bool applyGsRegisterWrites(u32 packetAddr, GsContexts& state) {
-    const sdfDmaTagPtr_t tag{packetAddr};
-    if (!tag) return false;
-
-    // A REF tag names its data elsewhere; anything else carries it straight after the tag.
-    const u32 at = sdfDmaIsRef(*tag) ? tag->addr : packetAddr + sdfQwordBytes;
-    const sdfGifTagPtr_t gif{at};
-    if (!gif) return false;
-    if (sdfGifFlg(*gif) != 0 || sdfGifNreg(*gif) != 1) return false;
-    if (sdfGifRegAt(gif->regs, 0) != sdfGifRegAD) return false;
-
-    const u32 count = sdfGifNloop(*gif);
-    const sdfGrTagStdReg_t* writes = sdfGrTagStdRegPtr_t{at + sdfQwordBytes}.slice(count);
+bool GsRegisterReplay::write(u32 at, u32 count) {
+    const sdfGrTagStdReg_t* writes = sdfGrTagStdRegPtr_t{at}.slice(count);
     if (!writes) return false;
+    bool kicked = false;
     for (u32 i = 0; i < count; i++) {
         switch (u32(writes[i].reg & 0xFF)) {
-            case sdfGsAddrAlpha1: state.context[0].alpha = writes[i].data; break;
-            case sdfGsAddrAlpha2: state.context[1].alpha = writes[i].data; break;
-            case sdfGsAddrTest1: state.context[0].test = writes[i].data; break;
-            case sdfGsAddrTest2: state.context[1].test = writes[i].data; break;
-            case sdfGsAddrFrame1: state.context[0].frameMask = sdfFrameMask(writes[i].data); break;
-            case sdfGsAddrFrame2: state.context[1].frameMask = sdfFrameMask(writes[i].data); break;
+            case sdfGsAddrXyzf2:
+            case sdfGsAddrXyz2:
+            case sdfGsAddrXyzf3:
+            case sdfGsAddrXyz3: kicked = true; break;
+            case sdfGsAddrAlpha1: mState.context[0].alpha = writes[i].data; break;
+            case sdfGsAddrAlpha2: mState.context[1].alpha = writes[i].data; break;
+            case sdfGsAddrTest1: mState.context[0].test = writes[i].data; break;
+            case sdfGsAddrTest2: mState.context[1].test = writes[i].data; break;
+            case sdfGsAddrFrame1: mState.context[0].frameMask = sdfFrameMask(writes[i].data); break;
+            case sdfGsAddrFrame2: mState.context[1].frameMask = sdfFrameMask(writes[i].data); break;
             default: break;
         }
     }
-    // A glyph sends its texture registers this way and its geometry in a second tag after them.
-    return tag->qwc == 1 + count;
+    return kicked;
+}
+
+bool GsRegisterReplay::apply(u32 packetAddr) {
+    const u32 pending = mPending;
+    mPending = 0;
+    const sdfDmaTagPtr_t tag{packetAddr};
+    if (!tag || !tag->qwc) return false;
+
+    // A REF tag names its data elsewhere; anything else carries it straight after the tag.
+    const u32 data = sdfDmaIsRef(*tag) ? tag->addr : packetAddr + sdfQwordBytes;
+    const u32 qwc = tag->qwc;
+    u32 at = std::min(pending, qwc);
+    bool kicked = write(data, at);
+    while (at < qwc) {
+        // Anything but an A+D tag is geometry or VIF, and nothing after it is replayed.
+        const sdfGifTagPtr_t gif{data + sdfQwordBytes * at};
+        if (!gif || sdfGifFlg(*gif) != 0 || sdfGifNreg(*gif) != 1 ||
+            sdfGifRegAt(gif->regs, 0) != sdfGifRegAD) {
+            return false;
+        }
+        const u32 count = sdfGifNloop(*gif);
+        const u32 here = std::min(count, qwc - at - 1);
+        kicked |= write(data + sdfQwordBytes * (at + 1), here);
+        mPending = count - here;
+        at += 1 + here;
+    }
+    return !kicked;
+}
+
+bool isRegisterWrites(u32 packetAddr) {
+    GsRegisterReplay replay;
+    return replay.apply(packetAddr);
 }
 
 }  // namespace sdfhook

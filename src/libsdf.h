@@ -1585,6 +1585,10 @@ constexpr sdfGsState_t sdfGsStateForOt(u32 otIndex) {
 }
 
 enum sdfGsRegisterAddr_t : u32 {
+    sdfGsAddrXyzf2 = 0x04,
+    sdfGsAddrXyz2 = 0x05,
+    sdfGsAddrXyzf3 = 0x0C,
+    sdfGsAddrXyz3 = 0x0D,
     sdfGsAddrAlpha1 = 0x42,
     sdfGsAddrAlpha2 = 0x43,
     sdfGsAddrFrame1 = 0x4C,

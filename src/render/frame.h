@@ -60,11 +60,17 @@ struct DrawSprite {
     /// producer links one.
     u32 linkAddr = 0;
     TexHandle texHandle;
-    GsAlpha alpha;
+
+    /// Opaque when the producer's PRIM has no ABE, since the GS then never reads ALPHA. Otherwise
+    /// the ALPHA the chain has in force at the sprite's packet.
+    GsAlpha alpha = GsAlpha::Blend;
 
     /// A draw whose alpha test can only fail and whose AFAIL writes depth alone is a Z barrier:
     /// it must not put a rectangle on the screen.
     u32 test = 0;
+
+    /// FRAME's write mask in force at the sprite's packet.
+    u64 frameMask = 0;
 
     /// So a quad nobody expected names its own source.
     const char* producer = "?";

@@ -31,9 +31,6 @@ void sceDmaSend(HookContext& h, u32 aRa, u32 aChan, u32 aAddr);
 void submitSprite(HookContext& h, const char* producer, f32 x, f32 y, f32 w, f32 height, f32 u,
                   f32 v, f32 uw, f32 vh, Rgba color, u32 texFileHandle);
 
-/// rsetAlpha takes a mode rather than a register, and resolves it through a table.
-GsAlpha alphaForMode(u32 mode);
-
 /// The frame already presented, put back over the screen at a fixed alpha or the caller's.
 void submitFrameFeedback(HookContext& h, u8 alpha);
 
@@ -42,10 +39,6 @@ void dds3DrawFade(HookContext& h);
 
 /// frTranslateUserData uploads one glyph; its slot is only known through the GsFont_t it returns.
 void frTranslateUserData(HookContext& h, s32 Width, s32 Height, u32 pData, u32 aResult);
-
-// rsetTest(ate, atst, aref, afail, date, datm, zte, ztst), assembled the way the engine does.
-void rsetTest(HookContext& h, const u32 ate, const u32 atst, const u32 aref, const u32 afail,
-              const u32 date, const u32 datm, const u32 ztst);
 
 // aDrawBoxG(x, y, w, h, four corner colors): a trifan quad, in the draw space's own vertical
 // scale rather than the doubled one the sprite calls use.
@@ -84,7 +77,7 @@ void sdfPrimLinkG4(HookContext& h, const u32 aPrim, const s32 aX0, const s32 aY0
 // fclDrawSpriteCore(...). X and Y are 12.4 in the draw space; extents are pixels, H in the
 // doubled vertical scale.
 void fclDrawSpriteCore(HookContext& h, const s32 X, const s32 Y, const s32 W, const s32 H,
-                       const u32 pCol, const u32 pSprite, const u32 FlipFlag, const u32 AlphaFlag);
+                       const u32 pCol, const u32 pSprite, const u32 FlipFlag);
 
 // cmpDrawBoxG(x, y, Z, w, h, pCol, Ctxt, OtNo): a gouraud quad. x and y are 12.4 in draw space.
 /// @todo TODO.md M2: correct and still costs 6.2 points, so the table traces it instead.

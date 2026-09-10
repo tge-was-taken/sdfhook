@@ -2326,13 +2326,15 @@ right.
 - [ ] **P4: transmitted draw packets nothing renders.** The `[todo]` ranking is now measured by the
       chain walk: a packet of a draw-carrying type with nothing placed at it, its REF target, or the
       chain it calls. Leaving out the producers switched off on purpose (`cmpDrawBoxG`, TODO M2;
-      `aDrawBoxF_Direct`, `fldDrawPoly3`, `fldSdwDraw`), three remain:
+      `aDrawBoxF_Direct`, `fldDrawPoly3`, `fldSdwDraw`), four remain:
       - `sdfModelLinkOt`, battle only, 3689 CALL chains a run (31 a frame) with no mesh inside:
         `sdfModelSetNormalDrawPacket` reads every REF in them as setup (5950 setup, 0 failed), so
         their streams are not the batch-header kind. Read one with `SDF_DUMP_CALL`.
       - `dds3LinkZClearDrawTag`, about 3 a frame everywhere: a sprite under TEST NEVER with AFAIL
         ZB_ONLY, which clears depth mid-frame. The renderer clears depth only at frame start.
       - `dds3TrackPolyLinkOt`, 1 a frame on the unknown realm field.
+      - `release_movieobj2`, 1 a frame on the title screen: a quad sent as A+D writes, vertices
+        included.
 
 - [ ] **P2: the packet writes the typed IDB exposed.** With the packets typed in the IDB,
       `ida_facts.py` sees what `sdfModelLinkOt` (13 facts, 0x2B2018..0x2B20E4) and
