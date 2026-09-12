@@ -51,6 +51,19 @@ void RenderTexture::destroy() {
     mTexture = 0;
 }
 
+bool RenderTexture::resize(int width, int height) {
+    if (width == mWidth && height == mHeight) return true;
+    RenderTexture next;
+    if (!next.create(width, height)) return false;
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, mFramebuffer);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, next.mFramebuffer);
+    glBlitFramebuffer(0, 0, mWidth, mHeight, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    destroy();
+    *this = next;
+    return true;
+}
+
 void RenderTexture::bind() const {
     glBindFramebuffer(GL_FRAMEBUFFER, mFramebuffer);
     glViewport(0, 0, mWidth, mHeight);

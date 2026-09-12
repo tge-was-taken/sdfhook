@@ -35,6 +35,10 @@ public:
     /// The window's drawable size in pixels. The picture is letterboxed into it.
     void setScreenSize(int width, int height) { mScreenWidth = width; mScreenHeight = height; }
 
+    /// Renders at the size the window shows the guest's 512x448 at, rather than scaling a fixed
+    /// target up to it.
+    void fitTargetToScreen();
+
     /// Maps a window pixel to a render-target pixel, undoing the letterbox.
     void mapToTarget(int x, int y, int* outX, int* outY) const;
 

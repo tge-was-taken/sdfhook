@@ -201,6 +201,7 @@ void RenderThread::run(int width, int height) {
             int drawableWidth = 0, drawableHeight = 0;
             SDL_GetWindowSizeInPixels(window, &drawableWidth, &drawableHeight);
             mRenderer.setScreenSize(drawableWidth, drawableHeight);
+            if (mConfig->window) mRenderer.fitTargetToScreen();
         }
         if (const int step = mHighlightStep.exchange(0, std::memory_order_acq_rel); step && held) {
             const int count = int(held->meshes.size());

@@ -10,6 +10,10 @@ public:
     bool create(int width, int height);
     void destroy();
 
+    /// Remade at the new size with the old picture scaled into it: the next frame's feedback
+    /// samples this one.
+    bool resize(int width, int height);
+
     void bind() const;
 
     /// Scaled into the given rectangle of the default framebuffer, so a resized window shows the

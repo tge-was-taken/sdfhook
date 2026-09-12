@@ -611,6 +611,17 @@ void Renderer::getScreenRect(int* x, int* y, int* width, int* height) const {
     *y = (screenHeight - *height) / 2;
 }
 
+void Renderer::fitTargetToScreen() {
+    const int displayHeight = int(kGuestHeight) * 2;
+    const int width = std::min(mScreenWidth, mScreenHeight * int(kGuestWidth) / displayHeight);
+    const int height = width * displayHeight / int(kGuestWidth);
+    // A minimised window reports next to nothing, and the picture should survive it.
+    if (width < int(kGuestWidth) / 4 || height < displayHeight / 4) return;
+    for (RenderTexture& target : mFrames) {
+        if (!target.resize(width, height)) reportUnsupported("render target size", u32(width));
+    }
+}
+
 void Renderer::mapToTarget(int x, int y, int* outX, int* outY) const {
     int boxX = 0, boxY = 0, boxWidth = 0, boxHeight = 0;
     getScreenRect(&boxX, &boxY, &boxWidth, &boxHeight);
