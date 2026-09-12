@@ -64,6 +64,11 @@ struct DrawSprite {
     /// The ALPHA the chain has in force at the sprite's packet, FIX included.
     u64 alpha = kGsAlphaBlend;
 
+    /// TEX1 and CLAMP, for a draw decoded from its packet. A hooked sprite never saw them.
+    bool hasSampler = false;
+    u64 tex1 = 0;
+    u64 clamp = 0;
+
     /// A draw whose alpha test can only fail and whose AFAIL writes depth alone is a Z barrier:
     /// it must not put a rectangle on the screen.
     u32 test = 0;

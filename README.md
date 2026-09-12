@@ -39,6 +39,8 @@ SDF_BIOS=<bios.bin> SDF_TRACE=dumps/sdf_trace.jsonl SDF_FRAMES=400 \
 | `SDF_LOG` | log levels, one for everything (`trace`) or per channel (`model=trace,render=warn`) |
 | `SDF_DUMP_TEXTURES` | directory for decoded textures as PNG; GS-recovered ones are named `gs_*` |
 | `SDF_NO_GS_RECOVER` | stop reading textures back out of GS memory when the game registered none |
+| `SDF_SPRITE_HOOKS` | draw 2D from the producers' hooked arguments instead of the decoded packets; a packet no hook drew is decoded either way |
+| `SDF_DUMP_DECODED` | dump every decoded primitive from a matching producer, with the registers it drew under |
 | `SDF_DRAW_ONLY` | draw only matching meshes: comma separated `i=N`, `i=A-B`, `tbp=N`. Pairs with the emulator's `PCSX2HOOK_GS_ONLY`, which takes the same terms plus `prim=N`, so a frame can be cut to one draw on both sides and diffed without matching anything |
 
 The window never takes keyboard focus, which needs the X11 backend: a Wayland toplevel cannot refuse

@@ -233,6 +233,9 @@ uniform int uOverlayPass;
 
 const float kPs2Alpha = 255.0 / 128.0;
 
+// An unmodelled state paints magenta: a silent fallback is a gap that looks healthy every run.
+const vec3 kUnhandled = vec3(1.0, 0.0, 1.0);
+
 // Quantised as the GS does: AREF 128 against a normalised 1.0 is a knife-edge in float, and
 // fragments either side of it write depth at random.
 bool isAlphaTestFailing(float normalised) {
@@ -403,6 +406,23 @@ void applyBlend(const GsBlend& blend) {
     glBlendEquation(blend.equation);
     glBlendFunc(blend.src, blend.dst);
     glBlendColor(0.0f, 0.0f, 0.0f, blend.fix);
+}
+
+/// A decoded sprite samples as its TEX1 and CLAMP say; a hooked one as the texture was made. Set
+/// every draw, since a mesh sampling the same texture leaves its own.
+void applySpriteSampler(const DrawSprite& sprite, bool isFeedback) {
+    const bool magLinear = !sprite.hasSampler || sdfGetTex1Mmag(sprite.tex1);
+    const bool minLinear = !sprite.hasSampler || sdfGetTex1Mmin(sprite.tex1);
+    const GLint edge = isFeedback ? GL_CLAMP_TO_EDGE : GL_REPEAT;
+    const auto getWrap = [&](u32 mode) {
+        if (!sprite.hasSampler) return edge;
+        if (mode > sdfWrapClamp) reportUnsupported("decoded sprite region wrap", mode);
+        return mode == sdfWrapRepeat ? GL_REPEAT : GL_CLAMP_TO_EDGE;
+    };
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, magLinear ? GL_LINEAR : GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, minLinear ? GL_LINEAR : GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, getWrap(sdfGetClampWms(sprite.clamp)));
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, getWrap(sdfGetClampWmt(sprite.clamp)));
 }
 
 /// PRIM without ABE: the GS writes the source and reads nothing back.
@@ -1060,6 +1080,7 @@ void Renderer::drawSprites(const Frame& frame, const std::vector<u32>& indices) 
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D,
                           isFeedback ? mFrames[mCurrent ^ 1].getTexture() : entry->name);
+            applySpriteSampler(sprite, isFeedback);
         }
         glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(attribs.size() * sizeof(f32)), attribs.data(),
                      GL_STREAM_DRAW);

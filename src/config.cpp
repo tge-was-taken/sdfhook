@@ -42,6 +42,7 @@ Config Config::readEnvironment() {
     config.vuTrace = readFlag("PCSX2HOOK_VU_TRACE");
 
     config.dumpPackets = readText("SDF_DUMP_PACKETS");
+    config.dumpDecoded = readText("SDF_DUMP_DECODED");
     config.skipProducer = readText("SDF_SKIP_PRODUCER");
     config.dumpCall = readNumber("SDF_DUMP_CALL", 0);
     config.dumpCallWords = readNumber("SDF_DUMP_CALL_WORDS", 32);
@@ -82,6 +83,7 @@ Config Config::readEnvironment() {
     config.noBillboards = readFlag("SDF_NO_BILLBOARDS");
     config.poly = readFlag("SDF_POLY");
     config.noTransmitState = readFlag("SDF_NO_TRANSMIT_STATE");
+    config.spriteHooks = readFlag("SDF_SPRITE_HOOKS");
     config.captureDir = readText("SDF_CAPTURE_DIR", "captures");
     config.captureFrame = u32(readNumber("SDF_CAPTURE_FRAME", 0));
     config.recoverTexturesFromGs = !readFlag("SDF_NO_GS_RECOVER");

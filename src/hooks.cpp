@@ -902,9 +902,11 @@ void FrameBuilder::submit() {
     mSubmitted = true;
     mSubmittedFrames++;
     if (!mBuilding || !mRenderer) return;
-    // Every producer reaches the frame through addSprite, so one place stamps them all.
+    // Only what the chain drew, in the order it drew it.
     if (mTrace && mTrace->isOpen()) {
-        for (const DrawSprite& sprite : mBuilding->sprites) mTrace->onSprite(sprite);
+        for (const DrawRef ref : mBuilding->order) {
+            if (ref.kind == DrawRef::Kind::Sprite) mTrace->onSprite(mBuilding->sprites[ref.index]);
+        }
     }
     mRenderer->submit(mBuilding);
     mBuilding = nullptr;

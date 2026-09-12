@@ -1584,18 +1584,65 @@ constexpr sdfGsState_t sdfGetGsStateForOt(u32 otIndex) {
     }
 }
 
+/// Every GS register an A+D or REGLIST write can name. A context-2 register sits one address
+/// above its context-1 twin.
 enum sdfGsRegisterAddr_t : u32 {
+    sdfGsAddrPrim = 0x00,
+    sdfGsAddrRgbaq = 0x01,
+    sdfGsAddrSt = 0x02,
+    sdfGsAddrUv = 0x03,
     sdfGsAddrXyzf2 = 0x04,
     sdfGsAddrXyz2 = 0x05,
+    sdfGsAddrTex01 = 0x06,
+    sdfGsAddrTex02 = 0x07,
+    sdfGsAddrClamp1 = 0x08,
+    sdfGsAddrClamp2 = 0x09,
+    sdfGsAddrFog = 0x0A,
     sdfGsAddrXyzf3 = 0x0C,
     sdfGsAddrXyz3 = 0x0D,
+    sdfGsAddrTex11 = 0x14,
+    sdfGsAddrTex12 = 0x15,
+    sdfGsAddrTex21 = 0x16,
+    sdfGsAddrTex22 = 0x17,
+    sdfGsAddrXyoffset1 = 0x18,
+    sdfGsAddrXyoffset2 = 0x19,
+    sdfGsAddrPrmodecont = 0x1A,
+    sdfGsAddrPrmode = 0x1B,
+    sdfGsAddrTexclut = 0x1C,
+    sdfGsAddrScanmsk = 0x22,
+    sdfGsAddrMiptbp11 = 0x34,
+    sdfGsAddrMiptbp12 = 0x35,
+    sdfGsAddrMiptbp21 = 0x36,
+    sdfGsAddrMiptbp22 = 0x37,
+    sdfGsAddrTexa = 0x3B,
+    sdfGsAddrFogcol = 0x3D,
+    sdfGsAddrTexflush = 0x3F,
+    sdfGsAddrScissor1 = 0x40,
+    sdfGsAddrScissor2 = 0x41,
     sdfGsAddrAlpha1 = 0x42,
     sdfGsAddrAlpha2 = 0x43,
-    sdfGsAddrFrame1 = 0x4C,
-    sdfGsAddrFrame2 = 0x4D,
+    sdfGsAddrDimx = 0x44,
+    sdfGsAddrDthe = 0x45,
+    sdfGsAddrColclamp = 0x46,
     sdfGsAddrTest1 = 0x47,
     sdfGsAddrTest2 = 0x48,
+    sdfGsAddrPabe = 0x49,
+    sdfGsAddrFba1 = 0x4A,
+    sdfGsAddrFba2 = 0x4B,
+    sdfGsAddrFrame1 = 0x4C,
+    sdfGsAddrFrame2 = 0x4D,
+    sdfGsAddrZbuf1 = 0x4E,
+    sdfGsAddrZbuf2 = 0x4F,
+    sdfGsAddrBitbltbuf = 0x50,
+    sdfGsAddrTrxpos = 0x51,
+    sdfGsAddrTrxreg = 0x52,
+    sdfGsAddrTrxdir = 0x53,
+    sdfGsAddrHwreg = 0x54,
+    sdfGsAddrSignal = 0x60,
+    sdfGsAddrFinish = 0x61,
+    sdfGsAddrLabel = 0x62,
 };
+
 
 // ALPHA: Cv = (A - B) * C + D, over the source, the destination and zero.
 constexpr u32 sdfGetAlphaA(u64 r) { return u32(r & 3); }
@@ -1611,9 +1658,12 @@ constexpr u32 sdfGetTestAte(u64 r) { return u32(r & 1); }
 constexpr u32 sdfGetTestAtst(u64 r) { return u32((r >> 1) & 7); }
 constexpr u32 sdfGetTestAref(u64 r) { return u32((r >> 4) & 0xFF); }
 constexpr u32 sdfGetTestAfail(u64 r) { return u32((r >> 12) & 3); }
+constexpr u32 sdfGetTestDate(u64 r) { return u32((r >> 14) & 1); }
+constexpr u32 sdfGetTestDatm(u64 r) { return u32((r >> 15) & 1); }
 constexpr u32 sdfGetTestZte(u64 r) { return u32((r >> 16) & 1); }
 constexpr u32 sdfGetTestZtst(u64 r) { return u32((r >> 17) & 3); }
 
+enum sdfAtst_t : u32 { sdfAtstNever = 0, sdfAtstAlways = 1 };
 enum sdfZtst_t : u32 { sdfZtstNever = 0, sdfZtstAlways = 1, sdfZtstGequal = 2, sdfZtstGreater = 3 };
 enum sdfAfail_t : u32 { sdfAfailKeep = 0, sdfAfailFbOnly = 1, sdfAfailZbOnly = 2, sdfAfailRgbOnly = 3 };
 
@@ -1896,7 +1946,14 @@ enum sdfGifReg_t : u32 {
     sdfGifRegUv = 0x3,
     sdfGifRegXyzf2 = 0x4,
     sdfGifRegXyz2 = 0x5,
+    sdfGifRegTex01 = 0x6,
+    sdfGifRegTex02 = 0x7,
+    sdfGifRegClamp1 = 0x8,
+    sdfGifRegClamp2 = 0x9,
     sdfGifRegFog = 0xA,
+    sdfGifRegReserved = 0xB,
+    sdfGifRegXyzf3 = 0xC,
+    sdfGifRegXyz3 = 0xD,
     sdfGifRegAD = 0xE,
     sdfGifRegNop = 0xF,
 };
@@ -1962,9 +2019,11 @@ struct GsTex0 {
 
 // PRIM's own fields, the ones that decide how a packet is read back.
 constexpr u32 sdfGetPrimType(u32 prim) { return prim & 7; }
+constexpr u32 sdfGetPrimIip(u32 prim) { return (prim >> 3) & 1; }
 constexpr u32 sdfGetPrimTme(u32 prim) { return (prim >> 4) & 1; }
+constexpr u32 sdfGetPrimFge(u32 prim) { return (prim >> 5) & 1; }
 constexpr u32 sdfGetPrimAbe(u32 prim) { return (prim >> 6) & 1; }
-// cppcheck-suppress unusedFunction  ; one of the PRIM field family, complete by design
+constexpr u32 sdfGetPrimAa1(u32 prim) { return (prim >> 7) & 1; }
 constexpr u32 sdfGetPrimFst(u32 prim) { return (prim >> 8) & 1; }
 
 // The GS register addresses an A+D write can name, for the ones that decide how a draw looks.

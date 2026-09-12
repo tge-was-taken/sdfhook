@@ -254,6 +254,9 @@ void TextureCache::onFree(TexHandle handle) {
 
     const bool known = mUploaded.erase(handle) != 0;
     mWanted.erase(handle);
+    for (auto it = mTex0Handles.begin(); it != mTex0Handles.end();) {
+        it = it->second == handle ? mTex0Handles.erase(it) : std::next(it);
+    }
     // A copy outlives nothing: both the aliases of this handle and the ones pointing at it go.
     for (auto it = mAlias.begin(); it != mAlias.end();) {
         it = (it->first == handle || it->second == handle) ? mAlias.erase(it) : std::next(it);
@@ -269,6 +272,99 @@ TexHandle TextureCache::getHandleForTex0(TexHandle key, u64 tex0) {
     // The read is not safe from inside a hook, so it waits for the frame boundary as handles do.
     mWantedTex0.emplace(key, tex0);
     return {};
+}
+
+namespace {
+
+/// TBP0, TBW, PSM, TW and TH, then CBP, CPSM, CSM and CSA: where the texels and palette are.
+constexpr u64 kTex0Identity = ((u64(1) << 34) - 1) | (((u64(1) << 24) - 1) << 37);
+
+/// Keys for textures read out of GS memory, clear of guest memory and the feedback handle.
+constexpr u32 kGsTextureKeys = 0xE0000000u;
+
+bool isGsTextureKey(TexHandle handle) {
+    return handle.addr >= kGsTextureKeys && handle.addr != kPreviousFrameHandle;
+}
+
+/// Blocks of 256 bytes a texture or transfer covers, for telling whether two overlap.
+u32 getBlockCount(u32 width, u32 height, u32 psm) {
+    const u32 bits = psm == sdfPsmt4 || psm == sdfPsmt4hl || psm == sdfPsmt4hh ? 4
+                     : psm == sdfPsmt8 || psm == sdfPsmt8h                     ? 8
+                     : psm == sdfPsmct16 || psm == sdfPsmct16s                 ? 16
+                                                                               : 32;
+    return std::max(1u, u32((u64(width) * height * bits / 8 + 255) / 256));
+}
+
+}  // namespace
+
+/// The engine keeps every live handle on one list, registered in this window or not.
+TexHandle TextureCache::findEngineHandle(u64 tex0) const {
+    const u32 head = mRuntime ? pcsx2hook_find_symbol(mRuntime, "sdfTexHandleLink") : 0;
+    if (!head) return {};
+    const GsTex0 wanted = GsTex0::decode(tex0);
+    TexHandle handle{u32Ptr_t{head}.readOr()};
+    // A few hundred live at once; past that the list is corrupt or looping.
+    for (u32 steps = 0; handle && steps < 4096; steps++) {
+        if (handle->packet) {
+            const GsTex0 has = GsTex0::decode(handle->packet->tex0.data);
+            if (has.tbp0 == wanted.tbp0 && has.psm == wanted.psm &&
+                (!wanted.isPaletted() || has.cbp == wanted.cbp)) {
+                return handle;
+            }
+        }
+        handle = handle->next;
+    }
+    return {};
+}
+
+TexHandle TextureCache::getHandleForGsTex0(u64 tex0, Frame* frame) {
+    const u64 identity = tex0 & kTex0Identity;
+    auto known = mTex0Handles.find(identity);
+    if (known == mTex0Handles.end()) {
+        TexHandle handle = findEngineHandle(tex0);
+        if (!handle) handle = TexHandle{kGsTextureKeys + u32(mTex0Handles.size() << 4)};
+        known = mTex0Handles.emplace(identity, handle).first;
+    }
+    const TexHandle handle = known->second;
+    return isGsTextureKey(handle) ? getHandleForTex0(handle, tex0) : getHandle(handle, frame);
+}
+
+bool TextureCache::isFrameBuffer(u32 tbp0) const {
+    if (mFrameBases.count(tbp0)) return true;
+    const u32 head = mRuntime ? pcsx2hook_find_symbol(mRuntime, "gsMemHandleLinkHead") : 0;
+    if (!head) return false;
+    // sdfGsAllocFrameBuff takes slices of type 1 from the head; addresses count words.
+    constexpr s32 kFrameBufferSlice = 1;
+    const u32 word = tbp0 * 64;
+    sdfGsMemSlicePtr_t slice{u32Ptr_t{head}.readOr()};
+    for (u32 steps = 0; slice && steps < 1024; steps++) {
+        if (slice->type == kFrameBufferSlice && word >= slice->addr &&
+            word < slice->addr + u32(slice->size)) {
+            return true;
+        }
+        slice = slice->next;
+    }
+    return false;
+}
+
+void TextureCache::onGsUpload(u64 bitbltbuf, u64 trxreg) {
+    const u32 dbp = u32((bitbltbuf >> 32) & 0x3FFF);
+    const u32 dpsm = u32((bitbltbuf >> 56) & 0x3F);
+    const u32 end = dbp + getBlockCount(u32(trxreg & 0xFFF), u32((trxreg >> 32) & 0xFFF), dpsm);
+    for (auto it = mTex0Handles.begin(); it != mTex0Handles.end();) {
+        const GsTex0 tex0 = GsTex0::decode(it->first);
+        const u32 start = tex0.tbp0;
+        const u32 stop = start + getBlockCount(1u << tex0.tw, 1u << tex0.th, tex0.psm);
+        const bool clutHit = tex0.isPaletted() && tex0.cbp >= dbp && tex0.cbp < end;
+        if (!isGsTextureKey(it->second) || ((stop <= dbp || start >= end) && !clutHit)) {
+            ++it;
+            continue;
+        }
+        // Read again at the next frame boundary, under the same key so the renderer replaces it.
+        mUploaded.erase(it->second);
+        mAlias.erase(it->second);
+        ++it;
+    }
 }
 
 TexHandle TextureCache::getHandle(TexHandle wanted, Frame*) {
@@ -295,7 +391,10 @@ TexHandle TextureCache::getHandle(TexHandle wanted, Frame*) {
 }
 
 void TextureCache::wantFontSheet(u32 addr, u32 bufWidth, u32 width, u32 height) {
-    if (!mFontSheet.index.empty() || !addr || !bufWidth || !width || !height) return;
+    if (!addr || !bufWidth || !width || !height) return;
+    mFontSheetTbp = addr;
+    mFontSheetWidth = width;
+    if (!mFontSheet.index.empty()) return;
     mWantedSheet = {addr, bufWidth, width, height};
 }
 
@@ -323,7 +422,6 @@ bool TextureCache::recoverFontSheet() {
 void TextureCache::recoverQueued() {
     if (!mConfig->recoverTexturesFromGs || !mRuntime) return;
     if (mWantedSheet.addr && mFontSheet.index.empty()) recoverFontSheet();
-    if (mWanted.empty()) return;
 
     // A material that named a TEX0 with no handle: the register is in hand, so no packet is read.
     for (auto it = mWantedTex0.begin(); it != mWantedTex0.end();) {

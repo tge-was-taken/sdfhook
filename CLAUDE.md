@@ -43,28 +43,33 @@ the shader.
 
 ## The migration boundary
 
-**Draw work is taken from SDF's own drawing functions by reading their arguments, never
-reconstructed from the GIF packets those functions write.** The semantics are stated at the API and
-destroyed by the translation below it. `DrwSprite2D(x, y, w, h, u, v, uw, vh, rgba, sdfTexHandle_t*)`
-hands over the rectangle, UVs, color and texture; recovering those from quadwords re-derives a
-translation whose input was in a register, and yields a worse PCSX2.
+**Packets are decoded by default; a hook is an enhancement of ours, not the source.** Everything
+GIF-path reaches the GS through the chain: `gs_decoder.cpp` reads it as VIF1 and the GIF do, keeps
+the whole register file, and kicks vertices into primitives the renderer draws. Decoding the 2D took
+the main menu from 11.263 to 2.099 and the title from 5.574 to 2.941, and matched the hooks pixel for
+pixel in battle and loading, because a hook reproduces its producer's arithmetic and the packet is
+that arithmetic's result. `SDF_SPRITE_HOOKS=1` puts the 2D hooks back, and a packet no hook drew is
+decoded either way.
 
-Two criteria, in order:
-
-1. Take the lowest level that needs **no** PS2 hardware model. Not negotiable. Write down what you
-   would have to implement to consume the call; if the list contains a PS2 acronym, go up a level.
-2. Among the levels that pass, take the lowest, since it owns the least game code.
+**Hook where the packet cannot carry the draw.** VU1 builds the model, billboard and poly geometry
+from its input, so what the chain holds is VU1's input, not the draw: those stay spans with their
+hooks (`sdfModelLinkOt`, `sdfCorePacketGen`, `drawSprite3D`). A hook is also worth it where it adds
+what a packet has lost: an identity to interpolate across frames, a HUD element to anchor for
+widescreen, a glyph to replace. Write down which, since the default is the packet.
 
 **Well defined also means complete.** One call carries the whole draw. Billboards are the case:
 `drawSprite3D` links three packets, and the rotation reaches the transform packet through VU0's
 register file, never through `sdfBillBoardMake1`. So the floor is `drawSprite3D`, whose
 `Sprite3D_t` holds position, size, rotation and color together.
 
-**Three levels.** Registers (`sdf2DGetPrimPtr` writes, GIF tags) carry no meaning and are always
-wrong. Primitives (`sdfPrimLinkFt4`, `sdfPrimLinkG4`) are engine code and still semantic. Producers
-(`fldDrawEATexQuad`, `DrwSprite2D`) hold the richest intent and are game code. **Prefer the
-primitive level wherever the game uses it**: a producer hook takes ownership of game logic, per
-disc, and that list only grows.
+**A decoded draw is only as good as its texture.** TEX0 resolves to the 2D texture packet that wrote
+it, a frame buffer (the engine's type-1 GS slices and every FRAME the chain writes), the font sheet the
+glyph uploads built, an engine handle whose upload wrote the same TEX0 (`sdfTexHandleLink`), or GS
+memory read through the register. GS memory holds only what was uploaded last, so a texture streamed
+in mid-frame reads wrong from there: the font did until it was routed to the sheet.
+
+**What the 2D renderer cannot do is reported where the primitive converts**, and a draw whose result
+hangs on a test it lacks (DATE) is refused and counted in `refusedDraws`, not drawn wrong.
 
 **Inlining limits what a hook can enumerate.** "Never called" from a hook means never called out of
 line. Trust the `[todo]` ranking over any call-count enumeration.
@@ -84,10 +89,9 @@ and `sdfDrawTagLinkCall`. Hook all five and the caller set is the complete produ
 builds carries no GIF vertices; `ooyTestPoly3` heads the packet ranking and is worth 0.010 of a point
 because its triangles are 4x5 pixels.
 
-**2D is game code, and that is forced.** The engine publishes `sdfPrimLinkSprite`, `sdfPrimLinkRect`
-and friends, but this game calls almost none of it: only `sdfPrimLinkFt4` and `sdfPrimLinkG4` fire,
-and the main menu uses neither. Everything else takes `sdf2DAllocSprite` and writes registers
-itself. Expect to rewrite the game-level 2D group per disc while the `sdf*` hooks carry over.
+**The game writes its own 2D.** The engine publishes `sdfPrimLinkSprite` and friends, but only
+`sdfPrimLinkFt4` and `sdfPrimLinkG4` fire; the rest take `sdf2DAllocSprite` and write registers
+themselves. That is per-disc game code a hook has to follow and a decoder does not.
 
 ## The frame is the chain
 
@@ -114,6 +118,8 @@ under the ALPHA and TEST in force there, and the renderer draws `order` as it st
 - **Lighting and fog are not chain state for a generated mesh.** `sdfCorePacketGen` lights on the
   EE with `corePktCurrLight`, which `sdfCoreDrawSetLight` sets at generation time, so a mesh keeps its
   root's light. Replaying light and fog packets from the chain for every mesh cost 0.8 to 4.4 points.
+- **Every transfer is decoded.** The register file replaces the old A+D replay, VIF codes say which
+  data is GIF, and a primitive kicked in a packet nothing hooked is drawn from the packet.
 - **Every packet type is consumed or reported.** State the renderer takes from a producer's call
   counts as read only when a producer with recorded draws linked it; anything else is
   `reportUnsupported`, as is every register a state packet sets that the replay drops.
@@ -344,8 +350,8 @@ inventory resets at frame end. The renderer draws in this order; see "The frame 
 exactly on field extraction. The two differ on FLG 3 and both are right: it consumes a stream that is
 GIF by definition, this walks memory that may not be.
 
-**`gif.cpp` is a coverage check and ground truth, not the renderer's input.** Do not grow it into a
-renderer.
+**`gif.cpp` is a coverage count; `gs_decoder.cpp` is the renderer's input.** Keep the two apart:
+the counts are per packet and heuristic, the decoder follows VIF1 and GIF state across transfers.
 
 ## Tooling
 
@@ -408,6 +414,9 @@ buffer. **1:1 is the point**: `SDF_SCALE=1` makes the two comparable.
 
 See `README.md` for the environment variables. Additionally:
 
+- `SDF_DUMP_DECODED=<producer substring>` dumps every decoded primitive from a matching producer
+  with the registers it drew under; `scripts/cropcmp.py` puts the same tile of several shots side by
+  side.
 - `SDF_DUMP_PACKETS=<caller substring>` hexdumps packets from a matching linker that yielded no
   geometry, following REF tags. `SDF_DUMP_MESH`, `SDF_DUMP_MESH_TYPE`, `SDF_DUMP_MESH_WORDS` and
   `SDF_DUMP_CALL` do the same for mesh bodies and DMA call chains. Reading a stream as both words and

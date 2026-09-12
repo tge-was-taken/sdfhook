@@ -179,6 +179,8 @@ void writeRunSummary(const sdfhook::HookContext& hooks) {
     byProducer("placedDraws", hooks.coverage.placedDraws);
     byProducer("unlinkedDraws", hooks.coverage.unlinkedDraws);
     byProducer("unreachedDraws", hooks.coverage.unreachedDraws);
+    byProducer("decodedDraws", hooks.coverage.decodedDraws);
+    byProducer("refusedDraws", hooks.coverage.refusedDraws);
 
     hooks.model.getTrace().addTo(row);
     hooks.trace->onRunSummary(row.take());

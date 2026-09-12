@@ -21,6 +21,7 @@ add_executable(sdfhook
 	packet_type.cpp
 	chain_census.cpp
 	gif.cpp
+	gs_decoder.cpp
 	model.cpp
 	hooks_impl_model.cpp
 	image.cpp

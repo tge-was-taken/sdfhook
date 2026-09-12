@@ -30,6 +30,20 @@ public:
     /// `key` files the upload and is never dereferenced.
     TexHandle getHandleForTex0(TexHandle key, u64 tex0);
 
+    /// The texture a decoded draw's TEX0 names: the handle whose upload wrote the same TEX0, else
+    /// GS memory read through the register. Empty until a recovery has run.
+    TexHandle getHandleForGsTex0(u64 tex0, Frame* frame);
+
+    /// The chain drew into this frame buffer, so a TEX0 naming it samples a previous frame.
+    void noteFrameBuffer(u32 tbp0) { mFrameBases.insert(tbp0); }
+
+    /// One the chain drew into, or a slice the engine allocated as a frame buffer: the display
+    /// buffer is filled outside the chain.
+    bool isFrameBuffer(u32 tbp0) const;
+
+    /// An IMAGE transfer replaced part of GS memory, so what was read from there is stale.
+    void onGsUpload(u64 bitbltbuf, u64 trxreg);
+
     /// Call only from the frame callback: the read blocks on the GS thread, unsafe from a hook.
     void recoverQueued();
 
@@ -66,6 +80,11 @@ public:
 
     /// Re-uploaded when glyphs change. One sheet, so no address is needed.
     TexHandle getFontSheet(u32 sheetWidth, Frame* frame);
+
+    /// The sheet a decoded glyph's TEX0 names. GS memory holds only the glyphs uploaded last, so
+    /// the sheet assembled from every upload stands in for it.
+    bool isFontSheet(u32 tbp0) const { return mFontSheetTbp && tbp0 == mFontSheetTbp; }
+    TexHandle getFontSheet(Frame* frame) { return getFontSheet(mFontSheetWidth, frame); }
 
     void dumpTo(const std::string& directory) { mDumpDir = directory; }
 
@@ -110,6 +129,8 @@ private:
     };
 
     FontSheetWanted mWantedSheet;
+    u32 mFontSheetTbp = 0;
+    u32 mFontSheetWidth = 0;
 
     struct GsRegion {
         u32 addr;
@@ -117,6 +138,13 @@ private:
     };
 
     std::vector<GsRegion> mFrameBuffers;
+
+    /// A handle for every TEX0 a decoded draw named, keyed by the fields that say where and
+    /// what the texels are. One the engine never registered gets a key outside guest memory.
+    std::unordered_map<u64, TexHandle> mTex0Handles;
+    std::unordered_set<u32> mFrameBases;
+
+    TexHandle findEngineHandle(u64 tex0) const;
 
     /// Asked for by a draw, registered by nothing; drained at the frame boundary.
     std::unordered_set<TexHandle> mWanted;

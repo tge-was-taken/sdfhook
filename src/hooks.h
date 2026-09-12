@@ -244,6 +244,11 @@ struct Coverage {
     std::map<std::string, u64> placedDraws;
     std::map<std::string, u64> unlinkedDraws;
     std::map<std::string, u64> unreachedDraws;
+
+    /// By producer: primitives decoded from the packets themselves, and ones refused for a test
+    /// the renderer lacks.
+    std::map<std::string, u64> decodedDraws;
+    std::map<std::string, u64> refusedDraws;
 };
 
 

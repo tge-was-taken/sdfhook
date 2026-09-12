@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "gif.h"
+#include "gs_decoder.h"
 #include "hooks_impl.h"
 #include "json.h"
 #include "libsdf.h"
@@ -166,19 +167,6 @@ bool isModelNodeType(PacketType type) {
     return false;
 }
 
-/// The registers GsRegisterReplay tracks.
-bool isReplayedRegister(u32 reg) {
-    switch (reg) {
-        case sdfGsAddrAlpha1:
-        case sdfGsAddrAlpha2:
-        case sdfGsAddrTest1:
-        case sdfGsAddrTest2:
-        case sdfGsAddrFrame1:
-        case sdfGsAddrFrame2: return true;
-        default: return false;
-    }
-}
-
 class PacketProcessor {
 public:
     PacketProcessor(HookContext& h, Frame& frame);
@@ -208,9 +196,17 @@ private:
     void processGsStatePacket(const ChainEntry& entry, PacketType type);
     void processCarriedPacket(const ChainEntry& entry, PacketType type);
     void processEmptyPacket(const ChainEntry& entry);
+    void processTransferPacket(const ChainEntry& entry, PacketType type);
     void reportUnreadPacket(PacketType type);
 
-    bool replayRegisters(const ChainEntry& entry);
+    bool decodeTransfer(const ChainEntry& entry);
+    void emitDecodedPrimitives(const ChainEntry& entry);
+    bool convertPrimitive(const GsPrimitive& primitive, DrawSprite* sprite);
+    void reportUnhonoured(const GsPrimitive& primitive, const DrawSprite& sprite);
+    bool isDrawable(const GsPrimitive& primitive, const char* producer);
+    void dumpPrimitive(const GsPrimitive& primitive, const DrawSprite& sprite) const;
+    TexHandle resolveTexture(u64 tex0);
+    const char* getProducer(const ChainEntry& entry) const;
     void dumpStateChange(const sdfGsState_t& was, u32 at);
     void emitSprites(const ChainEntry& entry);
     void emitMeshes(const ChainEntry& entry);
@@ -222,10 +218,18 @@ private:
     HookContext& h;
     Frame& mFrame;
     GifParser mParser;
-    GsRegisterReplay mRegs;
+    GsDecoder mDecoder;
 
     /// TEX0 as the last 2D texture packet left it, which a sprite naming no texture samples.
     TexHandle mBoundTexture;
+
+    /// The handle behind each TEX0 a 2D texture packet wrote this frame.
+    std::unordered_map<u64, TexHandle> mBoundTextures;
+
+    /// The function behind the last linked packet, which an unlinked tag after it belongs to, and
+    /// whether that packet came from a producer whose hook drew it.
+    const char* mLastLinker = "chain";
+    bool mLastClaimed = false;
 
     std::unordered_map<u32, LinkedPacket> mLinked;
     std::unordered_map<u32, std::vector<u32>> mSpritesByPacket;
@@ -285,7 +289,7 @@ void PacketProcessor::resolveClaims() {
 
 /// A generated mesh is found through the link its generation returned.
 void PacketProcessor::indexDrawsByPacket() {
-    for (u32 i = 0; i < mFrame.sprites.size(); i++) {
+    for (u32 i = 0; h.config->spriteHooks && i < mFrame.sprites.size(); i++) {
         const DrawSprite& sprite = mFrame.sprites[i];
         if (sprite.linkAddr) mSpritesByPacket[sprite.linkAddr].push_back(i);
         else h.coverage.unlinkedDraws[sprite.producer]++;
@@ -329,19 +333,22 @@ void PacketProcessor::processModelSpan(DmaChain& chain, ChainEntry entry) {
 }
 
 void PacketProcessor::processModelPacket(DmaChain& chain, ChainEntry entry) {
-    entry.stateOnly = replayRegisters(entry);
+    entry.stateOnly = decodeTransfer(entry);
     const u64 before = mEmitted;
     const PacketType type = getType(entry.at);
     if (isModelNodeType(type)) emitMeshes(entry);
     else processPacketOfType(entry, type);
+    if (mEmitted == before) emitDecodedPrimitives(entry);
     if (entry.isCall()) processCallee(chain, entry, &PacketProcessor::processModelPacket);
     recordCoverage(entry, before);
 }
 
 void PacketProcessor::processPacket(DmaChain& chain, ChainEntry entry) {
-    entry.stateOnly = replayRegisters(entry);
+    entry.stateOnly = decodeTransfer(entry);
     const u64 before = mEmitted;
     processPacketOfType(entry, getType(entry.at));
+    // A hook's draws stand for the packet; anything else it carries is drawn as decoded.
+    if (mEmitted == before) emitDecodedPrimitives(entry);
     if (entry.isCall()) processCallee(chain, entry, &PacketProcessor::processPacket);
     recordCoverage(entry, before);
 }
@@ -405,16 +412,15 @@ void PacketProcessor::processPacketOfType(const ChainEntry& entry, PacketType ty
         case PacketType::Terminator:
         case PacketType::VifSetup: processCarriedPacket(entry, type); break;
         case PacketType::Empty: processEmptyPacket(entry); break;
-        // The frame's clear comes from dds3BackColor, and GS memory is not modelled.
-        case PacketType::Clear:
+        case PacketType::Clear: processSpritePacket(entry); break;
         case PacketType::BitBlt:
-        case PacketType::TextureUpload: reportUnreadPacket(type); break;
+        case PacketType::TextureUpload: processTransferPacket(entry, type); break;
         case PacketType::Count: reportUnsupported("packet type", u32(type)); break;
     }
 }
 
 void PacketProcessor::processSpritePacket(const ChainEntry& entry) {
-    emitSprites(entry);
+    if (h.config->spriteHooks) emitSprites(entry);
 }
 
 void PacketProcessor::processMeshPacket(const ChainEntry& entry) {
@@ -434,7 +440,7 @@ void PacketProcessor::processShadowPacket(const ChainEntry& entry, PacketType ty
     }
     if (!h.config->drawShadows) return;
     const u32 data = entry.at + sdfQwordBytes;
-    if (!h.modelHooks.fldSdwDraw(data, data + sdfQwordBytes * entry.tag.qwc, mRegs.getContext(0),
+    if (!h.modelHooks.fldSdwDraw(data, data + sdfQwordBytes * entry.tag.qwc, mDecoder.getContext(0),
                                  &mFrame)) {
         h.coverage.shadowRejects++;
         return;
@@ -448,7 +454,7 @@ void PacketProcessor::processShadowPacket(const ChainEntry& entry, PacketType ty
 /// Untyped, so it carries whatever a producer claimed on it: the feedback sprite's linker has
 /// three sites.
 void PacketProcessor::processUnknownPacket(const ChainEntry& entry) {
-    emitSprites(entry);
+    if (h.config->spriteHooks) emitSprites(entry);
     emitMeshes(entry);
 }
 
@@ -459,25 +465,25 @@ void PacketProcessor::processTexBindPacket(const ChainEntry& entry) {
         return;
     }
     mBoundTexture = TexHandle{binds->second};
+    mBoundTextures[mDecoder.getRegister(sdfGsAddrTex01)] = mBoundTexture;
 }
 
-/// The replay has applied the registers the renderer takes from the chain; the rest are named.
-void PacketProcessor::processGsStatePacket(const ChainEntry& entry, PacketType type) {
-    if (!entry.stateOnly) {
-        reportUnsupported("GS state packet that is more than A+D writes", u32(type));
-    }
-    const std::bitset<128>& untracked = mRegs.getUntracked();
-    for (u32 reg = 0; reg < untracked.size(); reg++) {
-        if (untracked[reg] && !isReplayedRegister(reg)) {
-            reportUnsupported("GS register a state packet sets and the replay drops", reg);
-        }
-    }
-}
+/// The decoder has stored every register; what a draw cannot honour is reported where it is
+/// converted, so nothing is dropped here.
+void PacketProcessor::processGsStatePacket(const ChainEntry&, PacketType) {}
 
 /// Taken from the producer's call rather than the packet, so one that no producer with recorded
 /// draws linked is unread.
 void PacketProcessor::processCarriedPacket(const ChainEntry& entry, PacketType type) {
     if (!mClaimed.contains(entry.at)) reportUnreadPacket(type);
+}
+
+/// An upload stales what was read from GS memory there, which the decoder has passed on; a
+/// copy within GS memory the decoder reports.
+void PacketProcessor::processTransferPacket(const ChainEntry& entry, PacketType type) {
+    if (type == PacketType::TextureUpload && mDecoder.getUploads().empty() && !entry.stateOnly) {
+        reportUnsupported("texture upload packet with no IMAGE transfer", entry.tag.qwc);
+    }
 }
 
 void PacketProcessor::processEmptyPacket(const ChainEntry& entry) {
@@ -490,15 +496,222 @@ void PacketProcessor::reportUnreadPacket(PacketType type) {
 }
 
 /// @return Whether the transfer was state alone.
-bool PacketProcessor::replayRegisters(const ChainEntry& entry) {
-    const sdfGsState_t was = mRegs.getContext(0);
-    const bool stateOnly = mRegs.apply(entry.at);
+bool PacketProcessor::decodeTransfer(const ChainEntry& entry) {
+    const sdfGsState_t was = mDecoder.getContext(0);
+    const u32 target = entry.getRefTarget();
+    mDecoder.feed(entry.tag, target ? target : entry.at + sdfQwordBytes);
+    for (const GsUpload& upload : mDecoder.getUploads()) {
+        h.textures.onGsUpload(upload.bitbltbuf, upload.trxreg);
+    }
+    // FBP counts 2048-word pages, TBP0 64-word blocks.
+    for (const u32 frame : {sdfGsAddrFrame1, sdfGsAddrFrame2}) {
+        if (mDecoder.getWritten()[frame]) {
+            h.textures.noteFrameBuffer(u32(mDecoder.getRegister(frame) & 0x1FF) * 32);
+        }
+    }
+    if (const LinkedPacket* linked = findLinked(entry.at)) {
+        mLastLinker = getLinker(*linked);
+        mLastClaimed = mClaimed.contains(entry.at);
+    }
     if (h.config->dumpDrawEnv) dumpStateChange(was, entry.at);
-    return stateOnly;
+    return mDecoder.isStateOnly();
+}
+
+const char* PacketProcessor::getProducer(const ChainEntry& entry) const {
+    const LinkedPacket* linked = findLinked(entry.at);
+    return linked ? getLinker(*linked) : mLastLinker;
+}
+
+void PacketProcessor::emitDecodedPrimitives(const ChainEntry& entry) {
+    // With the hooks on, a hooked producer's draws stand for every packet it linked.
+    if (h.config->spriteHooks && mLastClaimed) return;
+    for (const GsPrimitive& primitive : mDecoder.getPrimitives()) {
+        const char* producer = getProducer(entry);
+        DrawSprite sprite;
+        if (!isDrawable(primitive, producer) || !convertPrimitive(primitive, &sprite)) continue;
+        sprite.linkAddr = entry.at;
+        sprite.producer = producer;
+        reportUnhonoured(primitive, sprite);
+        if (!h.config->dumpDecoded.empty() && std::strstr(sprite.producer, h.config->dumpDecoded.c_str())) {
+            dumpPrimitive(primitive, sprite);
+        }
+        h.coverage.decodedDraws[sprite.producer]++;
+        mFrame.order.push_back({DrawRef::Kind::Sprite, u32(mFrame.sprites.size())});
+        mFrame.sprites.push_back(sprite);
+        mEmitted++;
+    }
+}
+
+/// A primitive as the 2D renderer's four corners: a triangle repeats its last, a line is a
+/// pixel wide. XYOFFSET comes off, and STQ becomes texels the way FST already is.
+bool PacketProcessor::convertPrimitive(const GsPrimitive& primitive, DrawSprite* out) {
+    const GsDrawState& state = primitive.state;
+    const u32 prim = state.prim;
+    const GsTex0 tex0 = GsTex0::decode(state.tex0);
+    const u32 ofx = u32(state.xyoffset & 0xFFFF);
+    const u32 ofy = u32((state.xyoffset >> 32) & 0xFFFF);
+    // The odd field draws half a line down, which the display takes back; a progressive frame
+    // drops it.
+    constexpr u32 kFieldHalfLine = 8;
+    if (ofx & 0xF || (ofy & 0xF) & ~kFieldHalfLine) reportUnsupported("XYOFFSET fraction", state.xyoffset);
+    const f32 offsetX = f32(ofx) / 16.0f;
+    const f32 offsetY = f32(ofy & ~0xFu) / 16.0f;
+    const auto getCorner = [&](const GsVertex& vertex) {
+        SpriteCorner corner{};
+        corner.x = f32(vertex.x) / 16.0f - offsetX;
+        corner.y = f32(vertex.y) / 16.0f - offsetY;
+        if (sdfGetPrimFst(prim)) {
+            corner.u = f32(vertex.u) / 16.0f;
+            corner.v = f32(vertex.v) / 16.0f;
+        } else {
+            const f32 q = vertex.q != 0.0f ? vertex.q : 1.0f;
+            corner.u = vertex.s / q * f32(1u << tex0.tw);
+            corner.v = vertex.t / q * f32(1u << tex0.th);
+        }
+        corner.color = Rgba::unpack(vertex.rgba);
+        return corner;
+    };
+
+    DrawSprite sprite{};
+    const GsVertex* vertex = primitive.vertex;
+    switch (sdfGetPrimType(prim)) {
+        case sdfPrimSprite: {
+            const SpriteCorner a = getCorner(vertex[0]);
+            const SpriteCorner b = getCorner(vertex[1]);
+            sprite = DrawSprite::makeRect(a.x, a.y, b.x - a.x, b.y - a.y, a.u, a.v, b.u, b.v);
+            // A sprite takes the color of the vertex that kicked it.
+            sprite.setColor(b.color);
+            break;
+        }
+        case sdfPrimTriangle:
+        case sdfPrimTriStrip:
+        case sdfPrimTriFan:
+            for (int i = 0; i < 3; i++) sprite.corner[i] = getCorner(vertex[i]);
+            sprite.corner[3] = sprite.corner[2];
+            if (!sdfGetPrimIip(prim)) sprite.setColor(sprite.corner[2].color);
+            break;
+        case sdfPrimLine:
+        case sdfPrimLineStrip: {
+            const SpriteCorner a = getCorner(vertex[0]);
+            const SpriteCorner b = getCorner(vertex[1]);
+            if (a.x != b.x && a.y != b.y) {
+                reportUnsupported("decoded diagonal line", prim);
+                return false;
+            }
+            const f32 left = std::min(a.x, b.x);
+            const f32 top = std::min(a.y, b.y);
+            sprite = DrawSprite::makeRect(left, top, std::max(std::abs(b.x - a.x), 1.0f),
+                                          std::max(std::abs(b.y - a.y), 1.0f), 0, 0, 0, 0);
+            sprite.setColor(b.color);
+            break;
+        }
+        case sdfPrimPoint: {
+            const SpriteCorner a = getCorner(vertex[0]);
+            sprite = DrawSprite::makeRect(a.x, a.y, 1.0f, 1.0f, a.u, a.v, a.u, a.v);
+            sprite.setColor(a.color);
+            break;
+        }
+        default: reportUnsupported("decoded PRIM type", sdfGetPrimType(prim)); return false;
+    }
+    sprite.blends = sdfGetPrimAbe(prim) != 0;
+    sprite.alpha = state.alpha;
+    sprite.test = u32(state.test);
+    sprite.frameMask = sdfGetFrameMask(state.frame);
+    if (sdfGetPrimTme(prim)) {
+        sprite.texHandle = resolveTexture(state.tex0);
+        sprite.hasSampler = true;
+        sprite.tex1 = state.tex1;
+        sprite.clamp = state.clamp;
+    }
+    *out = sprite;
+    return true;
+}
+
+/// A draw whose result hangs on a test the 2D renderer lacks is refused and counted: drawn
+/// untested it paints where the GS would not.
+bool PacketProcessor::isDrawable(const GsPrimitive& primitive, const char* producer) {
+    if (!sdfGetTestDate(primitive.state.test)) return true;
+    reportUnsupported("decoded primitive with a destination alpha test", sdfGetTestDatm(primitive.state.test));
+    h.coverage.refusedDraws[producer]++;
+    return false;
+}
+
+/// What the 2D renderer cannot do with a decoded primitive, named rather than drawn wrong in
+/// silence.
+void PacketProcessor::reportUnhonoured(const GsPrimitive& primitive, const DrawSprite& sprite) {
+    const GsDrawState& state = primitive.state;
+    const u32 prim = state.prim;
+    if (sdfGetPrimTme(prim)) {
+        if (!sprite.texHandle.addr) h.coverage.unresolvedTextures[sprite.producer]++;
+        if (sdfGetTex0Tfx(state.tex0) != sdfTexModulate) {
+            reportUnsupported("decoded primitive TFX", sdfGetTex0Tfx(state.tex0));
+        }
+        if (!sdfGetTex0Tcc(state.tex0)) reportUnsupported("decoded primitive without texture alpha", 0);
+    }
+    if (sdfGetPrimFge(prim)) reportUnsupported("decoded primitive with fog", prim);
+    if (sdfGetPrimAa1(prim)) reportUnsupported("decoded primitive with antialiasing", prim);
+    if (state.pabe & 1) reportUnsupported("decoded primitive under PABE", 0);
+    if (state.fba & 1) reportUnsupported("decoded primitive under FBA", 0);
+    if (!(state.colclamp & 1)) reportUnsupported("decoded primitive with COLCLAMP off", 0);
+    if (sdfGetTestAte(state.test) && sdfGetTestAtst(state.test) != sdfAtstAlways &&
+        !(sdfGetTestAtst(state.test) == sdfAtstNever && sdfGetTestAfail(state.test) == sdfAfailZbOnly)) {
+        reportUnsupported("decoded primitive alpha test", sdfGetTestAtst(state.test));
+    }
+    if (sdfGetTestZte(state.test) && sdfGetTestZtst(state.test) != sdfZtstAlways) {
+        reportUnsupported("decoded primitive depth test", sdfGetTestZtst(state.test));
+    }
+    if (!((state.zbuf >> 32) & 1)) reportUnsupported("decoded primitive writes depth", 0);
+}
+
+void PacketProcessor::dumpPrimitive(const GsPrimitive& primitive, const DrawSprite& sprite) const {
+    const GsDrawState& state = primitive.state;
+    JsonObject row;
+    row.addString("dump", "decoded")
+        .addUint("frame", h.trace->getFrame())
+        .addString("by", sprite.producer)
+        .addHexDigits("at", sprite.linkAddr, 8)
+        .addHexDigits("prim", state.prim, 3)
+        .addHexDigits("tex0", state.tex0, 16)
+        .addHexDigits("tex1", state.tex1, 16)
+        .addHexDigits("clamp", state.clamp, 16)
+        .addHexDigits("texHandle", sprite.texHandle.addr, 8)
+        .addHexDigits("alpha", state.alpha, 16)
+        .addHexDigits("test", state.test, 8)
+        .addHexDigits("frame", state.frame, 16)
+        .addHexDigits("zbuf", state.zbuf, 16)
+        .addHexDigits("xyoffset", state.xyoffset, 16)
+        .addHexDigits("scissor", state.scissor, 16)
+        .beginArray("vertices");
+    for (u32 i = 0; i < primitive.count; i++) {
+        const GsVertex& v = primitive.vertex[i];
+        row.beginObject()
+            .addUint("x", v.x)
+            .addUint("y", v.y)
+            .addUint("z", v.z)
+            .addHexDigits("rgba", v.rgba, 8)
+            .addUint("u", v.u)
+            .addUint("v", v.v)
+            .addReal("s", v.s, 6)
+            .addReal("t", v.t, 6)
+            .addReal("q", v.q, 6)
+            .endObject();
+    }
+    log.dump(row.endArray().take());
+}
+
+/// A frame buffer is the previous frame and the font is the sheet the glyph uploads built; a 2D
+/// texture packet names its handle; anything else is found by its TEX0.
+TexHandle PacketProcessor::resolveTexture(u64 tex0) {
+    const u32 tbp0 = GsTex0::decode(tex0).tbp0;
+    if (h.textures.isFrameBuffer(tbp0)) return TexHandle{kPreviousFrameHandle};
+    if (h.textures.isFontSheet(tbp0)) return h.textures.getFontSheet(&mFrame);
+    const auto bound = mBoundTextures.find(tex0);
+    if (bound != mBoundTextures.end()) return h.textures.getHandle(bound->second, &mFrame);
+    return h.textures.getHandleForGsTex0(tex0, &mFrame);
 }
 
 void PacketProcessor::dumpStateChange(const sdfGsState_t& was, u32 at) {
-    const sdfGsState_t& gs = mRegs.getContext(0);
+    const sdfGsState_t& gs = mDecoder.getContext(0);
     if (gs.alpha == was.alpha && gs.test == was.test && gs.frameMask == was.frameMask) return;
     const LinkedPacket* linked = findLinked(at);
     log.dump(JsonObject()
@@ -508,6 +721,7 @@ void PacketProcessor::dumpStateChange(const sdfGsState_t& was, u32 at) {
                  .addHexDigits("alpha", gs.alpha, 2)
                  .addHexDigits("test", gs.test, 6)
                  .addHexDigits("fbmsk", gs.frameMask, 8)
+                 .addHexDigits("frame1", mDecoder.getRegister(sdfGsAddrFrame1), 16)
                  .addUint("aref", sdfGetTestAref(gs.test))
                  .take());
 }
@@ -527,7 +741,7 @@ void PacketProcessor::emitMeshes(const ChainEntry& entry) {
 void PacketProcessor::emitSprites(u32 packet) {
     const auto found = mSpritesByPacket.find(packet);
     if (found == mSpritesByPacket.end()) return;
-    const sdfGsState_t& gs = mRegs.getContext(0);
+    const sdfGsState_t& gs = mDecoder.getContext(0);
     for (const u32 index : found->second) {
         DrawSprite& sprite = mFrame.sprites[index];
         if (sprite.boundTexture) {
@@ -552,7 +766,7 @@ void PacketProcessor::emitMeshes(u32 packet) {
     if (found == mMeshesByPacket.end()) return;
     for (const u32 index : found->second) {
         DrawMesh& mesh = mFrame.meshes[index];
-        if (!h.config->noTransmitState) mesh.gs = mRegs.getContext(0);
+        if (!h.config->noTransmitState) mesh.gs = mDecoder.getContext(0);
         mFrame.order.push_back({DrawRef::Kind::Mesh, index});
         h.coverage.placedDraws[mesh.producer]++;
         mEmitted++;

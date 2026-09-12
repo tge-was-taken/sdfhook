@@ -31,6 +31,9 @@ struct Config {
 
     // Diagnostics, all off unless asked for.
     std::string dumpPackets;
+
+    /// Decoded primitives from a matching producer, with the registers they drew under.
+    std::string dumpDecoded;
     std::string skipProducer;
     u32 dumpCall = 0;
     u32 dumpCallWords = 32;
@@ -88,6 +91,10 @@ struct Config {
     /// Off: the geometry decodes but the color and blend are guessed, not read from the material
     /// packet, and cost 24 points as opaque grey.
     bool drawShadows = false;
+
+    /// 2D comes from the producers' hooked arguments instead of the decoded packets. A packet no
+    /// hook drew is decoded either way.
+    bool spriteHooks = false;
 
     /// Meshes keep the ALPHA, TEST and FRAME mask of their ordering table instead of the chain's.
     bool noTransmitState = false;

@@ -2347,13 +2347,30 @@ right.
       viewport is the same split: the frame has one `screenTm` from `sdf3DScreenTm`, while the chain
       carries the env's `ViewportPacket` and `HighViewportPacket` for the VU1 draws after each.
 
-- [ ] **P6: chain packets the processor reports as unread.** Every scene, per submitted frame: one
-      draw env (`DrawEnv`), which is more than A+D since it carries a clear sprite, and sets PRIM,
-      RGBAQ, XYOFFSET, PRMODECONT, TEXA, SCISSOR, DTHE, COLCLAMP and ZBUF, none replayed; 2 each of
-      viewport, light and fog (P5); 11 terminators outside a model span; one VU1 microcode upload.
-      Field scenes add 1 to 2 texture uploads and 53 to 68 `fldSdwDraw` REF links that are neither
-      state nor its inline stream. Reporting them moved no score; read each before modelling or
-      excusing it.
+- [ ] **P6: chain packets the processor reports as unread.** Every scene, per submitted frame: 2
+      each of viewport, light and fog (P5); 11 terminators outside a model span; one VU1 microcode
+      upload. Field scenes add 53 to 68 `fldSdwDraw` REF links that are neither state nor its inline
+      stream, and a GS read back to the host (`sdfSetStoreImage`). The decoder now stores every
+      register the draw env writes, so what is left of it is what a draw cannot honour (P7).
+
+- [ ] **P7: what the 2D renderer cannot do with a decoded primitive.** Reported per draw:
+      - **DATE.** The shadows `aDrawBoxF_Direct`'s `$ra` names (black fans at alpha 0x30, TEST
+        0x7D803) test destination alpha; drawn untested they painted the floor black around the
+        character, so they are refused: 2380 a run underground, 4080 on the unknown realm field.
+        PCSX2 builds the test from a stencil pre-pass over the target's alpha.
+      - **Depth.** 2D draws neither test nor write depth. `aDrawBoxG` and `DrwSprite2D` run ZTST
+        GEQUAL and the shadows GREATER; every draw env leaves ZMSK 0. Needs GS z against our linear
+        mesh depth.
+      - **Alpha test** (ATST 0 and 5 seen) and **TFX other than MODULATE** have no path in the sprite
+        shader.
+      - **Streamed textures.** GS memory is read at the frame boundary, so a texture uploaded twice
+        in one frame reads as the last upload. The font is routed to its glyph sheet; anything else
+        streamed would need GS memory shadowed from the chain's IMAGE transfers.
+      - **Feedback zoom.** `fldDrawFrameSprite`'s decoded quad is 513.1 by 224.6 pixels over 512 by
+        224 texels, the game's own slight zoom, where the hook drew it 1:1. Underground scores 4.910
+        decoded against 4.287 hooked, all of it this sprite: without it both give 5.081. Unexplained;
+        suspects are the odd field's half line, which a progressive frame drops, and filtering on 448
+        lines where the GS has 224.
 
 - [ ] **P2: the packet writes the typed IDB exposed.** With the packets typed in the IDB,
       `ida_facts.py` sees what `sdfModelLinkOt` (13 facts, 0x2B2018..0x2B20E4) and
