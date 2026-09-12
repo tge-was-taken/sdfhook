@@ -245,10 +245,10 @@ struct Coverage {
     std::map<std::string, u64> unlinkedDraws;
     std::map<std::string, u64> unreachedDraws;
 
-    /// By producer: primitives decoded from the packets themselves, and ones refused for a test
-    /// the renderer lacks.
+    /// By producer: primitives decoded from the packets themselves, and ones painted magenta for
+    /// state the renderer cannot honour.
     std::map<std::string, u64> decodedDraws;
-    std::map<std::string, u64> refusedDraws;
+    std::map<std::string, u64> unhonouredDraws;
 };
 
 

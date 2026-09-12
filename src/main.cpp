@@ -180,7 +180,7 @@ void writeRunSummary(const sdfhook::HookContext& hooks) {
     byProducer("unlinkedDraws", hooks.coverage.unlinkedDraws);
     byProducer("unreachedDraws", hooks.coverage.unreachedDraws);
     byProducer("decodedDraws", hooks.coverage.decodedDraws);
-    byProducer("refusedDraws", hooks.coverage.refusedDraws);
+    byProducer("unhonouredDraws", hooks.coverage.unhonouredDraws);
 
     hooks.model.getTrace().addTo(row);
     hooks.trace->onRunSummary(row.take());

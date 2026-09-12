@@ -34,6 +34,10 @@ public:
     /// GS memory read through the register. Empty until a recovery has run.
     TexHandle getHandleForGsTex0(u64 tex0, Frame* frame);
 
+    /// Tried and failed, as against queued for the next frame boundary.
+    bool isMissing(TexHandle handle) const;
+    bool isGsTex0Missing(u64 tex0) const;
+
     /// The chain drew into this frame buffer, so a TEX0 naming it samples a previous frame.
     void noteFrameBuffer(u32 tbp0) { mFrameBases.insert(tbp0); }
 

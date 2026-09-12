@@ -2356,13 +2356,14 @@ right.
 - [ ] **P7: what the 2D renderer cannot do with a decoded primitive.** Reported per draw:
       - **DATE.** The shadows `aDrawBoxF_Direct`'s `$ra` names (black fans at alpha 0x30, TEST
         0x7D803) test destination alpha; drawn untested they painted the floor black around the
-        character, so they are refused: 2380 a run underground, 4080 on the unknown realm field.
-        PCSX2 builds the test from a stencil pre-pass over the target's alpha.
+        character, so they draw magenta: 2380 a run underground, 4080 on the unknown realm field,
+        where they cover a third of the frame (43.671 against 4.591 without them). PCSX2 builds the
+        test from a stencil pre-pass over the target's alpha.
       - **Depth.** 2D draws neither test nor write depth. `aDrawBoxG` and `DrwSprite2D` run ZTST
         GEQUAL and the shadows GREATER; every draw env leaves ZMSK 0. Needs GS z against our linear
         mesh depth.
-      - **Alpha test** (ATST 0 and 5 seen) and **TFX other than MODULATE** have no path in the sprite
-        shader.
+      - **TFX other than MODULATE** has no path in the sprite shader, and draws magenta. The alpha
+        test does, for the AFAIL modes that drop the color.
       - **Streamed textures.** GS memory is read at the frame boundary, so a texture uploaded twice
         in one frame reads as the last upload. The font is routed to its glyph sheet; anything else
         streamed would need GS memory shadowed from the chain's IMAGE transfers.

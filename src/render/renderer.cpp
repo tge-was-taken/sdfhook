@@ -46,8 +46,24 @@ in vec4 vColor;
 out vec4 oColor;
 uniform sampler2D uTexture;
 uniform int uTextured;
+uniform int uAtest;       // TEST's ATST, ALWAYS when the failing half still writes the color
+uniform float uAtestRef;
+
+// In the GS's integer units, as the mesh shader tests.
+bool isAlphaTestFailing(float normalised) {
+    float a = floor(min(normalised * 128.0, 255.0) + 0.5);
+    return uAtest == 0
+        || (uAtest == 2 && a >= uAtestRef)
+        || (uAtest == 3 && a >  uAtestRef)
+        || (uAtest == 4 && a != uAtestRef)
+        || (uAtest == 5 && a <  uAtestRef)
+        || (uAtest == 6 && a <= uAtestRef)
+        || (uAtest == 7 && a == uAtestRef);
+}
+
 void main() {
     oColor = uTextured != 0 ? texture(uTexture, vUv) * vColor * 2.0 : vColor;
+    if (isAlphaTestFailing(oColor.a)) discard;
 }
 )";
 
@@ -1029,6 +1045,8 @@ void Renderer::drawSprites(const Frame& frame, const std::vector<u32>& indices) 
                     mConfig->pixelOffsetX * 2.0f / w, -mConfig->pixelOffsetY * 2.0f / h);
     }
     const int textured = glGetUniformLocation(mProgram, "uTextured");
+    const int atest = glGetUniformLocation(mProgram, "uAtest");
+    const int atestRef = glGetUniformLocation(mProgram, "uAtestRef");
     glBindVertexArray(mVao);
     glBindBuffer(GL_ARRAY_BUFFER, mVbo);
     glEnable(GL_BLEND);
@@ -1065,17 +1083,26 @@ void Renderer::drawSprites(const Frame& frame, const std::vector<u32>& indices) 
 
         std::vector<f32> attribs;
         attribs.reserve(mVerts.size() * 8);
-        for (const ScreenVertex& v : mVerts) {
+        for (ScreenVertex& v : mVerts) {
+            // Magenta, as the mesh shader paints an unmodelled state.
+            if (sprite.unhandled) v.color = Rgba{0xFF, 0x00, 0xFF, 0x80};
             mBounds.add(v);
             attribs.insert(attribs.end(), {v.x, v.y, v.u, v.v, v.color.r / 255.0f,
                                            v.color.g / 255.0f, v.color.b / 255.0f,
                                            v.color.a / 255.0f});
         }
         applySpriteBlend(sprite);
+        if (sprite.unhandled) applyBlend(GsBlend{});
         const u64 mask = sprite.frameMask;
         glColorMask((mask & 0x0000FF) != 0x0000FF, (mask & 0x00FF00) != 0x00FF00,
                     (mask & 0xFF0000) != 0xFF0000, (mask & 0xFF000000u) != 0xFF000000u);
-        glUniform1i(textured, hasTexture ? 1 : 0);
+        glUniform1i(textured, hasTexture && !sprite.unhandled ? 1 : 0);
+        // FB_ONLY and RGB_ONLY write the failing half's color anyway, and depth is not drawn here.
+        const u32 afail = sdfGetTestAfail(sprite.test);
+        const bool discards = sdfGetTestAte(sprite.test) && !sprite.unhandled &&
+                              (afail == sdfAfailKeep || afail == sdfAfailZbOnly);
+        glUniform1i(atest, discards ? int(sdfGetTestAtst(sprite.test)) : int(sdfAtstAlways));
+        glUniform1f(atestRef, f32(sdfGetTestAref(sprite.test)));
         if (hasTexture) {
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D,

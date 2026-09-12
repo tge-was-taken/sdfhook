@@ -64,6 +64,9 @@ struct DrawSprite {
     /// The ALPHA the chain has in force at the sprite's packet, FIX included.
     u64 alpha = kGsAlphaBlend;
 
+    /// The renderer cannot draw it as the GS would, so it paints it magenta.
+    bool unhandled = false;
+
     /// TEX1 and CLAMP, for a draw decoded from its packet. A hooked sprite never saw them.
     bool hasSampler = false;
     u64 tex1 = 0;

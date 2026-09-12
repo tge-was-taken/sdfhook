@@ -202,8 +202,10 @@ private:
     bool decodeTransfer(const ChainEntry& entry);
     void emitDecodedPrimitives(const ChainEntry& entry);
     bool convertPrimitive(const GsPrimitive& primitive, DrawSprite* sprite);
-    void reportUnhonoured(const GsPrimitive& primitive, const DrawSprite& sprite);
-    bool isDrawable(const GsPrimitive& primitive, const char* producer);
+    enum class Verdict { Honoured, Invisible, Unhonoured };
+    Verdict judgePrimitive(const GsPrimitive& primitive, const DrawSprite& sprite,
+                           const char** why) const;
+    void reportUnhonoured(const GsPrimitive& primitive);
     void dumpPrimitive(const GsPrimitive& primitive, const DrawSprite& sprite) const;
     TexHandle resolveTexture(u64 tex0);
     const char* getProducer(const ChainEntry& entry) const;
@@ -230,6 +232,9 @@ private:
     /// whether that packet came from a producer whose hook drew it.
     const char* mLastLinker = "chain";
     bool mLastClaimed = false;
+
+    /// The last texture looked up was tried and cannot be had, as against still on its way.
+    bool mTextureMissing = false;
 
     std::unordered_map<u32, LinkedPacket> mLinked;
     std::unordered_map<u32, std::vector<u32>> mSpritesByPacket;
@@ -528,10 +533,18 @@ void PacketProcessor::emitDecodedPrimitives(const ChainEntry& entry) {
     for (const GsPrimitive& primitive : mDecoder.getPrimitives()) {
         const char* producer = getProducer(entry);
         DrawSprite sprite;
-        if (!isDrawable(primitive, producer) || !convertPrimitive(primitive, &sprite)) continue;
+        if (!convertPrimitive(primitive, &sprite)) continue;
         sprite.linkAddr = entry.at;
         sprite.producer = producer;
-        reportUnhonoured(primitive, sprite);
+        reportUnhonoured(primitive);
+        const char* why = nullptr;
+        const Verdict verdict = judgePrimitive(primitive, sprite, &why);
+        if (verdict == Verdict::Invisible) continue;
+        if (verdict == Verdict::Unhonoured) {
+            reportUnsupported(why, sdfGetPrimType(primitive.state.prim));
+            h.coverage.unhonouredDraws[producer]++;
+            sprite.unhandled = true;
+        }
         if (!h.config->dumpDecoded.empty() && std::strstr(sprite.producer, h.config->dumpDecoded.c_str())) {
             dumpPrimitive(primitive, sprite);
         }
@@ -617,6 +630,7 @@ bool PacketProcessor::convertPrimitive(const GsPrimitive& primitive, DrawSprite*
     sprite.alpha = state.alpha;
     sprite.test = u32(state.test);
     sprite.frameMask = sdfGetFrameMask(state.frame);
+    mTextureMissing = false;
     if (sdfGetPrimTme(prim)) {
         sprite.texHandle = resolveTexture(state.tex0);
         sprite.hasSampler = true;
@@ -627,38 +641,50 @@ bool PacketProcessor::convertPrimitive(const GsPrimitive& primitive, DrawSprite*
     return true;
 }
 
-/// A draw whose result hangs on a test the 2D renderer lacks is refused and counted: drawn
-/// untested it paints where the GS would not.
-bool PacketProcessor::isDrawable(const GsPrimitive& primitive, const char* producer) {
-    if (!sdfGetTestDate(primitive.state.test)) return true;
-    reportUnsupported("decoded primitive with a destination alpha test", sdfGetTestDatm(primitive.state.test));
-    h.coverage.refusedDraws[producer]++;
-    return false;
-}
-
-/// What the 2D renderer cannot do with a decoded primitive, named rather than drawn wrong in
-/// silence.
-void PacketProcessor::reportUnhonoured(const GsPrimitive& primitive, const DrawSprite& sprite) {
+/// Whether the 2D renderer draws the primitive as the GS would. One it cannot is painted
+/// magenta, so the gap shows on screen; one whose tests pass no color is not drawn.
+PacketProcessor::Verdict PacketProcessor::judgePrimitive(const GsPrimitive& primitive,
+                                                         const DrawSprite& sprite,
+                                                         const char** why) const {
     const GsDrawState& state = primitive.state;
     const u32 prim = state.prim;
+    const u64 test = state.test;
+    const auto unhonoured = [&](const char* reason) {
+        *why = reason;
+        return Verdict::Unhonoured;
+    };
+
+    // A failing fragment that keeps nothing, or only depth, adds no color at all.
+    const u32 atst = sdfGetTestAtst(test);
+    const u32 afail = sdfGetTestAfail(test);
+    if (sdfGetTestAte(test) && atst == sdfAtstNever &&
+        (afail == sdfAfailKeep || afail == sdfAfailZbOnly)) {
+        return Verdict::Invisible;
+    }
+    if (sdfGetTestZte(test) && sdfGetTestZtst(test) == sdfZtstNever) return Verdict::Invisible;
+    if (sdfGetTestDate(test)) return unhonoured("decoded primitive destination alpha test");
     if (sdfGetPrimTme(prim)) {
-        if (!sprite.texHandle.addr) h.coverage.unresolvedTextures[sprite.producer]++;
-        if (sdfGetTex0Tfx(state.tex0) != sdfTexModulate) {
-            reportUnsupported("decoded primitive TFX", sdfGetTex0Tfx(state.tex0));
-        }
-        if (!sdfGetTex0Tcc(state.tex0)) reportUnsupported("decoded primitive without texture alpha", 0);
+        if (!sprite.texHandle.addr && mTextureMissing) return unhonoured("decoded texture not found");
+        if (sdfGetTex0Tfx(state.tex0) != sdfTexModulate) return unhonoured("decoded primitive TFX");
+        if (!sdfGetTex0Tcc(state.tex0)) return unhonoured("decoded primitive without texture alpha");
     }
-    if (sdfGetPrimFge(prim)) reportUnsupported("decoded primitive with fog", prim);
-    if (sdfGetPrimAa1(prim)) reportUnsupported("decoded primitive with antialiasing", prim);
-    if (state.pabe & 1) reportUnsupported("decoded primitive under PABE", 0);
-    if (state.fba & 1) reportUnsupported("decoded primitive under FBA", 0);
-    if (!(state.colclamp & 1)) reportUnsupported("decoded primitive with COLCLAMP off", 0);
-    if (sdfGetTestAte(state.test) && sdfGetTestAtst(state.test) != sdfAtstAlways &&
-        !(sdfGetTestAtst(state.test) == sdfAtstNever && sdfGetTestAfail(state.test) == sdfAfailZbOnly)) {
-        reportUnsupported("decoded primitive alpha test", sdfGetTestAtst(state.test));
-    }
+    if (sdfGetPrimFge(prim)) return unhonoured("decoded primitive with fog");
+    if (state.pabe & 1) return unhonoured("decoded primitive under PABE");
+    if (state.fba & 1) return unhonoured("decoded primitive under FBA");
+    if (!(state.colclamp & 1)) return unhonoured("decoded primitive with COLCLAMP off");
+    return Verdict::Honoured;
+}
+
+/// Differences reported but drawn as they are. Depth is one: 2D here neither tests nor writes it,
+/// and the chain's own order already layers what the menus depth-test against each other.
+void PacketProcessor::reportUnhonoured(const GsPrimitive& primitive) {
+    const GsDrawState& state = primitive.state;
     if (sdfGetTestZte(state.test) && sdfGetTestZtst(state.test) != sdfZtstAlways) {
         reportUnsupported("decoded primitive depth test", sdfGetTestZtst(state.test));
+    }
+    if (sdfGetPrimAa1(state.prim)) reportUnsupported("decoded primitive with antialiasing", state.prim);
+    if (sdfGetTestAte(state.test) && sdfGetTestAfail(state.test) == sdfAfailRgbOnly) {
+        reportUnsupported("decoded primitive alpha test keeping alpha", sdfGetTestAtst(state.test));
     }
     if (!((state.zbuf >> 32) & 1)) reportUnsupported("decoded primitive writes depth", 0);
 }
@@ -706,8 +732,15 @@ TexHandle PacketProcessor::resolveTexture(u64 tex0) {
     if (h.textures.isFrameBuffer(tbp0)) return TexHandle{kPreviousFrameHandle};
     if (h.textures.isFontSheet(tbp0)) return h.textures.getFontSheet(&mFrame);
     const auto bound = mBoundTextures.find(tex0);
-    if (bound != mBoundTextures.end()) return h.textures.getHandle(bound->second, &mFrame);
-    return h.textures.getHandleForGsTex0(tex0, &mFrame);
+    TexHandle handle;
+    if (bound != mBoundTextures.end()) {
+        handle = h.textures.getHandle(bound->second, &mFrame);
+        mTextureMissing = !handle.addr && h.textures.isMissing(bound->second);
+    } else {
+        handle = h.textures.getHandleForGsTex0(tex0, &mFrame);
+        mTextureMissing = !handle.addr && h.textures.isGsTex0Missing(tex0);
+    }
+    return handle;
 }
 
 void PacketProcessor::dumpStateChange(const sdfGsState_t& was, u32 at) {

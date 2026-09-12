@@ -68,8 +68,11 @@ glyph uploads built, an engine handle whose upload wrote the same TEX0 (`sdfTexH
 memory read through the register. GS memory holds only what was uploaded last, so a texture streamed
 in mid-frame reads wrong from there: the font did until it was routed to the sheet.
 
-**What the 2D renderer cannot do is reported where the primitive converts**, and a draw whose result
-hangs on a test it lacks (DATE) is refused and counted in `refusedDraws`, not drawn wrong.
+**What the 2D renderer cannot do is painted magenta**, as the mesh shader paints an unmodelled
+state, and counted in `unhonouredDraws` by producer: a destination alpha test, a texture function
+other than MODULATE, fog, a texture that cannot be found. Depth is only reported, since the chain's
+order already layers what the menus depth-test against each other; a draw whose tests pass no
+color is not drawn.
 
 **Inlining limits what a hook can enumerate.** "Never called" from a hook means never called out of
 line. Trust the `[todo]` ranking over any call-count enumeration.

@@ -347,6 +347,16 @@ bool TextureCache::isFrameBuffer(u32 tbp0) const {
     return false;
 }
 
+bool TextureCache::isMissing(TexHandle handle) const {
+    const auto alias = mAlias.find(handle);
+    return alias != mAlias.end() && !alias->second.addr;
+}
+
+bool TextureCache::isGsTex0Missing(u64 tex0) const {
+    const auto known = mTex0Handles.find(tex0 & kTex0Identity);
+    return known != mTex0Handles.end() && isMissing(known->second);
+}
+
 void TextureCache::onGsUpload(u64 bitbltbuf, u64 trxreg) {
     const u32 dbp = u32((bitbltbuf >> 32) & 0x3FFF);
     const u32 dpsm = u32((bitbltbuf >> 56) & 0x3F);

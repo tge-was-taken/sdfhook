@@ -40,7 +40,7 @@ A model node is checked first and consumed as a span, from its first link to its
 | `release_movieobj2` | 120 | title; no hook ever drew it |
 | `dds3DrawFade` | 44 | underground |
 
-**Refused.** The shadows `aDrawBoxF_Direct`'s `$ra` names: 6460 fans that test destination alpha,
+**Magenta.** The shadows `aDrawBoxF_Direct`'s `$ra` names: 6460 fans that test destination alpha,
 which the 2D renderer cannot (TODO P7).
 
 **Hooked, because VU1 builds the draw from what the chain carries (spans).**
