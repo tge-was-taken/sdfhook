@@ -2365,7 +2365,11 @@ right.
         behind the camera; they now take the chain's prim transform and land where the GS draws
         them. **What still blocks it:** a volume our side sees at vertex alpha 0x40 writes 0x40 where
         the GS has 0x80, so bit 7 is never set. VU1's poly path doubles the vertex alpha and ours
-        does not, the same unexplained factor as V8.
+        does not, the same unexplained factor as V8. Doubling it for the polys alone (unknown realm
+        4.240 -> 8.115) sets the bit, but over the whole character, which then draws as a dark
+        silhouette; the GS marks only the floor the shadow falls on. So the volumes' depth against
+        the character's own geometry does not match yet either: compare the volumes' GS z
+        (`zmin`/`zmax` per batch in the GS trace) with ours before changing the alpha.
       - **Depth.** Done: the depth buffer holds GS z as 1 - z / 2^24 in 32-bit float, exact for
         every 24-bit z. Meshes write the z VU1 puts on the GS (screenOffset.z + screenScale.z *
         clip.z / clip.w, from `sdf3DScreenParam`), decoded draws their own, and the menus' z 0 to 32
