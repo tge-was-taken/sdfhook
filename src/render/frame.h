@@ -361,12 +361,17 @@ private:
     static constexpr usize kSlots = 3;
     enum class Slot : u8 { Free, Building, Pending, Presenting };
 
+    // A texture is uploaded once, so a frame not drawn hands its uploads to the next one.
+    void carryUploads(Frame& frame);
+    void takeCarriedUploads(Frame& frame);
+
     Frame mFrames[kSlots];
     Slot mState[kSlots] = {Slot::Free, Slot::Free, Slot::Free};
     std::mutex mMutex;
     std::condition_variable mFreed;
     bool mDropWhenBehind = false;
     u64 mNextIndex = 1;
+    std::vector<TextureUpload> mCarried;
 };
 
 }  // namespace sdfhook

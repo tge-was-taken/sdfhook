@@ -11,13 +11,16 @@ Frame* FrameRing::acquireBuild() {
             if (mState[i] != Slot::Free) continue;
             mState[i] = Slot::Building;
             mFrames[i].reset(mNextIndex++);
+            takeCarriedUploads(mFrames[i]);
             return &mFrames[i];
         }
         if (mDropWhenBehind) {
             for (usize i = 0; i < kSlots; i++) {
                 if (mState[i] != Slot::Pending) continue;
                 mState[i] = Slot::Building;
+                carryUploads(mFrames[i]);
                 mFrames[i].reset(mNextIndex++);
+                takeCarriedUploads(mFrames[i]);
                 return &mFrames[i];
             }
             return nullptr;
@@ -42,10 +45,21 @@ void FrameRing::abandon(Frame* frame) {
     const std::lock_guard<std::mutex> lock(mMutex);
     for (usize i = 0; i < kSlots; i++) {
         if (&mFrames[i] != frame || mState[i] != Slot::Building) continue;
+        carryUploads(mFrames[i]);
         mState[i] = Slot::Free;
         mFreed.notify_one();
         return;
     }
+}
+
+void FrameRing::carryUploads(Frame& frame) {
+    for (TextureUpload& upload : frame.textureUploads) mCarried.push_back(std::move(upload));
+    frame.textureUploads.clear();
+}
+
+void FrameRing::takeCarriedUploads(Frame& frame) {
+    frame.textureUploads = std::move(mCarried);
+    mCarried.clear();
 }
 
 Frame* FrameRing::takePending() {
