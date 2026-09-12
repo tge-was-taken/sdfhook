@@ -26,12 +26,19 @@ bool RenderTexture::create(int width, int height) {
 
     glGenRenderbuffers(1, &mDepth);
     glBindRenderbuffer(GL_RENDERBUFFER, mDepth);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT32F, width, height);
+    // Stencil for the GS's destination alpha test.
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH32F_STENCIL8, width, height);
+
+    glGenTextures(1, &mSnapshot);
+    glBindTexture(GL_TEXTURE_2D, mSnapshot);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
     glGenFramebuffers(1, &mFramebuffer);
     glBindFramebuffer(GL_FRAMEBUFFER, mFramebuffer);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, mTexture, 0);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, mDepth);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, mDepth);
     const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     if (status != GL_FRAMEBUFFER_COMPLETE) {
@@ -46,9 +53,11 @@ void RenderTexture::destroy() {
     glDeleteFramebuffers(1, &mFramebuffer);
     glDeleteRenderbuffers(1, &mDepth);
     glDeleteTextures(1, &mTexture);
+    glDeleteTextures(1, &mSnapshot);
     mFramebuffer = 0;
     mDepth = 0;
     mTexture = 0;
+    mSnapshot = 0;
 }
 
 bool RenderTexture::resize(int width, int height) {
@@ -62,6 +71,13 @@ bool RenderTexture::resize(int width, int height) {
     destroy();
     *this = next;
     return true;
+}
+
+u32 RenderTexture::copyColor() const {
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, mFramebuffer);
+    glBindTexture(GL_TEXTURE_2D, mSnapshot);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, mWidth, mHeight);
+    return mSnapshot;
 }
 
 void RenderTexture::bind() const {

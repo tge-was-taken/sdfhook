@@ -654,6 +654,11 @@ bool PacketProcessor::convertPrimitive(const GsPrimitive& primitive, DrawSprite*
         sprite.hasSampler = true;
         sprite.textureFunction = sdfGetTex0Tfx(state.tex0);
         sprite.textureAlpha = sdfGetTex0Tcc(state.tex0) != 0;
+        // AEM would make a black texel transparent instead; no scene sets it with a 24-bit texture.
+        if (tex0.psm == sdfPsmct24) {
+            if ((state.texa >> 15) & 1) reportUnsupported("24-bit texture under AEM", state.texa);
+            sprite.texelAlpha = f32(state.texa & 0xFF) / 255.0f;
+        }
         sprite.tex1 = state.tex1;
         sprite.clamp = state.clamp;
     }
@@ -681,11 +686,6 @@ PacketProcessor::Verdict PacketProcessor::judgePrimitive(const GsPrimitive& prim
         return Verdict::Invisible;
     }
     if (sdfGetTestZte(test) && sdfGetTestZtst(test) == sdfZtstNever) return Verdict::Invisible;
-    // @todo TODO.md P7: DATE passes where destination alpha bit 7 equals DATM.
-    if (sdfGetTestDate(test)) {
-        return unhonoured(sdfGetTestDatm(test) ? "decoded primitive destination alpha test, bit set"
-                                               : "decoded primitive destination alpha test, bit clear");
-    }
     if (sdfGetPrimTme(prim)) {
         if (!sprite.texHandle.addr && mTextureMissing) return unhonoured("decoded texture not found");
     }

@@ -53,6 +53,7 @@ uniform sampler2D uTexture;
 uniform int uTextured;
 uniform int uTexFunction;  // TEX0's TFX
 uniform int uTexAlpha;     // TEX0's TCC
+uniform float uTexelAlpha; // TEXA's TA0 for a 24-bit texture, negative for the texel's own
 uniform int uFogOn;
 uniform vec3 uFogColor;
 uniform int uAtest;
@@ -77,6 +78,7 @@ void main() {
     oColor = vColor;
     if (uTextured != 0) {
         vec4 t = texture(uTexture, vUv);
+        if (uTexelAlpha >= 0.0) t.a = uTexelAlpha;
         vec3 modulated = t.rgb * vColor.rgb * 2.0;
         float vertexA = vColor.a * 128.0 / 255.0;
         float textureA = t.a * 2.0;
@@ -88,6 +90,26 @@ void main() {
     }
     if (uFogOn != 0) oColor.rgb = mix(uFogColor, oColor.rgb, vFog * 255.0 / 256.0);
     if (isAlphaTestFailing(oColor.a) != (uAtestInvert != 0)) discard;
+}
+)";
+
+// A triangle over the whole target, marking in the stencil where alpha bit 7 is what DATM asks.
+constexpr const char* kDateVertexShader = R"(#version 330 core
+void main() {
+    vec2 corner = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    gl_Position = vec4(corner * 2.0 - 1.0, 0.0, 1.0);
+}
+)";
+
+constexpr const char* kDateFragmentShader = R"(#version 330 core
+uniform sampler2D uColor;
+uniform int uDatm;
+out vec4 oColor;
+void main() {
+    // Alpha is stored as a / 128, so bit 7 set is the stored maximum.
+    bool bitSet = texelFetch(uColor, ivec2(gl_FragCoord.xy), 0).a > 254.0 / 255.0;
+    if (bitSet != (uDatm != 0)) discard;
+    oColor = vec4(0.0);
 }
 )";
 
@@ -448,9 +470,10 @@ GsBlend convertAlphaToBlend(u64 reg) {
     return blend;
 }
 
+/// The GS blends color only and writes the source alpha as it is.
 void applyBlend(const GsBlend& blend) {
-    glBlendEquation(blend.equation);
-    glBlendFunc(blend.src, blend.dst);
+    glBlendEquationSeparate(blend.equation, GL_FUNC_ADD);
+    glBlendFuncSeparate(blend.src, blend.dst, GL_ONE, GL_ZERO);
     glBlendColor(0.0f, 0.0f, 0.0f, blend.fix);
 }
 
@@ -603,6 +626,11 @@ bool Renderer::init(const Config& config, int width, int height) {
     const u32 meshFs = compileMesh(GL_FRAGMENT_SHADER, kMeshFragmentShader);
     if (!vs || !fs || !meshVs || !meshFs) return false;
     mProgram = link(vs, fs);
+    const u32 dateVs = compile(GL_VERTEX_SHADER, kDateVertexShader);
+    const u32 dateFs = compile(GL_FRAGMENT_SHADER, kDateFragmentShader);
+    if (!dateVs || !dateFs) return false;
+    mDateProgram = link(dateVs, dateFs);
+    glGenVertexArrays(1, &mEmptyVao);
     mMeshProgram = link(meshVs, meshFs);
 
     glGenVertexArrays(1, &mVao);
@@ -651,6 +679,8 @@ void Renderer::shutdown() {
     glDeleteBuffers(1, &mVbo);
     glDeleteVertexArrays(1, &mVao);
     glDeleteProgram(mProgram);
+    glDeleteProgram(mDateProgram);
+    glDeleteVertexArrays(1, &mEmptyVao);
     glDeleteBuffers(1, &mMeshVbo);
     glDeleteBuffers(1, &mMeshEbo);
     glDeleteVertexArrays(1, &mMeshVao);
@@ -671,6 +701,34 @@ void Renderer::getScreenRect(int* x, int* y, int* width, int* height) const {
     *height = scaled / target.getWidth();
     *x = (screenWidth - *width) / 2;
     *y = (screenHeight - *height) / 2;
+}
+
+void Renderer::markDestinationAlpha(u32 datm) {
+    const RenderTexture& target = mFrames[mCurrent];
+    const u32 color = target.copyColor();
+    target.bind();
+    glUseProgram(mDateProgram);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, color);
+    glUniform1i(glGetUniformLocation(mDateProgram, "uColor"), 0);
+    glUniform1i(glGetUniformLocation(mDateProgram, "uDatm"), int(datm));
+    glBindVertexArray(mEmptyVao);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_STENCIL_TEST);
+    glStencilMask(0xFF);
+    glClearStencil(0);
+    glClear(GL_STENCIL_BUFFER_BIT);
+    glStencilFunc(GL_ALWAYS, 1, 0xFF);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+
+    glUseProgram(mProgram);
+    glBindVertexArray(mVao);
+    glBindBuffer(GL_ARRAY_BUFFER, mVbo);
+    glEnable(GL_BLEND);
 }
 
 void Renderer::fitTargetToScreen() {
@@ -983,6 +1041,7 @@ void Renderer::drawMeshes(const Frame& frame, const std::vector<u32>& indices) {
         // The GS's z counts the other way, so its GEQUAL is our LEQUAL. Forcing LESS drops a
         // decal sitting exactly on the surface it decorates.
         glDepthFunc(getDepthFunc(mesh.gs.test));
+        if (sdfGetTestDate(mesh.gs.test)) reportUnsupported("mesh with a destination alpha test", 0);
         // FRAME's write mask. The game re-draws a character with RGB masked to build the alpha
         // its bloom reads.
         const u64 mask = mesh.gs.frameMask;
@@ -1032,7 +1091,7 @@ void Renderer::drawMeshes(const Frame& frame, const std::vector<u32>& indices) {
         // clamped dot and v picks a row, so it is a ramp rather than a highlight.
         if (reflective && mesh.refMap.addr) {
             glBlendEquation(GL_FUNC_ADD);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+            glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE, GL_ONE, GL_ZERO);
             glUniform1i(mtexPass, 0);
             glUniform1i(refMapPass, 1);
             glUniform1f(refMapRow, f32(mesh.specular.a) / sdfGsUnit);
@@ -1047,7 +1106,7 @@ void Renderer::drawMeshes(const Frame& frame, const std::vector<u32>& indices) {
         if (mConfig->drawSpecularOverlay && (mesh.attrBits & sdfCoreAttrSpecularPass) &&
             mesh.specularTex.addr) {
             glBlendEquation(GL_FUNC_ADD);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ZERO);
             glDepthMask(GL_FALSE);
             glUniform1i(mtexPass, 0);
             glUniform1i(refMapPass, 0);
@@ -1124,6 +1183,7 @@ void Renderer::drawSprites(const Frame& frame, const std::vector<u32>& indices) 
     const int atestInvert = glGetUniformLocation(mProgram, "uAtestInvert");
     const int texFunction = glGetUniformLocation(mProgram, "uTexFunction");
     const int texAlpha = glGetUniformLocation(mProgram, "uTexAlpha");
+    const int texelAlpha = glGetUniformLocation(mProgram, "uTexelAlpha");
     const int fogOn = glGetUniformLocation(mProgram, "uFogOn");
     const int fogColor = glGetUniformLocation(mProgram, "uFogColor");
     glBindVertexArray(mVao);
@@ -1138,9 +1198,19 @@ void Renderer::drawSprites(const Frame& frame, const std::vector<u32>& indices) 
     const char* const skipProducer =
         mConfig->skipProducer.empty() ? nullptr : mConfig->skipProducer.c_str();
 
+    // The stencil marks what a destination alpha test passes, from the alpha as the last run of
+    // tested draws found it; any other draw may have changed the alpha since.
+    int markedDatm = -1;
     for (const u32 index : indices) {
         const DrawSprite& sprite = frame.sprites[index];
         if (skipProducer && std::strstr(sprite.producer, skipProducer)) continue;
+        const bool destinationTest = sdfGetTestDate(sprite.test) && !sprite.unhandled;
+        if (destinationTest && markedDatm != int(sdfGetTestDatm(sprite.test))) {
+            markedDatm = int(sdfGetTestDatm(sprite.test));
+            markDestinationAlpha(u32(markedDatm));
+        } else if (!destinationTest) {
+            markedDatm = -1;
+        }
         // ATST NEVER with AFAIL ZB_ONLY writes no color: a hooked sprite has no depth to lay, so
         // drawing it would only paint a rectangle the hardware never shows.
         if (!sprite.hasDepth && sdfGetTestAte(sprite.test) && sdfGetTestAtst(sprite.test) == 0 &&
@@ -1178,6 +1248,7 @@ void Renderer::drawSprites(const Frame& frame, const std::vector<u32>& indices) 
         glUniform1i(textured, hasTexture && !sprite.unhandled ? 1 : 0);
         glUniform1i(texFunction, int(sprite.textureFunction));
         glUniform1i(texAlpha, sprite.textureAlpha ? 1 : 0);
+        glUniform1f(texelAlpha, sprite.texelAlpha);
         glUniform1i(fogOn, sprite.fogs && !sprite.unhandled ? 1 : 0);
         glUniform3f(fogColor, sprite.fogColor.r / 255.0f, sprite.fogColor.g / 255.0f,
                     sprite.fogColor.b / 255.0f);
@@ -1189,6 +1260,18 @@ void Renderer::drawSprites(const Frame& frame, const std::vector<u32>& indices) 
             glDepthFunc(getDepthFunc(sprite.test));
         } else {
             glDisable(GL_DEPTH_TEST);
+        }
+        if (destinationTest) {
+            // A fragment that leaves bit 7 other than DATM fails the next one over it, as the GS
+            // tests each against the alpha the one before wrote.
+            const bool writesAlpha = (sprite.frameMask & 0xFF000000u) != 0xFF000000u;
+            const bool bitSet = sprite.corner[2].color.a >= 0x80;
+            const bool clears = writesAlpha && bitSet != (sdfGetTestDatm(sprite.test) != 0);
+            glEnable(GL_STENCIL_TEST);
+            glStencilFunc(GL_EQUAL, 1, 0xFF);
+            glStencilOp(GL_KEEP, GL_KEEP, clears ? GL_ZERO : GL_KEEP);
+        } else {
+            glDisable(GL_STENCIL_TEST);
         }
         if (hasTexture) {
             glActiveTexture(GL_TEXTURE0);
@@ -1204,6 +1287,7 @@ void Renderer::drawSprites(const Frame& frame, const std::vector<u32>& indices) 
     glDepthMask(GL_TRUE);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_DEPTH_CLAMP);
+    glDisable(GL_STENCIL_TEST);
 }
 
 std::vector<u8> Renderer::readPixels(int* width, int* height) const {

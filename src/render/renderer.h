@@ -35,6 +35,9 @@ public:
     /// The window's drawable size in pixels. The picture is letterboxed into it.
     void setScreenSize(int width, int height) { mScreenWidth = width; mScreenHeight = height; }
 
+    /// The stencil set where the target's alpha bit 7 is `datm`, for a destination alpha test.
+    void markDestinationAlpha(u32 datm);
+
     /// Renders at the size the window shows the guest's 512x448 at, rather than scaling a fixed
     /// target up to it.
     void fitTargetToScreen();
@@ -94,6 +97,10 @@ private:
     int mCurrent = 0;
     u32 mProgram = 0;
     u32 mVao = 0;
+
+    /// Marks in the stencil the pixels whose alpha a destination alpha test passes.
+    u32 mDateProgram = 0;
+    u32 mEmptyVao = 0;
     u32 mVbo = 0;
     u32 mMeshProgram = 0;
     u32 mMeshVao = 0;

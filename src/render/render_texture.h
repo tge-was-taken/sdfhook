@@ -22,6 +22,9 @@ public:
 
     u32 getTexture() const { return mTexture; }
 
+    /// A copy of the color as it stands, which a draw into this target may sample.
+    u32 copyColor() const;
+
     /// For reading the render back at its own size. The window may be scaled by the display, so
     /// what it holds is not what the scoring compares.
     u32 getFramebuffer() const { return mFramebuffer; }
@@ -32,6 +35,7 @@ private:
     u32 mFramebuffer = 0;
     u32 mTexture = 0;
     u32 mDepth = 0;
+    u32 mSnapshot = 0;
     int mWidth = 0;
     int mHeight = 0;
 };

@@ -77,6 +77,10 @@ struct DrawSprite {
     /// sprite modulates with the texture's alpha and has no fog.
     u32 textureFunction = sdfTexModulate;
     bool textureAlpha = true;
+
+    /// A 24-bit texture has no alpha of its own: the GS reads TEXA's TA0 in its place, as a
+    /// fraction of 255. Negative samples the texture's.
+    f32 texelAlpha = -1.0f;
     bool fogs = false;
     Rgba fogColor{0, 0, 0, 0};
 

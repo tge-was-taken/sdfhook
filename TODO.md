@@ -2354,11 +2354,14 @@ right.
       register the draw env writes, so what is left of it is what a draw cannot honour (P7).
 
 - [ ] **P7: what the 2D renderer cannot do with a decoded primitive.** Reported per draw:
-      - **DATE.** The shadows `aDrawBoxF_Direct`'s `$ra` names (black fans at alpha 0x30, TEST
-        0x7D803) test destination alpha; drawn untested they painted the floor black around the
-        character, so they draw magenta: 2380 a run underground, 4080 on the unknown realm field,
-        where they cover a third of the frame (43.671 against 4.591 without them). PCSX2 builds the
-        test from a stencil pre-pass over the target's alpha.
+      - **DATE.** Implemented, and it draws nothing yet. A pre-pass copies the target and marks in
+        the stencil where alpha bit 7 equals DATM; the tested draw runs under it, and a fragment that
+        leaves the bit other than DATM clears its mark, so overlapping fans darken once. The target
+        now keeps the source alpha unblended, as the GS writes it. At the shadow fans (`aDrawBoxF_Direct`'s
+        `$ra`, TEST 0x7D803, DATM 1) the target's alpha is 0 on about 200k of 229k pixels and has
+        bit 7 on 512, so nothing passes: the emulator darkens the character's right side, we do not.
+        Blocked on what our meshes write as alpha, which is V8's unexplained 255/128. Read the GS
+        frame buffer's own alpha (`pcsx2hook_read_gs_pixels`, PSMCT32) at the fans' draw to settle it.
       - **Depth.** Done: the depth buffer holds GS z as 1 - z / 2^24 in 32-bit float, exact for
         every 24-bit z. Meshes write the z VU1 puts on the GS (screenOffset.z + screenScale.z *
         clip.z / clip.w, from `sdf3DScreenParam`), decoded draws their own, and the menus' z 0 to 32
@@ -2370,11 +2373,9 @@ right.
       - **Streamed textures.** GS memory is read at the frame boundary, so a texture uploaded twice
         in one frame reads as the last upload. The font is routed to its glyph sheet; anything else
         streamed would need GS memory shadowed from the chain's IMAGE transfers.
-      - **Feedback zoom.** `fldDrawFrameSprite`'s decoded quad is 513.1 by 224.6 pixels over 512 by
-        224 texels, the game's own slight zoom, where the hook drew it 1:1. Underground scores 4.910
-        decoded against 4.287 hooked, all of it this sprite: without it both give 5.081. Unexplained;
-        suspects are the odd field's half line, which a progressive frame drops, and filtering on 448
-        lines where the GS has 224.
+      - **Feedback zoom.** Mostly solved: the frame is sampled as PSMCT24, whose alpha the GS takes
+        from TEXA's TA0, where we sampled the target's own. Underground 4.910 -> 4.371 against
+        4.287 hooked; unknown realm 4.591 -> 4.240.
 
 - [ ] **P2: the packet writes the typed IDB exposed.** With the packets typed in the IDB,
       `ida_facts.py` sees what `sdfModelLinkOt` (13 facts, 0x2B2018..0x2B20E4) and
