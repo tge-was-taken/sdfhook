@@ -280,6 +280,9 @@ const char* PacketProcessor::getLinker(const LinkedPacket& packet) const {
 PacketType PacketProcessor::getType(u32 at) const {
     const auto built = h.packetTypes.find(at);
     if (built != h.packetTypes.end()) return built->second;
+    // sdf3DPrimLinkTm writes the tag and has sdf3DPrimSetTmPacket fill the quadwords after it.
+    const auto filled = h.packetTypes.find(at + sdfQwordBytes);
+    if (filled != h.packetTypes.end() && filled->second == PacketType::Transform) return filled->second;
     // sdf3DPrimLinkResetTm REFs the engine's own identity matrix.
     const sdfDmaTagPtr_t tag{at};
     if (mIdentityTm && tag && sdfDmaIsRef(*tag) && (tag->addr & 0x0FFFFFFFu) == mIdentityTm) {

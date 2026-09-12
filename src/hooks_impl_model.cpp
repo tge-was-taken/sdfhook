@@ -652,10 +652,8 @@ void ModelHooks::drawSprite3D(TexHandle aTexHandle, Sprite3DPtr_t aSprite, Frame
     frame->addMesh(std::move(mesh));
 }
 /// An indexed triangle list in world space: the vertices are quadword-strided with only xyz used,
-/// and each face is a word of three byte indices.
-/// @fn sdf3DPrimMakePoly
-/// @note SLUS-20911 0x002BAAB8
-void ModelHooks::sdf3DPrimMakePoly(sdf3DPrimPolyParmPtr_t aPoly, Frame* frame) {
+/// and each face is a word of three byte indices. sdf3DPrimMakePoly and effPkt3DPrimMakePoly.
+void ModelHooks::makePoly(sdf3DPrimPolyParmPtr_t aPoly, u16 baseAttr, Frame* frame) {
     if (!frame || !aPoly) return;
     const u32 vertexCount = u32(aPoly->pointCount);
     const u32 triangles = u32(aPoly->faceCount);
@@ -692,9 +690,8 @@ void ModelHooks::sdf3DPrimMakePoly(sdf3DPrimPolyParmPtr_t aPoly, Frame* frame) {
     // Its callers set their own ALPHA and TEST through rsetAlpha and rsetTest rather than taking an
     // ordering table's pair, and the chain walk replaces this with what is in force at the packet.
     mesh.gs = sdfGetGsStateForOt(0);
-    // 0x2BAAF4: the prim word is the descriptor's own or'd with 0x68, which is IIP, FGE and ABE;
     // 0x2BAB24 adds TME with UVs, 0x2BAB34 the second set, 0x2BAB4C the color flag.
-    mesh.attrBits = u16(aPoly->attr | 0x68);
+    mesh.attrBits = u16(aPoly->attr | baseAttr);
     if (aPoly->uv.addr) mesh.attrBits |= sdfCoreAttrTextured;
     if (aPoly->uv.addr && aPoly->multiUv.addr) mesh.attrBits |= sdfCoreAttrMultiTexPass;
     if (aPoly->vertexColor.addr) mesh.attrBits |= sdfCoreAttrColor;

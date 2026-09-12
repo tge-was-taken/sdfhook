@@ -606,6 +606,19 @@ int sdf3DPrimMakePolyHook(pcsx2hook_regs* regs, void* user) {
     return PCSX2HOOK_CONTINUE;
 }
 
+/// effPkt3DPrimMakePoly(aPoly): the game's effect copy of sdf3DPrimMakePoly, over the same
+/// descriptor.
+/// @fn effPkt3DPrimMakePoly
+/// @note SLUS-20911 0x0016A120
+int effPkt3DPrimMakePolyHook(pcsx2hook_regs* regs, void* user) {
+    Context c{regs};
+    HookContext& h = *static_cast<HookContext*>(user);
+    const sdf3DPrimPolyParmPtr_t aPoly{c.getArg(0)};
+
+    effPkt3DPrimMakePoly(h, aPoly);
+    return PCSX2HOOK_CONTINUE;
+}
+
 /// fldDrawPoly3(...): one gouraud triangle. The largest unhandled producer by packets, and
 /// invisible to a vertex ranking since its geometry only exists after VU1 runs.
 /// @fn fldDrawPoly3
@@ -860,8 +873,7 @@ constexpr Entry kGameEntries[] = {
     {"itfMiscDrawSpritePrim", &traceEntryHook, nullptr},
     {"drawSprite3D", &drawSprite3DHook, nullptr},
     {"sdf3DPrimMakePoly", &sdf3DPrimMakePolyHook, &packetTypePost},
-    // The effect build of the same function, reading the same descriptor field for field.
-    {"effPkt3DPrimMakePoly", &sdf3DPrimMakePolyHook, &packetTypePost},
+    {"effPkt3DPrimMakePoly", &effPkt3DPrimMakePolyHook, &packetTypePost},
     {"itfMiscDrawSpritePrim2", &traceEntryHook, nullptr},
     {"itfMiscDrawSpritePlanePrim", &traceEntryHook, nullptr},
     {"itfMiscDrawRectanglePrim", &traceEntryHook, nullptr},

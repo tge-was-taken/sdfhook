@@ -30,6 +30,11 @@ public:
     /// @note SLUS-20911 0x002BB0F0
     void sdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Frame* frame);
 
+    // 0x2BAAF4 ors in IIP, FGE and ABE; 0x16A15C only IIP and ABE.
+    static constexpr u16 kPrimPolyAttr = 0x68;
+    static constexpr u16 kEffectPolyAttr = 0x48;
+    void makePoly(sdf3DPrimPolyParmPtr_t aPoly, u16 baseAttr, Frame* frame);
+
     /// sdfBillBoardMakeN is handed the batch alone, and the table index lives on the node above.
     void readBillboardTables();
 
@@ -43,7 +48,18 @@ public:
     /// @note SLUS-20911 0x001193E8
     bool fldSdwDraw(u32 aPacket, u32 aEnd, const sdfGsState_t& aState, Frame* frame);
 
-    void sdf3DPrimMakePoly(sdf3DPrimPolyParmPtr_t aPoly, Frame* frame);
+    /// @fn sdf3DPrimMakePoly
+    /// @note SLUS-20911 0x002BAAB8
+    void sdf3DPrimMakePoly(sdf3DPrimPolyParmPtr_t aPoly, Frame* frame) {
+        makePoly(aPoly, kPrimPolyAttr, frame);
+    }
+
+    /// The game's copy for effects, which draws without fog.
+    /// @fn effPkt3DPrimMakePoly
+    /// @note SLUS-20911 0x0016A120
+    void effPkt3DPrimMakePoly(sdf3DPrimPolyParmPtr_t aPoly, Frame* frame) {
+        makePoly(aPoly, kEffectPolyAttr, frame);
+    }
 
     void drawSprite3D(TexHandle aTexHandle, Sprite3DPtr_t aSprite, Frame* frame);
 

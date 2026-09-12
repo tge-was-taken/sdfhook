@@ -2402,8 +2402,12 @@ right.
       `sdf3DPrimLinkMat` links ahead of it (`dds3P2APolygonDraw`), since VU1 emits them and the
       GIF path never carries them; its vertex colors reach the GS unlit. The effects' second
       texture (`multiUv`, `sdfMatSetMultiTex`) is what is left: capture 009's yellow burst.
-      Capture scores (local captures/labels.tsv names them): 009 67.4 -> 42.6, 012 59.2 -> 52.8, 011 52.8
-      -> 47.3; 018 29.1 -> 32.4, its pink pillars fainter.
+      effPkt3DPrimMakePoly, the game's copy, draws without fog (0x48, not 0x68). The transform
+      sdf3DPrimLinkTm links sits a quadword past its tag, so it was never typed Transform and
+      every effect poly drew at the world origin. Capture scores (local captures/labels.tsv names
+      them), start of the day -> now: 009 67.4 -> 19.4, 011 52.8 -> 20.0, 012 59.2 -> 19.7, 014
+      154.7 -> 5.0, 015 28.0 -> 16.6, 016 50.6 -> 14.5, 017 55.6 -> 22.4, 018 29.1 -> 9.7. Worst
+      left: 013 (focus, 86.7) and 010 (mabufudyne, 54.8).
 
 - [ ] **B1: battle's remaining differences.** The wisps' flames draw pinker than the emulator's
       violet and the smoke above them stronger; the shapes differ too (the emulator has thin

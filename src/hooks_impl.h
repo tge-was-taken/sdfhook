@@ -112,6 +112,11 @@ void drawSprite3D(HookContext& h, const TexHandle aTexHandle, const Sprite3DPtr_
 /// @note SLUS-20911 0x002BAAB8
 void sdf3DPrimMakePoly(HookContext& h, const sdf3DPrimPolyParmPtr_t aPoly);
 
+/// effPkt3DPrimMakePoly(aPoly): the game's effect copy of sdf3DPrimMakePoly.
+/// @fn effPkt3DPrimMakePoly
+/// @note SLUS-20911 0x0016A120
+void effPkt3DPrimMakePoly(HookContext& h, const sdf3DPrimPolyParmPtr_t aPoly);
+
 /// fldDrawPoly3(...): one gouraud triangle. The largest unhandled producer by packets, and
 /// invisible to a vertex ranking since its geometry only exists after VU1 runs.
 /// @fn fldDrawPoly3
