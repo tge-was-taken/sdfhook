@@ -250,11 +250,11 @@ SDF_STATIC_ASSERT_OFFSETOF(sdfDmaTag_t, dat1, 0x0C);
 
 using sdfDmaTagPtr_t = guest_ptr<sdfDmaTag_t>;
 
-constexpr u32 sdfDmaId(const sdfDmaTag_t& t) { return (t.id >> 4) & 7; }
+constexpr u32 sdfGetDmaId(const sdfDmaTag_t& t) { return (t.id >> 4) & 7; }
 
 /// REFE, REF and REFS name their data at `addr`; the rest carry it after the tag.
 constexpr bool sdfDmaIsRef(const sdfDmaTag_t& t) {
-    const u32 id = sdfDmaId(t);
+    const u32 id = sdfGetDmaId(t);
     return id == sdfDmaTagRef || id == sdfDmaTagRefs || id == sdfDmaTagRefe;
 }
 
@@ -268,11 +268,11 @@ SDF_STATIC_ASSERT_OFFSETOF(sdfGifTag_t, regs, 0x08);
 
 using sdfGifTagPtr_t = guest_ptr<sdfGifTag_t>;
 
-constexpr u32 sdfGifNloop(const sdfGifTag_t& t) { return u32(t.parm & 0x7FFF); }
-constexpr u32 sdfGifPre(const sdfGifTag_t& t) { return u32((t.parm >> 46) & 1); }
-constexpr u32 sdfGifPrim(const sdfGifTag_t& t) { return u32((t.parm >> 47) & 0x7FF); }
-constexpr u32 sdfGifFlg(const sdfGifTag_t& t) { return u32((t.parm >> 58) & 3); }
-constexpr u32 sdfGifNreg(const sdfGifTag_t& t) { return u32((t.parm >> 60) & 0xF); }
+constexpr u32 sdfGetGifNloop(const sdfGifTag_t& t) { return u32(t.parm & 0x7FFF); }
+constexpr u32 sdfGetGifPre(const sdfGifTag_t& t) { return u32((t.parm >> 46) & 1); }
+constexpr u32 sdfGetGifPrim(const sdfGifTag_t& t) { return u32((t.parm >> 47) & 0x7FF); }
+constexpr u32 sdfGetGifFlg(const sdfGifTag_t& t) { return u32((t.parm >> 58) & 3); }
+constexpr u32 sdfGetGifNreg(const sdfGifTag_t& t) { return u32((t.parm >> 60) & 0xF); }
 
 /// One A+D write: the value, then the GS register it names in the low byte.
 struct sdfGrTagStdReg_t {
@@ -1251,8 +1251,8 @@ SDF_STATIC_ASSERT_SIZE(sdfCorePacket_t, 24);
 SDF_STATIC_ASSERT_OFFSETOF(sdfCorePacket_t, prim, 0x10);
 
 // A blend-shape packet keeps its shape count and its morph controller in the first extra word.
-constexpr u16 sdfCoreShapeCount(const sdfCorePacket_t& p) { return u16(p.header.extData[0]); }
-constexpr u16 sdfCoreMorphIndex(const sdfCorePacket_t& p) { return u16(p.header.extData[0] >> 16); }
+constexpr u16 sdfGetCoreShapeCount(const sdfCorePacket_t& p) { return u16(p.header.extData[0]); }
+constexpr u16 sdfGetCoreMorphIndex(const sdfCorePacket_t& p) { return u16(p.header.extData[0] >> 16); }
 
 /// A texel coordinate in 12.4 fixed point.
 struct UV_t {
@@ -1570,13 +1570,13 @@ struct sdfGsState_t {
     u64 frameMask = 0;
 };
 
-constexpr u64 sdfFrameMask(u64 frame) { return (frame >> 32) & 0xFFFFFFFF; }
+constexpr u64 sdfGetFrameMask(u64 frame) { return (frame >> 32) & 0xFFFFFFFF; }
 
 /// What sdfGrSetFrameMaskRGB writes: color masked, alpha writable.
 constexpr u64 sdfFrameMaskRgb = 0x00FFFFFF;
 
 /// The four the engine sets up, in ordering-table order.
-constexpr sdfGsState_t sdfGsStateForOt(u32 otIndex) {
+constexpr sdfGsState_t sdfGetGsStateForOt(u32 otIndex) {
     switch (otIndex) {
         case 2: return {0x48, 0x71801};  // additive
         case 3: return {0x42, 0x71801};  // subtractive
@@ -1598,21 +1598,21 @@ enum sdfGsRegisterAddr_t : u32 {
 };
 
 // ALPHA: Cv = (A - B) * C + D, over the source, the destination and zero.
-constexpr u32 sdfAlphaA(u64 r) { return u32(r & 3); }
-constexpr u32 sdfAlphaB(u64 r) { return u32((r >> 2) & 3); }
-constexpr u32 sdfAlphaC(u64 r) { return u32((r >> 4) & 3); }
-constexpr u32 sdfAlphaD(u64 r) { return u32((r >> 6) & 3); }
-constexpr u32 sdfAlphaFix(u64 r) { return u32((r >> 32) & 0xFF); }
+constexpr u32 sdfGetAlphaA(u64 r) { return u32(r & 3); }
+constexpr u32 sdfGetAlphaB(u64 r) { return u32((r >> 2) & 3); }
+constexpr u32 sdfGetAlphaC(u64 r) { return u32((r >> 4) & 3); }
+constexpr u32 sdfGetAlphaD(u64 r) { return u32((r >> 6) & 3); }
+constexpr u32 sdfGetAlphaFix(u64 r) { return u32((r >> 32) & 0xFF); }
 enum sdfAlphaTerm_t : u32 { sdfAlphaSource = 0, sdfAlphaDest = 1, sdfAlphaZero = 2 };
 enum sdfAlphaCoef_t : u32 { sdfAlphaAs = 0, sdfAlphaAd = 1, sdfAlphaFixed = 2 };
 
 // TEST: the alpha test, what a failing fragment still writes, and the depth test.
-constexpr u32 sdfTestAte(u64 r) { return u32(r & 1); }
-constexpr u32 sdfTestAtst(u64 r) { return u32((r >> 1) & 7); }
-constexpr u32 sdfTestAref(u64 r) { return u32((r >> 4) & 0xFF); }
-constexpr u32 sdfTestAfail(u64 r) { return u32((r >> 12) & 3); }
-constexpr u32 sdfTestZte(u64 r) { return u32((r >> 16) & 1); }
-constexpr u32 sdfTestZtst(u64 r) { return u32((r >> 17) & 3); }
+constexpr u32 sdfGetTestAte(u64 r) { return u32(r & 1); }
+constexpr u32 sdfGetTestAtst(u64 r) { return u32((r >> 1) & 7); }
+constexpr u32 sdfGetTestAref(u64 r) { return u32((r >> 4) & 0xFF); }
+constexpr u32 sdfGetTestAfail(u64 r) { return u32((r >> 12) & 3); }
+constexpr u32 sdfGetTestZte(u64 r) { return u32((r >> 16) & 1); }
+constexpr u32 sdfGetTestZtst(u64 r) { return u32((r >> 17) & 3); }
 
 enum sdfZtst_t : u32 { sdfZtstNever = 0, sdfZtstAlways = 1, sdfZtstGequal = 2, sdfZtstGreater = 3 };
 enum sdfAfail_t : u32 { sdfAfailKeep = 0, sdfAfailFbOnly = 1, sdfAfailZbOnly = 2, sdfAfailRgbOnly = 3 };
@@ -1720,8 +1720,8 @@ SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, matPacket2, 0xB4);
 SDF_STATIC_ASSERT_OFFSETOF(corePktCb_t, unk184, 0xB8);
 
 // TEX0's texture function and whether the texture carries alpha.
-constexpr u32 sdfTex0Tfx(u64 r) { return u32((r >> 35) & 3); }
-constexpr u32 sdfTex0Tcc(u64 r) { return u32((r >> 34) & 1); }
+constexpr u32 sdfGetTex0Tfx(u64 r) { return u32((r >> 35) & 3); }
+constexpr u32 sdfGetTex0Tcc(u64 r) { return u32((r >> 34) & 1); }
 enum sdfTexFunction_t : u32 {
     sdfTexModulate = 0,
     sdfTexDecal = 1,
@@ -1730,12 +1730,12 @@ enum sdfTexFunction_t : u32 {
 };
 
 // TEX1's filters. LINEAR is 1; the mipmap minification modes are 2 and above.
-constexpr u32 sdfTex1Mmag(u64 r) { return u32((r >> 5) & 1); }
-constexpr u32 sdfTex1Mmin(u64 r) { return u32((r >> 6) & 7); }
+constexpr u32 sdfGetTex1Mmag(u64 r) { return u32((r >> 5) & 1); }
+constexpr u32 sdfGetTex1Mmin(u64 r) { return u32((r >> 6) & 7); }
 
 // CLAMP's wrap mode per axis: 0 repeat, 1 clamp, 2 region repeat, 3 region clamp.
-constexpr u32 sdfClampWms(u64 r) { return u32(r & 3); }
-constexpr u32 sdfClampWmt(u64 r) { return u32((r >> 2) & 3); }
+constexpr u32 sdfGetClampWms(u64 r) { return u32(r & 3); }
+constexpr u32 sdfGetClampWmt(u64 r) { return u32((r >> 2) & 3); }
 enum sdfWrapMode_t : u32 { sdfWrapRepeat = 0, sdfWrapClamp = 1 };
 
 // A VIF code, which is how a mesh body names each of its vertex arrays.
@@ -1901,7 +1901,7 @@ enum sdfGifReg_t : u32 {
     sdfGifRegNop = 0xF,
 };
 
-constexpr u32 sdfGifRegAt(u64 regs, u32 index) { return u32((regs >> (4 * index)) & 0xF); }
+constexpr u32 sdfGetGifRegAt(u64 regs, u32 index) { return u32((regs >> (4 * index)) & 0xF); }
 struct sdfGifRgbaq_t {
     u32 r, g, b, a;
 };
@@ -1946,7 +1946,7 @@ struct GsTex0 {
     u32 cpsm;
     u32 csa;
 
-    static constexpr GsTex0 fromReg(u64 reg) {
+    static constexpr GsTex0 decode(u64 reg) {
         return {u32(reg & 0x3FFF),        u32((reg >> 14) & 0x3F), u32((reg >> 20) & 0x3F),
                 u32((reg >> 26) & 0xF),   u32((reg >> 30) & 0xF),  u32((reg >> 37) & 0x3FFF),
                 u32((reg >> 51) & 0xF),   u32((reg >> 56) & 0x1F)};
@@ -1961,11 +1961,11 @@ struct GsTex0 {
 };
 
 // PRIM's own fields, the ones that decide how a packet is read back.
-constexpr u32 sdfPrimType(u32 prim) { return prim & 7; }
-constexpr u32 sdfPrimTme(u32 prim) { return (prim >> 4) & 1; }
-constexpr u32 sdfPrimAbe(u32 prim) { return (prim >> 6) & 1; }
+constexpr u32 sdfGetPrimType(u32 prim) { return prim & 7; }
+constexpr u32 sdfGetPrimTme(u32 prim) { return (prim >> 4) & 1; }
+constexpr u32 sdfGetPrimAbe(u32 prim) { return (prim >> 6) & 1; }
 // cppcheck-suppress unusedFunction  ; one of the PRIM field family, complete by design
-constexpr u32 sdfPrimFst(u32 prim) { return (prim >> 8) & 1; }
+constexpr u32 sdfGetPrimFst(u32 prim) { return (prim >> 8) & 1; }
 
 // The GS register addresses an A+D write can name, for the ones that decide how a draw looks.
 enum sdfGsReg_t : u32 {

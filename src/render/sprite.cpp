@@ -2,7 +2,7 @@
 
 namespace sdfhook {
 
-void toTriangles(const DrawSprite& sprite, f32 texWidth, f32 texHeight, std::vector<ScreenVertex>& out) {
+void triangulate(const DrawSprite& sprite, f32 texWidth, f32 texHeight, std::vector<ScreenVertex>& out) {
     ScreenVertex v[4];
     for (int i = 0; i < 4; i++) {
         const SpriteCorner& c = sprite.corner[i];

@@ -15,12 +15,12 @@ struct Configured {
     u32 generation = 1;
 };
 
-Configured& configured() {
+Configured& getConfigured() {
     static Configured levels;
     return levels;
 }
 
-LogLevel levelFromName(std::string_view name) {
+LogLevel parseLevel(std::string_view name) {
     if (name == "trace") return LogLevel::Trace;
     if (name == "debug") return LogLevel::Debug;
     if (name == "info") return LogLevel::Info;
@@ -30,7 +30,7 @@ LogLevel levelFromName(std::string_view name) {
     return kDefaultLevel;
 }
 
-const char* tagFor(LogLevel level) {
+const char* getLevelTag(LogLevel level) {
     switch (level) {
         case LogLevel::Trace: return "T";
         case LogLevel::Debug: return "D";
@@ -47,7 +47,7 @@ const char* tagFor(LogLevel level) {
 LogChannel::LogChannel(std::string name) : mName(std::move(name)) {}
 
 LogLevel LogChannel::getLevel() const {
-    const Configured& levels = configured();
+    const Configured& levels = getConfigured();
     if (mGeneration == levels.generation) return mLevel;
     mLevel = levels.fallback;
     for (const auto& [channel, level] : levels.channels) {
@@ -58,7 +58,7 @@ LogLevel LogChannel::getLevel() const {
 }
 
 void LogChannel::emit(LogLevel level, const std::string& message) const {
-    const std::string line = std::format("{} {:<9} {}\n", tagFor(level), mName, message);
+    const std::string line = std::format("{} {:<9} {}\n", getLevelTag(level), mName, message);
     std::fwrite(line.data(), 1, line.size(), stderr);
 }
 
@@ -68,7 +68,7 @@ void LogChannel::dump(std::string_view row) const {
 
 void configureLogging(std::string_view spec) {
     if (spec.empty()) return;
-    configured().generation++;
+    getConfigured().generation++;
 
     std::string_view text = spec;
     while (!text.empty()) {
@@ -76,10 +76,10 @@ void configureLogging(std::string_view spec) {
         const std::string_view entry = text.substr(0, comma);
         const auto equals = entry.find('=');
         if (equals == std::string_view::npos) {
-            configured().fallback = levelFromName(entry);
+            getConfigured().fallback = parseLevel(entry);
         } else {
-            configured().channels.emplace_back(entry.substr(0, equals),
-                                               levelFromName(entry.substr(equals + 1)));
+            getConfigured().channels.emplace_back(entry.substr(0, equals),
+                                               parseLevel(entry.substr(equals + 1)));
         }
         if (comma == std::string_view::npos) break;
         text.remove_prefix(comma + 1);

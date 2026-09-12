@@ -32,7 +32,7 @@ template <typename T>
 struct guest_ptr {
     u32 addr = 0;
 
-    T* operator->() const { return static_cast<T*>(detail::mapGuest(addr, span(1))); }
+    T* operator->() const { return static_cast<T*>(detail::mapGuest(addr, countBytes(1))); }
 
     /// Only where T is an object: guest_ptr<void> is an address the engine passes through.
     template <typename U = T>
@@ -42,13 +42,13 @@ struct guest_ptr {
 
     /// A copy of its own, for the callers that keep one past the hook that read it.
     template <typename U = T>
-    U valueOr(U fallback = {}) const {
+    U readOr(U fallback = {}) const {
         const U* p = operator->();
         return p ? *p : fallback;
     }
 
     /// A run of `count` elements, or null unless all of it is mapped.
-    T* slice(u32 count) const { return static_cast<T*>(detail::mapGuest(addr, span(count))); }
+    T* slice(u32 count) const { return static_cast<T*>(detail::mapGuest(addr, countBytes(count))); }
 
     /// Whether it can be read, not merely whether it is non-zero.
     explicit operator bool() const { return operator->() != nullptr; }
@@ -57,7 +57,7 @@ struct guest_ptr {
     bool operator!=(const guest_ptr& other) const { return addr != other.addr; }
 
 private:
-    static constexpr u32 span(u32 count) {
+    static constexpr u32 countBytes(u32 count) {
         if constexpr (std::is_void_v<T>) return count;
         else return u32(sizeof(T)) * count;
     }

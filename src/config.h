@@ -10,7 +10,7 @@ namespace sdfhook {
 /// static lets the first call decide for every later one.
 struct Config {
     /// The only place getenv is called.
-    static Config fromEnvironment();
+    static Config readEnvironment();
 
     // What the run is.
     std::string bios;

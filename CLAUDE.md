@@ -99,7 +99,7 @@ force there. The renderer draws `order` as it stands, switching pass run by run.
 
 - **A model stream is keyed by the REF that names it**, not by the call chain it sits in.
 - **A producer's draws are claimed by the first draw-carrying packet it links**, so a texture or ALPHA
-  packet linked first is passed over (`carriesDraw`). Each producer's impl opens a `ProducerDraws`:
+  packet linked first is passed over (`isDrawType`). Each producer's impl opens a `ProducerDraws`:
   draws that another producer's hook arrives before stay unlinked rather than land on its packet.
 - **A draw the chain never reaches is not drawn.** The summary counts placed, unlinked and unreached
   draws by producer; the expected losses are `sdfCorePacketGen` meshes the engine never links.
@@ -179,7 +179,7 @@ the environment, so levels resolve on use.
 `digits` argument is **significant digits** (`%g`), not decimal places.
 
 **No stray `std::getenv`.** Everything the environment can change is a field of `Config`, read once
-by `Config::fromEnvironment()`.
+by `Config::readEnvironment()`.
 
 **The run summary is a row of the run's own trace**, not only terminal text: one `{"ev":"summary"}`
 object with every counter, zeros included, so two runs are diffed rather than eyeballed.
@@ -316,7 +316,7 @@ the programs: SDF's MSCAL entries are dispatch stubs. `docs/vu1/` keeps the anno
   (ATST GEQUAL 127, AFAIL FB_ONLY), table 2 gets 0x48 with 0x71801 (ATST NEVER), table 3 gets 0x42.
   **AFAIL is the depth mechanism**: FB_ONLY means a failing fragment still writes color, which is
   two GL draws. AREF does not fit this story and is unsettled.
-- **The material's alpha is the vertex alpha.** `gsRgb()` takes r, g and b, so passing a material
+- **The material's alpha is the vertex alpha.** `convertToGsUnits()` takes r, g and b, so passing a material
   color through it drops the channel that decides how much of an additive draw lands.
 - **ZTST is not decoration.** The GS compares a z where larger is nearer, so its GEQUAL is GL's
   LEQUAL. Every 3D batch runs GEQUAL.

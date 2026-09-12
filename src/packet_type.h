@@ -63,7 +63,7 @@ enum class PacketType : u8 {
 };
 
 /// Stable names for reporting, indexed by PacketType.
-constexpr const char* packetTypeName(PacketType type) {
+constexpr const char* getPacketTypeName(PacketType type) {
     switch (type) {
         case PacketType::Unknown: return "unknown";
         case PacketType::Transform: return "transform";
@@ -134,31 +134,31 @@ struct PacketBuilder {
     PacketType trailing = PacketType::Unknown;
 };
 
-PacketBuilder packetBuilderFor(const char* symbol);
+PacketBuilder getPacketBuilder(const char* symbol);
 
 
 /// A packet named by its own contents, for the ones a savestate inherits from before the hooks
 /// attached and whose builder call can never be seen. Inference, so it is the last resort and the
 /// census counts it apart from what the engine told us.
-PacketType packetTypeForShape(u32 aData, u32 aQwc);
+PacketType getPacketTypeByShape(u32 aData, u32 aQwc);
 
 /// The function a link hook's $ra names, where that function has exactly one link site and no
 /// callee that tail-calls one, so everything linked from it is one kind of packet.
-PacketType packetTypeForLinker(const char* symbol);
+PacketType getPacketTypeByLinker(const char* symbol);
 
 /// The engine globals a packet can reference outright, such as sdf3DPrimIdentityTm.
-PacketType packetTypeForGlobal(const char* symbol);
+PacketType getPacketTypeByGlobal(const char* symbol);
 
 /// Whether the GS or VU1 draws something from the packet, as against setting state for what
 /// follows. An unidentified packet counts as a draw: it is where a producer's draw would be.
-bool carriesDraw(PacketType type);
+bool isDrawType(PacketType type);
 
 /// How a packet's type was settled. Everything but Payload identifies a packet; Payload
 /// merely describes its encoding, which says nothing about what the packet means, so census.py
 /// counts it as unidentified.
 enum class TypedBy : u8 { Nothing, Payload, Builder, Linker, Container, Shape };
 
-constexpr const char* typedByName(TypedBy how) {
+constexpr const char* getTypedByName(TypedBy how) {
     switch (how) {
         case TypedBy::Nothing: return "-";
         case TypedBy::Payload: return "payload";

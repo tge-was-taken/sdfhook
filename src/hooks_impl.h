@@ -16,7 +16,7 @@ void placeDraws(HookContext& h, u32 aTag);
 
 /// An inventory of the frame's DMA chain, for judging what is left untyped. Runs after placeDraws
 /// and forgets the frame's linked packets and their types either way.
-void censusFrame(HookContext& h, u32 aTag);
+void takeFrameCensus(HookContext& h, u32 aTag);
 
 /// A builder ran, handed its four argument registers. Records the packet it makes by address.
 void recordBuiltPacket(HookContext& h, const char* aBuilder, const u32 (&aArgs)[4]);

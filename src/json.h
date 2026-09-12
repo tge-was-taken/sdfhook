@@ -16,14 +16,14 @@ public:
     JsonObject() { mText = "{"; }
 
     JsonObject& addUint(const char* key, u64 value) {
-        key_(key);
+        writeKey(key);
         mText += std::to_string(value);
         return *this;
     }
 
 
     JsonObject& addBool(const char* key, bool value) {
-        key_(key);
+        writeKey(key);
         mText += value ? "true" : "false";
         return *this;
     }
@@ -31,14 +31,14 @@ public:
     /// Rounded rather than written at full precision: these read as measurements, and a reader
     /// diffing two traces should not see a difference that is only float noise.
     JsonObject& addReal(const char* key, double value, int digits = 6) {
-        key_(key);
+        writeKey(key);
         mText += real(value, digits);
         return *this;
     }
 
     JsonObject& addString(const char* key, const char* value) {
-        key_(key);
-        quote(value ? value : "");
+        writeKey(key);
+        writeQuoted(value ? value : "");
         return *this;
     }
 
@@ -70,7 +70,7 @@ public:
     /// Arrays and nested objects are built in place rather than assembled as a string first, so a
     /// loop that writes elements cannot leave the row half-punctuated.
     JsonObject& beginArray(const char* key) {
-        key_(key);
+        writeKey(key);
         mText += '[';
         mFirst = true;
         return *this;
@@ -83,14 +83,14 @@ public:
     }
 
     JsonObject& beginObject(const char* key) {
-        key_(key);
+        writeKey(key);
         mText += '{';
         mFirst = true;
         return *this;
     }
 
     JsonObject& beginObject() {
-        comma();
+        writeComma();
         mText += '{';
         mFirst = true;
         return *this;
@@ -104,14 +104,14 @@ public:
 
 
     JsonObject& pushReal(double value, int digits = 6) {
-        comma();
+        writeComma();
         mText += real(value, digits);
         return *this;
     }
 
     JsonObject& pushString(const char* value) {
-        comma();
-        quote(value ? value : "");
+        writeComma();
+        writeQuoted(value ? value : "");
         return *this;
     }
 
@@ -126,18 +126,18 @@ public:
     }
 
 private:
-    void comma() {
+    void writeComma() {
         if (!mFirst) mText += ',';
         mFirst = false;
     }
 
-    void key_(const char* key) {
-        comma();
-        quote(key);
+    void writeKey(const char* key) {
+        writeComma();
+        writeQuoted(key);
         mText += ':';
     }
 
-    void quote(const char* text) {
+    void writeQuoted(const char* text) {
         mText += '"';
         for (const char* p = text; *p; p++) {
             switch (*p) {

@@ -5,62 +5,62 @@
 namespace sdfhook {
 namespace {
 
-const char* text(const char* name, const char* fallback = "") {
+const char* readText(const char* name, const char* fallback = "") {
     const char* value = std::getenv(name);
     return value && *value ? value : fallback;
 }
 
-bool flag(const char* name) { return std::getenv(name) != nullptr; }
+bool readFlag(const char* name) { return std::getenv(name) != nullptr; }
 
-u32 number(const char* name, u32 fallback) {
+u32 readNumber(const char* name, u32 fallback) {
     const char* value = std::getenv(name);
     return value && *value ? u32(std::strtoul(value, nullptr, 10)) : fallback;
 }
 
-f32 real(const char* name, f32 fallback) {
+f32 readReal(const char* name, f32 fallback) {
     const char* value = std::getenv(name);
     return value && *value ? std::strtof(value, nullptr) : fallback;
 }
 
 }  // namespace
 
-Config Config::fromEnvironment() {
+Config Config::readEnvironment() {
     Config config;
-    config.bios = text("SDF_BIOS", "assets/bios.bin");
-    config.symbols = text("SDF_SYMBOLS");
-    config.logSpec = text("SDF_LOG");
-    config.tracePath = text("SDF_TRACE", "dumps/trace.jsonl");
-    config.shotPath = text("SDF_SHOT", "dumps/shot.png");
-    config.nativeShotPath = text("SDF_NATIVE_SHOT");
-    config.dumpTextures = text("SDF_DUMP_TEXTURES");
-    config.statePath = text("PCSX2HOOK_STATE");
-    config.frames = text("SDF_FRAMES");
-    config.shotFrame = number("SDF_SHOT_FRAME", 0);
-    config.scale = int(number("SDF_SCALE", 1));
-    config.window = flag("SDF_WINDOW");
-    config.gsTrace = flag("PCSX2HOOK_GS_TRACE");
-    config.vuTrace = flag("PCSX2HOOK_VU_TRACE");
+    config.bios = readText("SDF_BIOS", "assets/bios.bin");
+    config.symbols = readText("SDF_SYMBOLS");
+    config.logSpec = readText("SDF_LOG");
+    config.tracePath = readText("SDF_TRACE", "dumps/trace.jsonl");
+    config.shotPath = readText("SDF_SHOT", "dumps/shot.png");
+    config.nativeShotPath = readText("SDF_NATIVE_SHOT");
+    config.dumpTextures = readText("SDF_DUMP_TEXTURES");
+    config.statePath = readText("PCSX2HOOK_STATE");
+    config.frames = readText("SDF_FRAMES");
+    config.shotFrame = readNumber("SDF_SHOT_FRAME", 0);
+    config.scale = int(readNumber("SDF_SCALE", 1));
+    config.window = readFlag("SDF_WINDOW");
+    config.gsTrace = readFlag("PCSX2HOOK_GS_TRACE");
+    config.vuTrace = readFlag("PCSX2HOOK_VU_TRACE");
 
-    config.dumpPackets = text("SDF_DUMP_PACKETS");
-    config.skipProducer = text("SDF_SKIP_PRODUCER");
-    config.dumpCall = number("SDF_DUMP_CALL", 0);
-    config.dumpCallWords = number("SDF_DUMP_CALL_WORDS", 32);
-    config.dumpMesh = number("SDF_DUMP_MESH", 0);
-    config.dumpMeshType = std::getenv("SDF_DUMP_MESH_TYPE") ? int(number("SDF_DUMP_MESH_TYPE", 0)) : -1;
-    config.dumpMeshWords = number("SDF_DUMP_MESH_WORDS", 40);
-    config.dumpLight = flag("SDF_DUMP_LIGHT");
-    config.dumpScreen = flag("SDF_DUMP_SCREEN");
-    config.dumpDrawEnv = flag("SDF_DUMP_DRAW_ENV");
-    config.dumpChainCensus = flag("SDF_CHAIN_CENSUS");
-    config.dumpRecover = flag("SDF_DUMP_RECOVER");
-    config.describeFrame = flag("SDF_DESCRIBE");
-    config.debugDepth = flag("SDF_DEBUG_DEPTH");
-    config.debugNormal = flag("SDF_DEBUG_NORMAL");
-    config.drawPrimPoly = !flag("SDF_NO_PRIM_POLY");
-    config.faceDivSoften = real("SDF_FACEDIV_SOFTEN", 7.0f);
-    config.faceDivBias = real("SDF_FACEDIV_BIAS", 0.0f);
-    config.pixelOffsetX = real("SDF_PIXEL_OFFSET_X", 0.5f);
-    config.pixelOffsetY = real("SDF_PIXEL_OFFSET_Y", 0.5f);
+    config.dumpPackets = readText("SDF_DUMP_PACKETS");
+    config.skipProducer = readText("SDF_SKIP_PRODUCER");
+    config.dumpCall = readNumber("SDF_DUMP_CALL", 0);
+    config.dumpCallWords = readNumber("SDF_DUMP_CALL_WORDS", 32);
+    config.dumpMesh = readNumber("SDF_DUMP_MESH", 0);
+    config.dumpMeshType = std::getenv("SDF_DUMP_MESH_TYPE") ? int(readNumber("SDF_DUMP_MESH_TYPE", 0)) : -1;
+    config.dumpMeshWords = readNumber("SDF_DUMP_MESH_WORDS", 40);
+    config.dumpLight = readFlag("SDF_DUMP_LIGHT");
+    config.dumpScreen = readFlag("SDF_DUMP_SCREEN");
+    config.dumpDrawEnv = readFlag("SDF_DUMP_DRAW_ENV");
+    config.dumpChainCensus = readFlag("SDF_CHAIN_CENSUS");
+    config.dumpRecover = readFlag("SDF_DUMP_RECOVER");
+    config.describeFrame = readFlag("SDF_DESCRIBE");
+    config.debugDepth = readFlag("SDF_DEBUG_DEPTH");
+    config.debugNormal = readFlag("SDF_DEBUG_NORMAL");
+    config.drawPrimPoly = !readFlag("SDF_NO_PRIM_POLY");
+    config.faceDivSoften = readReal("SDF_FACEDIV_SOFTEN", 7.0f);
+    config.faceDivBias = readReal("SDF_FACEDIV_BIAS", 0.0f);
+    config.pixelOffsetX = readReal("SDF_PIXEL_OFFSET_X", 0.5f);
+    config.pixelOffsetY = readReal("SDF_PIXEL_OFFSET_Y", 0.5f);
 
     // SDF_MESH_ONLY names one mesh; SDF_MESH_UPTO names a prefix.
     if (const char* only = std::getenv("SDF_MESH_ONLY")) {
@@ -70,23 +70,23 @@ Config Config::fromEnvironment() {
         config.meshLast = usize(std::strtoul(upto, nullptr, 10));
     }
 
-    config.otMax = number("SDF_OT_MAX", 3);
-    config.noSprites = flag("SDF_NO_SPRITES");
-    config.drawOnly = text("SDF_DRAW_ONLY");
-    config.noFeedback = flag("SDF_NO_FEEDBACK");
-    config.noFog = flag("SDF_NO_FOG");
-    config.noSpecular = flag("SDF_NO_SPECULAR");
-    config.drawSpecularOverlay = flag("SDF_DRAW_SPECULAR_OVERLAY");
-    config.drawDirectBox = flag("SDF_DRAW_DIRECT_BOX");
-    config.drawShadows = flag("SDF_DRAW_SHADOWS");
-    config.noBillboards = flag("SDF_NO_BILLBOARDS");
-    config.poly = flag("SDF_POLY");
-    config.noTransmitState = flag("SDF_NO_TRANSMIT_STATE");
-    config.captureDir = text("SDF_CAPTURE_DIR", "captures");
-    config.captureFrame = u32(number("SDF_CAPTURE_FRAME", 0));
-    config.recoverTexturesFromGs = !flag("SDF_NO_GS_RECOVER");
+    config.otMax = readNumber("SDF_OT_MAX", 3);
+    config.noSprites = readFlag("SDF_NO_SPRITES");
+    config.drawOnly = readText("SDF_DRAW_ONLY");
+    config.noFeedback = readFlag("SDF_NO_FEEDBACK");
+    config.noFog = readFlag("SDF_NO_FOG");
+    config.noSpecular = readFlag("SDF_NO_SPECULAR");
+    config.drawSpecularOverlay = readFlag("SDF_DRAW_SPECULAR_OVERLAY");
+    config.drawDirectBox = readFlag("SDF_DRAW_DIRECT_BOX");
+    config.drawShadows = readFlag("SDF_DRAW_SHADOWS");
+    config.noBillboards = readFlag("SDF_NO_BILLBOARDS");
+    config.poly = readFlag("SDF_POLY");
+    config.noTransmitState = readFlag("SDF_NO_TRANSMIT_STATE");
+    config.captureDir = readText("SDF_CAPTURE_DIR", "captures");
+    config.captureFrame = u32(readNumber("SDF_CAPTURE_FRAME", 0));
+    config.recoverTexturesFromGs = !readFlag("SDF_NO_GS_RECOVER");
 
-    config.cull = text("SDF_CULL", "b")[0];
+    config.cull = readText("SDF_CULL", "b")[0];
     return config;
 }
 

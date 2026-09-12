@@ -20,7 +20,7 @@ namespace {
 LogChannel log("model");
 
 
-const char* nodeName(ModelTrace::Node outcome) {
+const char* getNodeName(ModelTrace::Node outcome) {
     switch (outcome) {
         case ModelTrace::Node::Drawn: return "drawn";
         case ModelTrace::Node::NoChain: return "no packet chain";
@@ -32,7 +32,7 @@ const char* nodeName(ModelTrace::Node outcome) {
     return "?";
 }
 
-const char* packetName(ModelTrace::Packet outcome) {
+const char* getPacketName(ModelTrace::Packet outcome) {
     switch (outcome) {
         case ModelTrace::Packet::Generated: return "generated";
         case ModelTrace::Packet::DmaCall: return "dma call";
@@ -44,7 +44,7 @@ const char* packetName(ModelTrace::Packet outcome) {
     return "?";
 }
 
-const char* rejectName(ModelTrace::Reject why) {
+const char* getRejectName(ModelTrace::Reject why) {
     switch (why) {
         case ModelTrace::Reject::NoMaterial: return "no material";
         case ModelTrace::Reject::Empty: return "empty";
@@ -80,9 +80,9 @@ const char* ModelTrace::geomName(Geom shape) {
     return "?";
 }
 
-void ModelTrace::countGeom(sdfCorePacketType_t type, u32 elems) { addGeom(geomFor(type), elems); }
+void ModelTrace::countGeom(sdfCorePacketType_t type, u32 elems) { addGeom(getGeom(type), elems); }
 
-void ModelTrace::countMesh(sdfCorePacketType_t type, u32 elems) { addMesh(geomFor(type), elems); }
+void ModelTrace::countMesh(sdfCorePacketType_t type, u32 elems) { addMesh(getGeom(type), elems); }
 
 void ModelTrace::countStreamGeom(u32 elems) { addGeom(Geom::VifStream, elems); }
 
@@ -106,11 +106,11 @@ void ModelTrace::addTo(JsonObject& row) const {
     row.addUint("splitMaterials", mSplitMaterials);
 
     row.beginObject("nodes");
-    for (usize i = 0; i < usize(Node::Count); i++) row.addUint(nodeName(Node(i)), mNodes[i]);
+    for (usize i = 0; i < usize(Node::Count); i++) row.addUint(getNodeName(Node(i)), mNodes[i]);
     row.endObject();
 
     row.beginObject("packets");
-    for (usize i = 0; i < usize(Packet::Count); i++) row.addUint(packetName(Packet(i)), mPackets[i]);
+    for (usize i = 0; i < usize(Packet::Count); i++) row.addUint(getPacketName(Packet(i)), mPackets[i]);
     row.endObject();
 
     u64 seenElems = 0;
@@ -127,7 +127,7 @@ void ModelTrace::addTo(JsonObject& row) const {
             .addUint("drawnTris", entry.drawnElems);
         row.beginObject("rejected");
         for (usize r = 0; r < usize(Reject::Count); r++) {
-            row.addUint(rejectName(Reject(r)), mRejects[i][r]);
+            row.addUint(getRejectName(Reject(r)), mRejects[i][r]);
         }
         row.endObject().endObject();
     }
@@ -219,10 +219,10 @@ void ModelTrace::addTo(JsonObject& row) const {
 void ModelTrace::report() const {
     log.info("{} roots walked, {} of them with temp packets", mRoots, mTempPacketRoots);
     for (usize i = 0; i < usize(Node::Count); i++) {
-        if (mNodes[i]) log.info("node {:<24} {}", nodeName(Node(i)), mNodes[i]);
+        if (mNodes[i]) log.info("node {:<24} {}", getNodeName(Node(i)), mNodes[i]);
     }
     for (usize i = 0; i < usize(Packet::Count); i++) {
-        if (mPackets[i]) log.info("packet {:<22} {}", packetName(Packet(i)), mPackets[i]);
+        if (mPackets[i]) log.info("packet {:<22} {}", getPacketName(Packet(i)), mPackets[i]);
     }
 
     u64 seenElems = 0;
@@ -236,7 +236,7 @@ void ModelTrace::report() const {
             entry.seen, entry.seenElems, entry.drawn, entry.drawnElems);
         for (usize r = 0; r < usize(Reject::Count); r++) {
             if (mRejects[i][r]) {
-                log.info("     rejected {:<18} {}", rejectName(Reject(r)), mRejects[i][r]);
+                log.info("     rejected {:<18} {}", getRejectName(Reject(r)), mRejects[i][r]);
             }
         }
     }
@@ -327,7 +327,7 @@ void ModelParser::attach(pcsx2hook_ctx* runtime, const Config& config, TextureCa
     // times view, so dividing its first two rows by them recovers the view rotation.
     mSdf3DScreenParam = {pcsx2hook_find_symbol(runtime, "sdf3DScreenParam")};
     mSdf3DRefMapParam = {pcsx2hook_find_symbol(runtime, "sdf3DRefMapParam")};
-    if (const u64 tex0 = mSdf3DRefMapParam.valueOr()) {
+    if (const u64 tex0 = mSdf3DRefMapParam.readOr()) {
         const sdfTex0_t t = sdfDecodeTex0(tex0);
         log.info("sdf3DRefMapParam tex0={:016X} tbp={} tbw={} psm={:#x} {}x{} tfx={} tcc={} cbp={}",
                  tex0, t.tbp, t.tbw, t.psm, t.width, t.height, t.tfx, t.tcc, t.cbp);
@@ -487,11 +487,11 @@ bool ModelParser::readVifStreamMesh(u32 at, u32 end, const NodeDraw& draw, sdfMa
     mesh.producer = "sdfModelLinkOt";
     mesh.sortZ = draw.sortZ;
     mesh.otIndex = draw.otIndex;
-    mesh.color = Rgba::fromPacked(draw.color);
+    mesh.color = Rgba::unpack(draw.color);
     mesh.bones.push_back(draw.model);
     mesh.lighting = mLighting;
     mesh.fog = mFog;
-    mesh.gs = sdfGsStateForOt(mesh.otIndex);
+    mesh.gs = sdfGetGsStateForOt(mesh.otIndex);
     mesh.reverseFacing = draw.reverse;
     mesh.worldGeometry = true;
     mesh.packetType = sdfPacketDmaCall;
@@ -566,7 +566,7 @@ bool ModelParser::readVifStreamMesh(u32 at, u32 end, const NodeDraw& draw, sdfMa
                 }
             }
             if (color) {
-                out.color = Rgba::fromPacked(color[v]);
+                out.color = Rgba::unpack(color[v]);
                 mesh.streamColors = true;
             }
             mTrace.countInfluences(1);
@@ -660,8 +660,8 @@ bool ModelParser::readRigidBatches(u32 at, const sdfCorePacket_t& packet,
 
 bool ModelParser::readBlendShapes(u32 at, const sdfCorePacket_t& packet,
                                 guest_ref<sdfModelRootNode_t> root, DrawMesh& mesh) {
-    const u16 shapeCount = sdfCoreShapeCount(packet);
-    const u16 morphIndex = sdfCoreMorphIndex(packet);
+    const u16 shapeCount = sdfGetCoreShapeCount(packet);
+    const u16 morphIndex = sdfGetCoreMorphIndex(packet);
     const u16 count = packet.prim.pointCount;
     if (!shapeCount) return false;
 
@@ -734,7 +734,7 @@ bool ModelParser::finishMesh(guest_ref<sdfModelRootNode_t> root,
     mHooks->readMaterialPacket(*material, mesh, frame);
     mesh.lighting = mLighting;
     mesh.fog = mFog;
-    mesh.gs = sdfGsStateForOt(mesh.otIndex);
+    mesh.gs = sdfGetGsStateForOt(mesh.otIndex);
     mesh.linkIndex = mCurrentLink;
     mesh.producer = "sdfCorePacketGen";
     mesh.lit = (packet.prim.packetBits & sdfCorePacketNormals) != 0;
@@ -749,8 +749,8 @@ bool ModelParser::finishMesh(guest_ref<sdfModelRootNode_t> root,
     if (mesh.multi.ramp && !mesh.multi.rampColors.known) {
         reportUnsupported("corePktMakeFaceDivParm endpoints for a drawn ramp mesh", mesh.multi.algo);
     }
-    mesh.diffuse = Rgba::fromPacked(material->diffuse);
-    mesh.ambient = Rgba::fromPacked(material->ambient);
+    mesh.diffuse = Rgba::unpack(material->diffuse);
+    mesh.ambient = Rgba::unpack(material->ambient);
 
     // Only the face-division terms are the material's alone: attrBits, lit and the second pass's
     // texture all vary per mesh by design. These two cannot, so a difference means one mesh missed

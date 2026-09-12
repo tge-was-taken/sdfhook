@@ -35,7 +35,7 @@ public:
     /// The parser dispatches on the engine's type; the bucketing is this class's alone.
     void countGeom(sdfCorePacketType_t type, u32 elems);
     void countMesh(sdfCorePacketType_t type, u32 elems);
-    void countReject(sdfCorePacketType_t type, Reject why) { mRejects[usize(geomFor(type))][usize(why)]++; }
+    void countReject(sdfCorePacketType_t type, Reject why) { mRejects[usize(getGeom(type))][usize(why)]++; }
 
     /// A body inside a type 1 DMA call chain, which has no packet type of its own.
     /// Modelled but never run, so a scene reaching it says so.
@@ -111,7 +111,7 @@ private:
     /// Reporting only, never the parser's concern, so it does not leave here.
     enum class Geom : u8 { Rigid, Weighted, BlendShape, VifStream, Unknown, Count };
 
-    static constexpr Geom geomFor(sdfCorePacketType_t type) {
+    static constexpr Geom getGeom(sdfCorePacketType_t type) {
         switch (type) {
             case sdfCorePacketTypeRigid: return Geom::Rigid;
             case sdfCorePacketTypeWeighted: return Geom::Weighted;

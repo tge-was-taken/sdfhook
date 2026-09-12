@@ -59,7 +59,7 @@ void ModelHooks::readFaceDivParm(corePktCbPtr_t aCb, sdfVector4Ptr_t aParm) {
 }
 void ModelHooks::readLighting(sdf3DLightParallelPacketPtr_t aLight) {
     mParser.mLighting = {};
-    const sdf3DLightParallelPacketPtr_t light = aLight ? aLight : mParser.mSdf3DLightDefault.valueOr();
+    const sdf3DLightParallelPacketPtr_t light = aLight ? aLight : mParser.mSdf3DLightDefault.readOr();
     if (!light) return;
 
     for (u32 i = 0; i < kParallelLights; i++) {
@@ -100,7 +100,7 @@ void ModelHooks::readLighting(sdf3DLightParallelPacketPtr_t aLight) {
 // `fogParm[2] + fogParm[3] / w` clamped to fogParm[0]..fogParm[1] (0x04DC, 0x04DF, 0x04E3).
 void ModelHooks::readFog(sdf3DFogPacketPtr_t aFog) {
     mParser.mFog = {};
-    const sdf3DFogPacketPtr_t fog = aFog ? aFog : mParser.mSdf3DFogDefault.valueOr();
+    const sdf3DFogPacketPtr_t fog = aFog ? aFog : mParser.mSdf3DFogDefault.readOr();
     if (!fog) return;
 
     const u32 fogcol = u32(fog->fogColor);
@@ -117,30 +117,30 @@ void ModelHooks::readFog(sdf3DFogPacketPtr_t aFog) {
 // texture handle rather than from the material.
 void ModelHooks::readMaterialPacket(const sdfMat_t& material, DrawMesh& mesh,
                                    Frame* frame) {
-    mesh.diffuse = Rgba::fromPacked(material.diffuse);
-    mesh.ambient = Rgba::fromPacked(material.ambient);
+    mesh.diffuse = Rgba::unpack(material.diffuse);
+    mesh.ambient = Rgba::unpack(material.ambient);
 
     // The finished buffer, not the one about to be rewritten: our walk runs at sdfModelLinkOt's
     // entry, so the index the frame id names is the one sdfMatListUpdatePacket is about to fill.
     const u32 frameId = mParser.mSdfFrameId ? (*mParser.mSdfFrameId & 1) ^ 1 : 0;
     const sdfMatPacketPtr_t packet = material.packet[frameId];
     if (!packet) return;
-    mesh.specular = Rgba::fromPacked(packet->specularColor);
+    mesh.specular = Rgba::unpack(packet->specularColor);
     mParser.mTrace.countSpecular(mesh.attrBits, packet->specularColor);
     // 0x2B8D9C: one global texture for every reflection pass, so it is keyed by that address.
     if (mesh.attrBits & sdfCoreAttrRefMapPass) {
         mesh.refMap = mParser.mTextures->getHandleForTex0(TexHandle{mParser.mSdf3DRefMapParam.addr},
-                                                  mParser.mSdf3DRefMapParam.valueOr());
+                                                  mParser.mSdf3DRefMapParam.readOr());
     }
     // The specular pass names a handle, so it resolves like any other texture.
     if (mesh.attrBits & sdfCoreAttrSpecularPass) {
-        if (const u32 handleAddr = mParser.mSdf3DSpecularTex.valueOr()) {
+        if (const u32 handleAddr = mParser.mSdf3DSpecularTex.readOr()) {
             const sdfTexHandlePtr_t handle{handleAddr};
             // The handle's own pixels, with its upload packet's TEX0 for TCC so the alpha
             // survives. The overlay's real texture is never uploaded. See TODO V7.
             mesh.specularTex = mParser.mTextures->getHandle(TexHandle{handleAddr}, frame);
             if (handle) {
-                mesh.specularTex0 = handle->packet.valueOr().tex0.data;
+                mesh.specularTex0 = handle->packet.readOr().tex0.data;
             }
         }
     }
@@ -193,7 +193,7 @@ void ModelHooks::readMultiTexturePacket(const sdfMat_t& material, sdfMatPacketPt
     mesh.multi.tex0 = packet->mtexTex0Data;
     mesh.multi.tex1 = packet->mtexTex1Data;
     mesh.multi.clamp = packet->mtexClampData;
-    mesh.multi.diffuse = Rgba::fromPacked(packet->mtexDiffuse);
+    mesh.multi.diffuse = Rgba::unpack(packet->mtexDiffuse);
     mesh.multi.on = mesh.multi.texHandle.addr != 0;
     // 0x2B8C4C: the ramp runs only where the two diffuse colors differ, and only under algo 3.
     mesh.multi.algo = packet->mtexAlgo;
@@ -221,7 +221,7 @@ bool ModelHooks::sdfModelCheckBounds(sdfModelBoundsPtr_t aBounds, const Matrix4&
         f32 out[4];
         transformPoint(clip, (corner & 1) ? box.max.x : box.min.x, (corner & 2) ? box.max.y : box.min.y,
                        (corner & 4) ? box.max.z : box.min.z, out);
-        code &= clipCode(out);
+        code &= getClipCode(out);
         if (!code) return false;
     }
     return code != 0;
@@ -253,13 +253,13 @@ void ModelHooks::sdfModelLinkOt(sdfModelRootNodePtr_t aRoot, Frame* frame) {
     // state packet, which nothing here models.
     mParser.reportFaceDiv("sdfModelLinkOt faceDivBias", (root->flags & sdfModelRootOwnFaceDivBias)
                                                     ? root->faceDivBias
-                                                    : mParser.mSdfFaceDivBias.valueOr());
+                                                    : mParser.mSdfFaceDivBias.readOr());
     // The terms reach sdfCorePacketGen in $f12 and $f13, so Config's values are only the first
     // frame's fallback.
     if (root->flags & sdfModelRootOwnFaceDivBias) {
         reportUnsupported("sdfModelLinkOt root faceDiv terms", root->flags);
     }
-    if (const u8 soften = mParser.mCorePktSoftenBias.valueOr()) {
+    if (const u8 soften = mParser.mCorePktSoftenBias.readOr()) {
         reportUnsupported("corePktSoftenBias", soften);
     }
     // 0x2B1E94: flags & 8 suppresses the type 1 and 2 paths.
@@ -409,7 +409,7 @@ void ModelHooks::sdfCorePacketGen(guest_ref<sdfModelRootNode_t> root, const Node
     DrawMesh mesh;
     mesh.sortZ = draw.sortZ;
     mesh.otIndex = draw.otIndex;
-    mesh.color = Rgba::fromPacked(draw.color);
+    mesh.color = Rgba::unpack(draw.color);
     mesh.attrBits = packet.prim.attrBits & draw.attrMask;
     mesh.reverseFacing = draw.reverse;
 
@@ -457,7 +457,7 @@ void ModelHooks::sdfModelTempPacketLinkOt(guest_ref<sdfModelRootNode_t> root, Fr
     // and falls back to its own global.
     mParser.reportFaceDiv("sdfModelTempPacketLinkOt faceDivSoften",
                   (root->flags & sdfModelRootOwnFaceDivBias) ? root->faceDivSoften
-                                                             : mParser.mSdfFaceDivSoften.valueOr());
+                                                             : mParser.mSdfFaceDivSoften.readOr());
     mParser.mTrace.countTempPacketWalk();
 
     const sdfModelNodeListPtr_t list = root->nodeList;
@@ -496,12 +496,12 @@ void ModelHooks::sdfModelTempPacketLinkOt(guest_ref<sdfModelRootNode_t> root, Fr
         // packet pointers. The guest folds the attr mask and colour sign into a qword; we carry
         // both on the draw.
         for (u32 g = 0; ; g++) {
-            const u32 group = guest_ptr<u32>{groups + 4u * g}.valueOr();
+            const u32 group = guest_ptr<u32>{groups + 4u * g}.readOr();
             if (!group) break;
 
             NodeDraw packetDraw = draw;
             // 0x2B1B60: the group's own ot index, when it names one.
-            if (const u16 otIndex = u16(guest_ptr<u32>{group}.valueOr() >> 16)) {
+            if (const u16 otIndex = u16(guest_ptr<u32>{group}.readOr() >> 16)) {
                 packetDraw.otIndex = u8(otIndex);
             }
 
@@ -509,7 +509,7 @@ void ModelHooks::sdfModelTempPacketLinkOt(guest_ref<sdfModelRootNode_t> root, Fr
             // transform as a VIF packet and links it
 
             for (u32 e = 0; ; e++) {
-                const sdfModelTempPacketPtr_t packet{guest_ptr<u32>{group + 4u + 4u * e}.valueOr()};
+                const sdfModelTempPacketPtr_t packet{guest_ptr<u32>{group + 4u + 4u * e}.readOr()};
                 // 0x2B1C58..0x2B1C70, 0x2B1CE4: the list ends at a null, and only type 1 draws.
                 if (!packet) break;
                 if (packet->type != 1) {
@@ -539,10 +539,10 @@ void ModelHooks::sdfModelLinkShapedDrawPacket(guest_ref<sdfModelRootNode_t> root
     mParser.mTrace.countShapedWalk();
 
     // 0x2B0CD0: the low half of word 1 indexes the morph list, the high half the material list.
-    const u32 word1 = guest_ptr<u32>{dataAddr + 4}.valueOr();
+    const u32 word1 = guest_ptr<u32>{dataAddr + 4}.readOr();
     const u16 morphIndex = u16(word1 & 0xFFFF);
     const u16 matIndex = u16(word1 >> 16);
-    const u16 shapeLists = u16(guest_ptr<u32>{dataAddr + 8}.valueOr() & 0xFFFF);
+    const u16 shapeLists = u16(guest_ptr<u32>{dataAddr + 8}.readOr() & 0xFFFF);
 
     const sdfModelMorphListPtr_t morphList = root->morphList;
     const u32 morphItems = morphList ? morphList->items.addr : 0;
@@ -561,7 +561,7 @@ void ModelHooks::sdfModelLinkShapedDrawPacket(guest_ref<sdfModelRootNode_t> root
 
     const sdfMatPtr_t mat{readListItem(root->matList, matIndex)};
     for (u16 l = 0; l < shapeLists; l++) {
-        sdfModelShapeListPtr_t list{guest_ptr<u32>{dataAddr + 12u + 4u * l}.valueOr()};
+        sdfModelShapeListPtr_t list{guest_ptr<u32>{dataAddr + 12u + 4u * l}.readOr()};
         if (!list) {
             reportUnsupported("sdfModelLinkShapedDrawPacket shape list", l);
             continue;
@@ -570,7 +570,7 @@ void ModelHooks::sdfModelLinkShapedDrawPacket(guest_ref<sdfModelRootNode_t> root
             const sdfModelShapeEntry_t entry =
                 guest_ptr<sdfModelShapeEntry_t>{list.addr + offsetof(sdfModelShapeList_t, entry) +
                                                 u32(sizeof(sdfModelShapeEntry_t)) * targets[t]}
-                    .valueOr();
+                    .readOr();
             if (!entry.dataPtr) continue;
             if (!mParser.readVifStreamMesh(entry.dataPtr.addr, entry.dataPtr.addr + 16u * entry.qwc, draw,
                                    mat, frame)) {
@@ -609,12 +609,12 @@ void ModelHooks::drawSprite3D(TexHandle aTexHandle, Sprite3DPtr_t aSprite, Frame
     Matrix4 identity{};
     for (int i = 0; i < 4; i++) identity.m[i][i] = 1.0f;
     mesh.bones.push_back(identity);
-    mesh.color = Rgba::fromPacked(u32(sprite.col));
+    mesh.color = Rgba::unpack(u32(sprite.col));
     mesh.lighting = mParser.mLighting;
     mesh.fog = mParser.mFog;
     // Stamped alongside the state, or the row reports table 0 beside table 2's registers.
     mesh.otIndex = 2;
-    mesh.gs = sdfGsStateForOt(mesh.otIndex);
+    mesh.gs = sdfGetGsStateForOt(mesh.otIndex);
     mesh.attrBits = sdfCoreAttrTextured | sdfCoreAttrBlend | sdfPrimTriangle;
     mesh.lit = false;
     mesh.packetType = sdfPacketGenerated;
@@ -683,10 +683,10 @@ void ModelHooks::sdf3DPrimMakePoly(sdf3DPrimPolyParmPtr_t aPoly, Frame* frame) {
     mesh.fog = mParser.mFog;
     // Its callers set their own ALPHA and TEST through rsetAlpha and rsetTest rather than taking an
     // ordering table's pair, and the chain walk replaces this with what is in force at the packet.
-    mesh.gs = sdfGsStateForOt(0);
+    mesh.gs = sdfGetGsStateForOt(0);
     // 0x2BAAF4: the prim word is the descriptor's own or'd with 0x68, which is IIP, FGE and ABE.
     mesh.attrBits = u16(aPoly->attr | 0x68);
-    mesh.color = Rgba::fromPacked(aPoly->color);
+    mesh.color = Rgba::unpack(aPoly->color);
     mesh.lit = false;
     mesh.packetType = sdfPacketGenerated;
 
@@ -721,7 +721,7 @@ void ModelHooks::fldDrawPoly3(const sdfVector3_t point[3], const u32 color[3], F
     mesh.bones.push_back(identity);
     mesh.lighting = mParser.mLighting;
     mesh.fog = mParser.mFog;
-    mesh.gs = sdfGsStateForOt(0);
+    mesh.gs = sdfGetGsStateForOt(0);
     // Gouraud and blended, with no texture: the call carries no UVs, so there is nothing to sample.
     mesh.attrBits = sdfCoreAttrGouraud | sdfCoreAttrBlend | sdfPrimTriangle;
     mesh.lit = false;
@@ -729,7 +729,7 @@ void ModelHooks::fldDrawPoly3(const sdfVector3_t point[3], const u32 color[3], F
     mesh.vertices.resize(3);
     for (u32 i = 0; i < 3; i++) {
         setRigidInfluence(mesh.vertices[i], point[i], nullptr);
-        mesh.vertices[i].color = Rgba::fromPacked(color[i]);
+        mesh.vertices[i].color = Rgba::unpack(color[i]);
     }
     static constexpr u16 kTriangle[3] = {0, 1, 2};
     mesh.indices.assign(std::begin(kTriangle), std::end(kTriangle));
@@ -751,13 +751,13 @@ bool ModelHooks::fldSdwDraw(u32 aPacket, u32 aEnd, const sdfGsState_t& aState,
     while (at + 8 <= aEnd) {
         VifCode code;
         if (!readVifCode(at, code)) return false;
-        if (isUnpack(code) && code.count == 1 && unpackWidth(code) == 8) {
+        if (isUnpack(code) && code.count == 1 && getUnpackWidth(code) == 8) {
             header = code;
             found = true;
             break;
         }
         // Everything else is a one-word setting or a kick.
-        at = isUnpack(code) ? code.next + unpackWidth(code) * code.count : code.next;
+        at = isUnpack(code) ? code.next + getUnpackWidth(code) * code.count : code.next;
     }
     if (!found) return false;
 
@@ -771,7 +771,7 @@ bool ModelHooks::fldSdwDraw(u32 aPacket, u32 aEnd, const sdfGsState_t& aState,
     // Triangle indices follow as one V4_8 element per face, three bytes and a pad.
     VifCode indexCode;
     if (!readVifCode(header.next + 8, indexCode) || !isUnpack(indexCode) ||
-        unpackWidth(indexCode) != 4 || indexCode.count != faceCount) {
+        getUnpackWidth(indexCode) != 4 || indexCode.count != faceCount) {
         return false;
     }
     const u8* faces = u8Ptr_t{indexCode.next}.slice(faceCount * 4);
@@ -781,7 +781,7 @@ bool ModelHooks::fldSdwDraw(u32 aPacket, u32 aEnd, const sdfGsState_t& aState,
     // the end of the index array takes the code word itself as the first x.
     VifCode pointCode;
     if (!readVifCode(indexCode.next + faceCount * 4, pointCode) || !isUnpack(pointCode) ||
-        unpackWidth(pointCode) != 12 || pointCode.count != pointCount) {
+        getUnpackWidth(pointCode) != 12 || pointCode.count != pointCount) {
         return false;
     }
     const sdfVector3_t* points = sdfVector3Ptr_t{pointCode.next}.slice(pointCount);
@@ -828,7 +828,7 @@ void ModelHooks::readBillboardTables() {
     mParser.mBillboardOt.clear();
     if (!mParser.mDds3BillboardTag) return;
     // The engine's own loop rewrites `next` as it consumes each node, so this runs at its entry.
-    dds3BillResourcePtr_t node = mParser.mDds3BillboardTag.valueOr();
+    dds3BillResourcePtr_t node = mParser.mDds3BillboardTag.readOr();
     for (u32 steps = 0; node && steps < kMaxBillboardNodes; steps++) {
         mParser.mBillboardOt[node->batch.addr] = node->current_mode;
         node = node->next;
@@ -875,11 +875,11 @@ void ModelHooks::sdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Fram
         Matrix4 identity{};
         for (int axisIndex = 0; axisIndex < 4; axisIndex++) identity.m[axisIndex][axisIndex] = 1.0f;
         mesh.bones.push_back(identity);
-        mesh.color = Rgba::fromPacked(batch.color[i]);
+        mesh.color = Rgba::unpack(batch.color[i]);
         mesh.lighting = mParser.mLighting;
         mesh.fog = mParser.mFog;
         mesh.otIndex = u8(otIndex);
-        mesh.gs = sdfGsStateForOt(otIndex);
+        mesh.gs = sdfGetGsStateForOt(otIndex);
         mesh.attrBits = sdfCoreAttrTextured | sdfCoreAttrBlend | sdfPrimTriangle;
         mesh.lit = false;
         mesh.billboard = true;
@@ -932,7 +932,7 @@ void ModelHooks::sdfModelSetNormalDrawPacket(const NodeDraw& draw, u32 chainAddr
         // the hardware consumes and we already have by other means, so it is counted, not read.
         VifCode code;
         if (!readVifCode(target, code) || !isUnpack(code) || code.count != 1 ||
-            unpackWidth(code) != 8) {
+            getUnpackWidth(code) != 8) {
             mParser.mTrace.countSetupRef();
             continue;
         }
@@ -960,7 +960,7 @@ bool ModelHooks::corePktBuildFaceList(u32 at, const sdfCorePacket_t& packet,
 }
 bool ModelHooks::readWeightedBatches(u32 at, const sdfCorePacket_t& packet,
                                     u32 nodesAddr, DrawMesh& mesh) {
-    const u16 usedNodeCount = u16Ptr_t{nodesAddr}.valueOr();
+    const u16 usedNodeCount = u16Ptr_t{nodesAddr}.readOr();
     if (!usedNodeCount || usedNodeCount > kMaxBones) return false;
 
     // Every batch blends the same node set, so the palette is built once from the mesh header.

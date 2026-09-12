@@ -24,14 +24,14 @@ std::string dumpWords(u32 aData, u32 aQwc) {
     const u32 words = aQwc * 4 < 64 ? aQwc * 4 : 64;
     for (u32 i = 0; i < words; i++) {
         char buffer[16];
-        std::snprintf(buffer, sizeof(buffer), "%08X ", u32Ptr_t{aData + i * 4}.valueOr());
+        std::snprintf(buffer, sizeof(buffer), "%08X ", u32Ptr_t{aData + i * 4}.readOr());
         out += buffer;
     }
     return out;
 }
 
 // VIF1's command byte, the field that says what a quadword of a stream is for.
-constexpr u32 vifCommand(u32 word) { return (word >> 24) & 0x7F; }
+constexpr u32 getVifCommand(u32 word) { return (word >> 24) & 0x7F; }
 
 enum : u32 {
     vifNop = 0x00,
@@ -58,23 +58,23 @@ enum : u32 {
 
 /// A GIF tag has reserved bits, a bounded register count and a payload that has to fit the DMA
 /// tag's own quadword count. Without the last of those a block of floats passes as a tag.
-bool looksLikeGifTag(const sdfGifTag_t& words, u32 aQwc) {
-    if (sdfGifNloop(words) == 0) return false;
+bool isLikelyGifTag(const sdfGifTag_t& words, u32 aQwc) {
+    if (sdfGetGifNloop(words) == 0) return false;
     // Bits 60..63 are NREG, and zero means sixteen, which SDF never writes.
-    const u32 nreg = sdfGifNreg(words);
+    const u32 nreg = sdfGetGifNreg(words);
     if (nreg == 0) return false;
     // Bits 16..45 are reserved and the hardware requires them clear. PRIM is 47..57, so a test
     // over those rejects every tag that sets one.
     if (((words.parm >> 16) & 0x3FFFFFFF) != 0) return false;
     // PACKED writes one quadword per register per loop; the transfer has to hold them.
-    if (sdfGifFlg(words) == 0 && u64(sdfGifNloop(words)) * nreg + 1 > aQwc) return false;
+    if (sdfGetGifFlg(words) == 0 && u64(sdfGetGifNloop(words)) * nreg + 1 > aQwc) return false;
     return true;
 }
 
 /// Whether a stream's first word decodes as a VIF code. Only the commands SDF actually writes are
 /// accepted, so a float that happens to sit in the command byte is refused.
-bool looksLikeVif(u32 word) {
-    const u32 command = vifCommand(word);
+bool isLikelyVifCode(u32 word) {
+    const u32 command = getVifCommand(word);
     if ((command & 0x60) == 0x60) return true;  // UNPACK
     switch (command) {
         case vifNop:
@@ -102,8 +102,8 @@ bool looksLikeVif(u32 word) {
 }
 
 /// How many 32-bit words of data follow a VIF code, so the next code in the stream can be found.
-u32 vifDataWords(u32 aCode) {
-    const u32 command = vifCommand(aCode);
+u32 countVifDataWords(u32 aCode) {
+    const u32 command = getVifCommand(aCode);
     const u32 num = (aCode >> 16) & 0xFF;
     const u32 immediate = aCode & 0xFFFF;
     if ((command & 0x60) == 0x60) {
@@ -130,13 +130,13 @@ u32 vifDataWords(u32 aCode) {
 void scanVif(u32 aData, u32 aQwc, u32* aCalls, u32* aUnpacks, u32* aMicrocode) {
     const u32 words = aQwc * 4;
     for (u32 at = 0; at < words;) {
-        const u32 code = u32Ptr_t{aData + at * 4}.valueOr();
-        const u32 command = vifCommand(code);
-        if (!looksLikeVif(code)) return;
+        const u32 code = u32Ptr_t{aData + at * 4}.readOr();
+        const u32 command = getVifCommand(code);
+        if (!isLikelyVifCode(code)) return;
         if (command == vifMsCal || command == vifMsCalF || command == vifMsCnt) (*aCalls)++;
         if ((command & 0x60) == 0x60) (*aUnpacks)++;
         if (command == vifMpg) (*aMicrocode)++;
-        at += 1 + vifDataWords(code);
+        at += 1 + countVifDataWords(code);
     }
 }
 
@@ -145,16 +145,16 @@ void scanVif(u32 aData, u32 aQwc, u32* aCalls, u32* aUnpacks, u32* aMicrocode) {
 PacketType classifySelf(u32 aData, u32 aQwc) {
     if (!aQwc) return PacketType::Empty;
 
-    const sdfGifTag_t words = sdfGifTagPtr_t{aData}.valueOr();
-    if (looksLikeGifTag(words, aQwc)) {
+    const sdfGifTag_t words = sdfGifTagPtr_t{aData}.readOr();
+    if (isLikelyGifTag(words, aQwc)) {
         // NREG 1 naming A+D (0xE) is a run of register writes and draws nothing itself.
-        const bool registersOnly = sdfGifNreg(words) == 1 && (words.regs & 0xF) == 0xE;
+        const bool registersOnly = sdfGetGifNreg(words) == 1 && (words.regs & 0xF) == 0xE;
         return registersOnly ? PacketType::GifRegisters : PacketType::GifPrimitive;
     }
 
-    const u32 word = u32Ptr_t{aData}.valueOr();
-    if (looksLikeVif(word)) {
-        return (vifCommand(word) & 0x60) == 0x60 ? PacketType::VifData : PacketType::VifSetup;
+    const u32 word = u32Ptr_t{aData}.readOr();
+    if (isLikelyVifCode(word)) {
+        return (getVifCommand(word) & 0x60) == 0x60 ? PacketType::VifData : PacketType::VifSetup;
     }
     return PacketType::Unknown;
 }
@@ -173,7 +173,7 @@ PacketType classify(u32 aPacket, u32 aData, u32 aQwc, const char* aProducer,
 
     // The 2D helpers say only that a packet is 2D; the single-site function that linked it says
     // which, so it wins over them and over nothing else.
-    const PacketType byLinker = packetTypeForLinker(aProducer);
+    const PacketType byLinker = getPacketTypeByLinker(aProducer);
     if (byLinker != PacketType::Unknown && (built == PacketType::Unknown ||
                                             built == PacketType::Packet2D)) {
         *aHow = TypedBy::Linker;
@@ -194,7 +194,7 @@ PacketType classify(u32 aPacket, u32 aData, u32 aQwc, const char* aProducer,
     const PacketType encoding = classifySelf(aData, aQwc);
     if (encoding == PacketType::Unknown) {
         *aHow = TypedBy::Shape;
-        const PacketType byShape = packetTypeForShape(aData, aQwc);
+        const PacketType byShape = getPacketTypeByShape(aData, aQwc);
         if (byShape != PacketType::Unknown) return byShape;
     } else if (encoding != PacketType::Empty) {
         // Described, not identified: the encoding is known and the meaning is not.
@@ -214,11 +214,11 @@ PacketType classify(u32 aPacket, u32 aData, u32 aQwc, const char* aProducer,
 /// One row per packet handed to a sdfDrawTagLink* entry point, which is the set that has to be
 /// identified exhaustively: a packet whose type is unknown cannot be processed without running the
 /// hardware that consumes it.
-void censusLinked(const std::vector<LinkedPacket>& aLinked, SymbolCache& aSymbols, u32 aFrame,
+void writeLinkedCensus(const std::vector<LinkedPacket>& aLinked, SymbolCache& aSymbols, u32 aFrame,
                   const std::unordered_map<u32, PacketType>& aTypes) {
     static const char* const kLinkKind[] = {"packet", "ref", "call"};
     for (const LinkedPacket& packet : aLinked) {
-        const sdfDmaTag_t tag = sdfDmaTagPtr_t{packet.addr}.valueOr();
+        const sdfDmaTag_t tag = sdfDmaTagPtr_t{packet.addr}.readOr();
         const u32 data = sdfDmaIsRef(tag) ? tag.addr : packet.addr + sdfQwordBytes;
 
         const char* producer = aSymbols.getFunction(packet.caller);
@@ -232,19 +232,19 @@ void censusLinked(const std::vector<LinkedPacket>& aLinked, SymbolCache& aSymbol
                      .addUint("frame", aFrame)
                      .addHexDigits("at", packet.addr, 8)
                      .addString("link", kLinkKind[u8(packet.kind)])
-                     .addUint("dmaId", sdfDmaId(tag))
+                     .addUint("dmaId", sdfGetDmaId(tag))
                      .addUint("qwc", tag.qwc)
-                     .addString("type", packetTypeName(type))
-                     .addString("how", typedByName(how))
+                     .addString("type", getPacketTypeName(type))
+                     .addString("how", getTypedByName(how))
                      .addString("by", producer)
                      .addUint("mscal", calls)
                      .take());
     }
 }
 
-void censusChain(u32 aTag, const std::vector<LinkedPacket>& aLinked, SymbolCache& aSymbols,
+void writeChainCensus(u32 aTag, const std::vector<LinkedPacket>& aLinked, SymbolCache& aSymbols,
                  u32 aFrame, const std::unordered_map<u32, PacketType>& aTypes) {
-    censusLinked(aLinked, aSymbols, aFrame, aTypes);
+    writeLinkedCensus(aLinked, aSymbols, aFrame, aTypes);
     // Who linked each packet, so an entry the walk finds can still be named by the producer that
     // built it. A chain-walk renderer would not have this; the census uses it to say what it loses.
     std::unordered_map<u32, u32> byAddr;
@@ -261,7 +261,7 @@ void censusChain(u32 aTag, const std::vector<LinkedPacket>& aLinked, SymbolCache
         const sdfDmaTagPtr_t tag{at};
         if (!tag) break;
         const u32 qwc = tag->qwc;
-        const u32 id = sdfDmaId(*tag);
+        const u32 id = sdfGetDmaId(*tag);
         const u32 addr = tag->addr & 0x0FFFFFFFu;
         const u32 data = sdfDmaIsRef(*tag) ? addr : at + sdfQwordBytes;
 
@@ -281,12 +281,12 @@ void censusChain(u32 aTag, const std::vector<LinkedPacket>& aLinked, SymbolCache
                      .addHexDigits("at", at, 8)
                      .addUint("dmaId", id)
                      .addUint("qwc", qwc)
-                     .addString("type", packetTypeName(type))
-                     .addString("how", typedByName(how))
+                     .addString("type", getPacketTypeName(type))
+                     .addString("how", getTypedByName(how))
                      .addString("by", producer)
-                     .addHexDigits("w0", u32Ptr_t{data}.valueOr(), 8)
-                     .addHexDigits("w1", u32Ptr_t{data + 4}.valueOr(), 8)
-                     .addHexDigits("w4", u32Ptr_t{data + 16}.valueOr(), 8)
+                     .addHexDigits("w0", u32Ptr_t{data}.readOr(), 8)
+                     .addHexDigits("w1", u32Ptr_t{data + 4}.readOr(), 8)
+                     .addHexDigits("w4", u32Ptr_t{data + 16}.readOr(), 8)
                      .addUint("mscal", calls)
                      .addUint("unpacks", unpacks)
                      .addUint("mpg", microcode)

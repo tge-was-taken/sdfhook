@@ -97,7 +97,7 @@ right.
 
       What is already right, so start elsewhere: the alpha test is quantised as
       `floor(min(a * 128, 255) + 0.5)` against the raw AREF, which is the form CLAUDE.md prescribes;
-      the two passes are complementary (`atestFails(testA) != uAtestInvert`); and the colour and
+      the two passes are complementary (`isAlphaTestFailing(testA) != uAtestInvert`); and the colour and
       depth masks match AFAIL FB_ONLY, ZB_ONLY and RGB_ONLY.
 
       **Ordering is ruled out.** Drawing the failing half before the passing one instead of after
@@ -770,7 +770,7 @@ right.
       256 entries in a GS dump taken at the moment of the draw before changing any decode.
 
 - [x] **V11: the specters are additive, and drawing them as ordinary alpha made them plumes.**
-      `sdfBillBoardMakeN` built its quads with `sdfGsStateForOt(0)`, which is ALPHA 0x44, ordinary
+      `sdfBillBoardMakeN` built its quads with `sdfGetGsStateForOt(0)`, which is ALPHA 0x44, ordinary
       source-alpha blending. The battle specters came out as opaque magenta plumes where the
       reference has compact glowing cores.
 
@@ -793,7 +793,7 @@ right.
       them: tbp 15606, 15609, 15698 and 16348 are their own glow textures and we sample none of them,
       so the quads draw as smooth blobs where the reference has structure.
 
-- [x] **V12: GS ALPHA 0x89 was reported unsupported 109 times a battle run.** `gsAlphaToBlend`
+- [x] **V12: GS ALPHA 0x89 was reported unsupported 109 times a battle run.** `convertAlphaToBlend`
       handled four of the term combinations and fell through to the default blend for the rest.
       0x89 is A=Cd, B=0, C=As, D=0, so `Cv = Cd * As`: the destination scaled by the source alpha,
       which GL writes as `src = GL_ZERO, dst = GL_SRC_ALPHA`. Added, and battle's unsupported report
@@ -1103,7 +1103,7 @@ right.
 - [x] **V15: the shaders had two silent wrong answers, and now fail loudly instead.**
       Prompted by the rule that an unhandled state paints magenta rather than something plausible.
 
-      - **ATST 4 (EQUAL) was missing** from `atestFails`, so it fell through to "never fails". The
+      - **ATST 4 (EQUAL) was missing** from `isAlphaTestFailing`, so it fell through to "never fails". The
         GS's eight comparisons are now all present, with 1 (ALWAYS) correctly never failing.
       - **TFX 2 and 3 added the vertex color where the GS adds the fragment alpha**, and were
         lumped together though HIGHLIGHT and HIGHLIGHT2 differ in the alpha they output. Rather than
@@ -1299,7 +1299,7 @@ right.
 
       **The batch header is there but not where our reader looks.** `readVifStreamMesh` is entered
       only when the **first** VIF code at the target is a count-1 width-8 unpack. Here the first code
-      is `6E01C002`, and `unpackWidth(0x6E)` is **4**, not 8: it is a V4_8 color unpack (`8080F080`).
+      is `6E01C002`, and `getUnpackWidth(0x6E)` is **4**, not 8: it is a V4_8 color unpack (`8080F080`).
       The real header sits at offset 32 as `6D01C000`, count 1 and width 8, and decodes to
       `[faceCount, pointCount, attrBits, packetBits]` exactly as world geometry does, followed by a
       `6E10C001` V4_8 index array (3 bytes plus a pad per triangle) and then float positions.
@@ -1346,7 +1346,7 @@ right.
       **The masked pass is theirs, and taking the chain's running state instead of the ordering
       table's default is worth 1.3 and 3.9 points of the cost** (field 29.875 to 28.609, underground
       18.701 to 14.765). `collectPackets` already carries that state per packet, so `fldSdwDraw`
-      takes it now rather than `sdfGsStateForOt(0)` plus a stale `mState->frameMask`.
+      takes it now rather than `sdfGetGsStateForOt(0)` plus a stale `mState->frameMask`.
 
       The GS trace says the profile is theirs: **every** masked batch in the scene is
       `fbmsk 0x00FFFFFF, prim 3, tme 0, abe 1, iip 1`, which is `attrBits 0x68` exactly, 1547 batches
@@ -1563,7 +1563,7 @@ right.
       **Implemented and drawing, worth 0.034.** `ModelParser::sdf3DPrimMakePoly` builds the mesh and
       the hook draws it; `SDF_NO_PRIM_POLY` turns it off.
 
-      The GS state was the whole difference. Under a guessed `sdfGsStateForOt(0)` the scene went
+      The GS state was the whole difference. Under a guessed `sdfGetGsStateForOt(0)` the scene went
       5.925 to **5.987**, worse: `fldSdwDraw` sets its own blend and test through `rsetAlpha` (x3)
       and `rsetTest` (x5) rather than taking an ordering table's pair. Both were already hooked into
       `RenderState`, which `ModelParser` already held, so taking the state in force at the call
@@ -1807,12 +1807,12 @@ right.
 
       Type 3 here is the *link* packet type, and those rows come from the producer hooks
       (`drawSprite3D`, `sdf3DPrimMakePoly`, `fldDrawPoly3`, `sdfBillBoardMakeN`), which set
-      `mesh.gs = sdfGsStateForOt(N)` from the **hardcoded table** by design. `sdfGsStateForOt(2)` is
+      `mesh.gs = sdfGetGsStateForOt(N)` from the **hardcoded table** by design. `sdfGetGsStateForOt(2)` is
       ALPHA 0x48 with ATST NEVER, which is precisely the `b=2 atst=0` signature gsdiff reports.
 
       **And chasing it further showed the "impossible" combination was the instrument.** Those meshes
       were reporting `ot=0` because the producer paths never stamped `otIndex`, while taking their
-      registers from `sdfGsStateForOt(2)`. The table is not a guess: `readBillboardTables` reads it
+      registers from `sdfGetGsStateForOt(2)`. The table is not a guess: `readBillboardTables` reads it
       off the engine's own `dds3BillboardTag` node list, a miss is reported (2 in a full run), and
       CLAUDE.md's GS-trace note says the specters' additive batches do run ALPHA 0x48 with TEST
       0x71801, which is table 2. So **the state was right and the label was missing.** `otIndex` is
@@ -1922,7 +1922,7 @@ right.
 
       1. `sdfModelDrawEnvLinkOt(aOt, aEnv)` links one 96-byte env set per ordering table. Dumped and
          decoded: a GIF tag at +48 (NLOOP 2, NREG 1, REGS A+D), then TEST (register 0x47) at +64 and
-         ALPHA (0x42) at +80. The values are **exactly** `sdfGsStateForOt`: OT 0/1 `0x44`/`0x717FB`,
+         ALPHA (0x42) at +80. The values are **exactly** `sdfGetGsStateForOt`: OT 0/1 `0x44`/`0x717FB`,
          OT 2 `0x48`/`0x71801`, OT 3 `0x42`/`0x71801`. **The hardcoded table is right.**
       2. The mesh batches do not run it. The GS trace has them on TEST `0x5180B` (1027), `0x51801`
          (884) and `0x5160B` (358, AREF 96), against only 77 on the env's `0x717FB`. The depth test
@@ -2041,7 +2041,7 @@ right.
           | field unknown realm | `(5, 128, 1)` on 3628 of 3642 |
           | battle | `(5, 127, 1)` x73 and `(0, 128, 1)` x11 per frame |
 
-          Battle's two values are exactly `sdfGsStateForOt`'s tables 0/1 and 2/3, so **the hardcoded
+          Battle's two values are exactly `sdfGetGsStateForOt`'s tables 0/1 and 2/3, so **the hardcoded
           table is right and battle needs no work**. The field runs one value that is not in the
           table, uniformly, and is not per draw: **`aref` is a per-frame base state, not per-packet
           attribution.** That is a much smaller problem than findings 5-11 assumed.
@@ -2249,7 +2249,7 @@ right.
         single pixel. They contribute nothing.
 
       **Fixed: the material's alpha never reached the shader, and additive blending multiplied the
-      mistake.** `gsRgb()` takes a color's r, g and b, so `mesh.diffuse`'s alpha was dropped. VU1
+      mistake.** `convertToGsUnits()` takes a color's r, g and b, so `mesh.diffuse`'s alpha was dropped. VU1
       writes that alpha as the vertex alpha, and the GS trace agrees exactly: the additive batches
       carry vertex alpha **128, 64, 38, 12 and 6**, which are precisely the materials' own
       (`80808080`, `40808080`, `26808080`, `0C808080`, `06808080`). So every additive mesh blended at
@@ -2267,7 +2267,7 @@ right.
       veins already read correctly against the reference, and only the ceiling vortex blows out.
       Those meshes are ALPHA `0x48` (additive) and `0x42` (subtractive) on TEST `0x71801` (ATST
       NEVER, so every fragment takes the AFAIL path), 150 triangles over a quarter of the screen,
-      four a frame. `gsAlphaToBlend` maps both correctly, including `GL_FUNC_REVERSE_SUBTRACT`, so
+      four a frame. `convertAlphaToBlend` maps both correctly, including `GL_FUNC_REVERSE_SUBTRACT`, so
       the blend is not the bug: what is left is the magnitude of `Cs`, which additive layering
       multiplies. The shader inserts the material's `uAmbient` and `uDiffuse` into the light sum, and
       the VU1 image records no such term, so that is where to look first.
@@ -2397,7 +2397,7 @@ right.
   `0x71801` (ATST NEVER), table 3 `0x42` with the same. They match the GS trace exactly. AFAIL is
   the depth mechanism: FB_ONLY means a failing fragment still writes color and only its depth is
   suppressed, which is two draws back to back. Blend translator ported from SkyGL's
-  `gsAlphaToBlend`, unit scale from its `3d.frag`.
+  `convertAlphaToBlend`, unit scale from its `3d.frag`.
 - **R5 culling and R6 the two-sided pass.** `corePktBuildFaceList` drops a triangle whose
   screen-space signed area disagrees with `cb->backfaceSign`, which `sdfCorePacketGen` takes from
   `root->flags & 0x08`. On by default; a two-sided draw turns it off for itself. It looked

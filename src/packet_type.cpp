@@ -10,7 +10,7 @@
 
 namespace sdfhook {
 
-PacketBuilder packetBuilderFor(const char* symbol) {
+PacketBuilder getPacketBuilder(const char* symbol) {
     struct Entry {
         const char* symbol;
         PacketType type;
@@ -101,7 +101,7 @@ PacketBuilder packetBuilderFor(const char* symbol) {
     return {};
 }
 
-PacketType packetTypeForLinker(const char* symbol) {
+PacketType getPacketTypeByLinker(const char* symbol) {
     struct Entry {
         const char* symbol;
         PacketType type;
@@ -142,7 +142,7 @@ PacketType packetTypeForLinker(const char* symbol) {
     return PacketType::Unknown;
 }
 
-bool carriesDraw(PacketType type) {
+bool isDrawType(PacketType type) {
     switch (type) {
         case PacketType::Unknown:
         case PacketType::MeshNormal:
@@ -197,7 +197,7 @@ bool carriesDraw(PacketType type) {
     return true;
 }
 
-PacketType packetTypeForGlobal(const char* symbol) {
+PacketType getPacketTypeByGlobal(const char* symbol) {
     // sdf3DPrimLinkResetTm references the identity matrix, sdf3DLinkInitPacket the VU1 microcode.
     if (std::strcmp(symbol, "sdf3DPrimIdentityTm") == 0) return PacketType::Transform;
     if (std::strcmp(symbol, "vu1MicroPacket") == 0) return PacketType::VuMicrocode;
@@ -208,7 +208,7 @@ PacketType packetTypeForGlobal(const char* symbol) {
 /// +0x90, with the colours above them at +0x70 and +0x80.
 /// @note Measured on smt3_field_unknown_realm against a packet sdf3DMakeLightParallelPacket built,
 /// which carries the same layout at the same offsets.
-PacketType packetTypeForShape(u32 aData, u32 aQwc) {
+PacketType getPacketTypeByShape(u32 aData, u32 aQwc) {
     constexpr u32 kLightQwords = 13;
     constexpr u32 kDirections = 0x90;
     if (aQwc != kLightQwords) return PacketType::Unknown;

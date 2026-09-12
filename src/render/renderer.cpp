@@ -237,7 +237,7 @@ const vec3 kUnhandled = vec3(1.0, 0.0, 1.0);
 
 // Quantised as the GS does: AREF 128 against a normalised 1.0 is a knife-edge in float, and
 // fragments either side of it write depth at random.
-bool atestFails(float normalised) {
+bool isAlphaTestFailing(float normalised) {
     float a = floor(min(normalised * 128.0, 255.0) + 0.5);
     return uAtest == 0                       // NEVER; 1 is ALWAYS and never fails
         || (uAtest == 2 && a >= uAtestRef)   // LESS
@@ -285,7 +285,7 @@ void main() {
     float testA = uBillboard != 0 ? min(texA * color.a, 1.0)
                                   : min(texA * color.a * kPs2Alpha * uDiffuseAlpha, 1.0);
     // AFAIL FB_ONLY is two GL draws; uAtestInvert selects the half.
-    if (atestFails(testA) != (uAtestInvert != 0)) discard;
+    if (isAlphaTestFailing(testA) != (uAtestInvert != 0)) discard;
 
     // HIGHLIGHT and HIGHLIGHT2 appear in no scene, so they paint magenta rather than render an
     // alpha path never measured.
@@ -304,10 +304,10 @@ struct GsRgb {
     f32 v[3];
 };
 
-GsRgb gsRgb(Rgba c) { return {{c.r / sdfGsUnit, c.g / sdfGsUnit, c.b / sdfGsUnit}}; }
+GsRgb convertToGsUnits(Rgba c) { return {{c.r / sdfGsUnit, c.g / sdfGsUnit, c.b / sdfGsUnit}}; }
 
 /// The GS ALPHA register, Cv = (A - B) * C + D, as a GL blend. Follows p3fes SkyGL's
-/// gsAlphaToBlend, minus the FIX cases no SDF draw uses.
+/// convertAlphaToBlend, minus the FIX cases no SDF draw uses.
 struct GsBlend {
     GLenum equation = GL_FUNC_ADD;
     GLenum src = GL_SRC_ALPHA;
@@ -315,9 +315,9 @@ struct GsBlend {
 };
 
 /// The GL depth comparison for a GS TEST register.
-GLenum depthFuncFor(u64 test) {
-    if (!sdfTestZte(test)) return GL_ALWAYS;
-    switch (sdfTestZtst(test)) {
+GLenum getDepthFunc(u64 test) {
+    if (!sdfGetTestZte(test)) return GL_ALWAYS;
+    switch (sdfGetTestZtst(test)) {
         case sdfZtstNever: return GL_NEVER;
         case sdfZtstAlways: return GL_ALWAYS;
         case sdfZtstGequal: return GL_LEQUAL;
@@ -326,11 +326,11 @@ GLenum depthFuncFor(u64 test) {
     }
 }
 
-GsBlend gsAlphaToBlend(u64 reg) {
-    const u32 a = sdfAlphaA(reg);
-    const u32 b = sdfAlphaB(reg);
-    const u32 c = sdfAlphaC(reg);
-    const u32 d = sdfAlphaD(reg);
+GsBlend convertAlphaToBlend(u64 reg) {
+    const u32 a = sdfGetAlphaA(reg);
+    const u32 b = sdfGetAlphaB(reg);
+    const u32 c = sdfGetAlphaC(reg);
+    const u32 d = sdfGetAlphaD(reg);
     const GLenum coef = c == sdfAlphaAd ? GL_DST_ALPHA : GL_SRC_ALPHA;
     const GLenum inverse = c == sdfAlphaAd ? GL_ONE_MINUS_DST_ALPHA : GL_ONE_MINUS_SRC_ALPHA;
 
@@ -363,13 +363,13 @@ void applyBlend(GsAlpha alpha) {
         glBlendFunc(GL_ONE, GL_ZERO);
         return;
     }
-    const GsBlend blend = gsAlphaToBlend(u64(alpha));
+    const GsBlend blend = convertAlphaToBlend(u64(alpha));
     glBlendEquation(blend.equation);
     glBlendFunc(blend.src, blend.dst);
 }
 
 /// PCSX2HOOK_GS_ONLY's own spec, so a frame cuts to the same draws on both sides.
-bool drawWanted(const std::string& spec, usize index, u32 tbp) {
+bool isDrawWanted(const std::string& spec, usize index, u32 tbp) {
     if (spec.empty()) return true;
     usize at = 0;
     while (at < spec.size()) {
@@ -522,7 +522,7 @@ const Renderer::Texture* Renderer::findTexture(TexHandle handle) const {
     return found == mTextures.end() ? nullptr : &found->second;
 }
 
-void Renderer::screenRect(int* x, int* y, int* width, int* height) const {
+void Renderer::getScreenRect(int* x, int* y, int* width, int* height) const {
     const RenderTexture& target = mFrames[mCurrent];
     const int screenWidth = mScreenWidth > 0 ? mScreenWidth : target.getWidth();
     const int screenHeight = mScreenHeight > 0 ? mScreenHeight : target.getHeight();
@@ -535,7 +535,7 @@ void Renderer::screenRect(int* x, int* y, int* width, int* height) const {
 
 void Renderer::mapToTarget(int x, int y, int* outX, int* outY) const {
     int boxX = 0, boxY = 0, boxWidth = 0, boxHeight = 0;
-    screenRect(&boxX, &boxY, &boxWidth, &boxHeight);
+    getScreenRect(&boxX, &boxY, &boxWidth, &boxHeight);
     const RenderTexture& target = mFrames[mCurrent];
     // The blit flips vertically, so a window row counts from the bottom of the box.
     *outX = boxWidth ? (x - boxX) * target.getWidth() / boxWidth : x;
@@ -544,14 +544,14 @@ void Renderer::mapToTarget(int x, int y, int* outX, int* outY) const {
 
 void Renderer::present() {
     int x = 0, y = 0, width = 0, height = 0;
-    screenRect(&x, &y, &width, &height);
+    getScreenRect(&x, &y, &width, &height);
     mFrames[mCurrent].blitToScreen(x, y, width, height);
     mCurrent ^= 1;
 }
 
 void Renderer::represent() {
     int x = 0, y = 0, width = 0, height = 0;
-    screenRect(&x, &y, &width, &height);
+    getScreenRect(&x, &y, &width, &height);
     mFrames[mCurrent ^ 1].blitToScreen(x, y, width, height);
 }
 
@@ -698,7 +698,7 @@ void Renderer::drawMeshes(const Frame& frame, const std::vector<u32>& indices) {
     mMeshes.clear();
     for (const u32 index : indices) {
         if (index < firstMesh || index > lastMesh) continue;
-        if (!drawWanted(mConfig->drawOnly, index, sdfDecodeTex0(frame.meshes[index].tex0).tbp)) {
+        if (!isDrawWanted(mConfig->drawOnly, index, sdfDecodeTex0(frame.meshes[index].tex0).tbp)) {
             continue;
         }
         if (frame.meshes[index].otIndex <= mConfig->otMax) mMeshes.push_back(index);
@@ -720,21 +720,21 @@ void Renderer::drawMeshes(const Frame& frame, const std::vector<u32>& indices) {
                                  int functionLoc, int alphaLoc) {
         const Texture* texture = findTexture(handle);
         glUniform1i(texturedLoc, texture ? 1 : 0);
-        const u32 function = texture ? sdfTex0Tfx(tex0) : u32(sdfTexModulate);
+        const u32 function = texture ? sdfGetTex0Tfx(tex0) : u32(sdfTexModulate);
         if (function > sdfTexDecal) reportUnsupported("GS TEX0 TFX", function);
         glUniform1i(functionLoc, int(function));
-        glUniform1i(alphaLoc, texture && sdfTex0Tcc(tex0) ? 1 : 0);
+        glUniform1i(alphaLoc, texture && sdfGetTex0Tcc(tex0) ? 1 : 0);
         if (!texture) return;
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, texture->name);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER,
-                        sdfTex1Mmag(tex1) ? GL_LINEAR : GL_NEAREST);
+                        sdfGetTex1Mmag(tex1) ? GL_LINEAR : GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
-                        sdfTex1Mmin(tex1) ? GL_LINEAR : GL_NEAREST);
+                        sdfGetTex1Mmin(tex1) ? GL_LINEAR : GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S,
-                        sdfClampWms(clamp) == sdfWrapRepeat ? GL_REPEAT : GL_CLAMP_TO_EDGE);
+                        sdfGetClampWms(clamp) == sdfWrapRepeat ? GL_REPEAT : GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T,
-                        sdfClampWmt(clamp) == sdfWrapRepeat ? GL_REPEAT : GL_CLAMP_TO_EDGE);
+                        sdfGetClampWmt(clamp) == sdfWrapRepeat ? GL_REPEAT : GL_CLAMP_TO_EDGE);
     };
 
     // The passing half writes everything, the failing half whatever AFAIL still lets through.
@@ -745,8 +745,8 @@ void Renderer::drawMeshes(const Frame& frame, const std::vector<u32>& indices) {
         glDepthMask(GL_TRUE);
         glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_SHORT, nullptr);
 
-        if (!sdfTestAte(mesh.gs.test)) return;
-        const u32 afail = sdfTestAfail(mesh.gs.test);
+        if (!sdfGetTestAte(mesh.gs.test)) return;
+        const u32 afail = sdfGetTestAfail(mesh.gs.test);
         if (afail == sdfAfailKeep) return;
 
         // ZB_ONLY writes depth and no color, the reverse of the other two.
@@ -794,18 +794,18 @@ void Renderer::drawMeshes(const Frame& frame, const std::vector<u32>& indices) {
         glUniform1i(mtexPass, 0);
         glUniform1i(refMapPass, 0);
         glUniform1i(overlayPass, 0);
-        glUniform3fv(drawColor, 1, gsRgb(mesh.color).v);
-        glUniform3fv(ambient, 1, gsRgb(mesh.ambient).v);
+        glUniform3fv(drawColor, 1, convertToGsUnits(mesh.color).v);
+        glUniform3fv(ambient, 1, convertToGsUnits(mesh.ambient).v);
         // VU1 writes the material's alpha as the vertex alpha, which the GS trace confirms.
         // Dropping it blends every additive mesh at full strength.
         glUniform1f(diffuseAlpha, f32(mesh.diffuse.a) / sdfGsUnit);
         glUniform1i(billboard, mesh.billboard ? 1 : 0);
-        glUniform3fv(diffuse, 1, gsRgb(mesh.diffuse).v);
+        glUniform3fv(diffuse, 1, convertToGsUnits(mesh.diffuse).v);
 
         // Only a draw that asks for the reflection pass gets the highlight.
         const bool reflective =
             !mConfig->noSpecular && (mesh.attrBits & sdfCoreAttrRefMapPass) != 0;
-        const GsRgb spec = reflective ? gsRgb(mesh.specular) : GsRgb{};
+        const GsRgb spec = reflective ? convertToGsUnits(mesh.specular) : GsRgb{};
         glUniform3fv(specular, 1, spec.v);
         glUniform3fv(specularAxis, 1, mesh.lighting.specularAxis);
 
@@ -831,17 +831,17 @@ void Renderer::drawMeshes(const Frame& frame, const std::vector<u32>& indices) {
         }
         // The GS's z counts the other way, so its GEQUAL is our LEQUAL. Forcing LESS drops a
         // decal sitting exactly on the surface it decorates.
-        glDepthFunc(depthFuncFor(mesh.gs.test));
+        glDepthFunc(getDepthFunc(mesh.gs.test));
         // FRAME's write mask. The game re-draws a character with RGB masked to build the alpha
         // its bloom reads.
         const u64 mask = mesh.gs.frameMask;
         glColorMask((mask & 0x0000FF) != 0x0000FF, (mask & 0x00FF00) != 0x00FF00,
                     (mask & 0xFF0000) != 0xFF0000, (mask & 0xFF000000u) != 0xFF000000u);
-        const GsBlend blend = gsAlphaToBlend(mesh.gs.alpha);
+        const GsBlend blend = convertAlphaToBlend(mesh.gs.alpha);
         glBlendEquation(blend.equation);
         glBlendFunc(blend.src, blend.dst);
-        glUniform1i(atest, sdfTestAte(mesh.gs.test) ? int(sdfTestAtst(mesh.gs.test)) : 1);
-        glUniform1f(atestRef, f32(sdfTestAref(mesh.gs.test)));
+        glUniform1i(atest, sdfGetTestAte(mesh.gs.test) ? int(sdfGetTestAtst(mesh.gs.test)) : 1);
+        glUniform1f(atestRef, f32(sdfGetTestAref(mesh.gs.test)));
 
         glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(mesh.vertices.size() * sizeof(MeshVertex)),
                      mesh.vertices.data(), GL_STREAM_DRAW);
@@ -864,11 +864,11 @@ void Renderer::drawMeshes(const Frame& frame, const std::vector<u32>& indices) {
 
         // corePktEmitMultiTexPass runs it again through the second UV set, in GS context 2.
         if (mesh.multi.on) {
-            const GsBlend second = gsAlphaToBlend(mesh.multi.alpha);
+            const GsBlend second = convertAlphaToBlend(mesh.multi.alpha);
             glBlendEquation(second.equation);
             glBlendFunc(second.src, second.dst);
             glUniform1i(mtexPass, mesh.multi.ramp ? 1 : (mesh.multi.algo == 3 ? 2 : 3));
-            glUniform3fv(mtexDiffuse, 1, gsRgb(mesh.multi.diffuse).v);
+            glUniform3fv(mtexDiffuse, 1, convertToGsUnits(mesh.multi.diffuse).v);
             glUniform1f(mtexConstant, mesh.multi.constant);
             glUniform3fv(mtexRampLo, 1, mesh.multi.rampColors.lo);
             glUniform3fv(mtexRampDelta, 1, mesh.multi.rampColors.delta);
@@ -986,8 +986,8 @@ void Renderer::drawSprites(const Frame& frame, const std::vector<u32>& indices) 
         if (skipProducer && std::strstr(sprite.producer, skipProducer)) continue;
         // ATST NEVER with AFAIL ZB_ONLY writes no color: it lays a depth barrier, and drawing it
         // paints a rectangle the hardware never shows.
-        if (sdfTestAte(sprite.test) && sdfTestAtst(sprite.test) == 0 &&
-            sdfTestAfail(sprite.test) == sdfAfailZbOnly) {
+        if (sdfGetTestAte(sprite.test) && sdfGetTestAtst(sprite.test) == 0 &&
+            sdfGetTestAfail(sprite.test) == sdfAfailZbOnly) {
             continue;
         }
         // The previous frame is the renderer's own target, not an entry in the texture map, and
@@ -1000,7 +1000,7 @@ void Renderer::drawSprites(const Frame& frame, const std::vector<u32>& indices) 
         mVerts.clear();
         const f32 texWidth = isFeedback ? kGuestWidth : entry ? entry->width : 1.0f;
         const f32 texHeight = isFeedback ? kGuestHeight : entry ? entry->height : 1.0f;
-        toTriangles(sprite, texWidth, texHeight, mVerts);
+        triangulate(sprite, texWidth, texHeight, mVerts);
         // GL puts a render target's origin at the bottom left, the guest's is at the top.
         if (isFeedback) {
             for (ScreenVertex& vertex : mVerts) vertex.v = 1.0f - vertex.v;

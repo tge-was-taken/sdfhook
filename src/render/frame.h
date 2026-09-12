@@ -15,12 +15,12 @@ struct Rgba {
     u8 r, g, b, a;
 
     /// 0xRRGGBBAA byte-reversed for the GS, as cmpExpandColor and frSwapColor do it.
-    static Rgba fromColorWord(u32 value) {
+    static Rgba unpackColorWord(u32 value) {
         return Rgba{u8(value >> 24), u8(value >> 16), u8(value >> 8), u8(value)};
     }
 
     /// Already in GS order, red in the low byte.
-    static Rgba fromPacked(u32 value) {
+    static Rgba unpack(u32 value) {
         return Rgba{u8(value & 0xFF), u8((value >> 8) & 0xFF), u8((value >> 16) & 0xFF),
                     u8((value >> 24) & 0xFF)};
     }
@@ -79,7 +79,7 @@ struct DrawSprite {
     /// So a quad nobody expected names its own source.
     const char* producer = "?";
 
-    static DrawSprite fromRect(f32 x, f32 y, f32 w, f32 h, f32 u0, f32 v0, f32 u1, f32 v1) {
+    static DrawSprite makeRect(f32 x, f32 y, f32 w, f32 h, f32 u0, f32 v0, f32 u1, f32 v1) {
         DrawSprite sprite{};
         sprite.corner[0] = {x, y, u0, v0, {}};
         sprite.corner[1] = {x + w, y, u1, v0, {}};

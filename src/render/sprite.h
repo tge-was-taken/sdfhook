@@ -22,6 +22,6 @@ constexpr f32 kOffsetX = 1792.0f;
 constexpr f32 kOffsetY = 1936.0f;
 
 // UVs come out normalised, which the guest's are not.
-void toTriangles(const DrawSprite& sprite, f32 texWidth, f32 texHeight, std::vector<ScreenVertex>& out);
+void triangulate(const DrawSprite& sprite, f32 texWidth, f32 texHeight, std::vector<ScreenVertex>& out);
 
 }  // namespace sdfhook

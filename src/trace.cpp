@@ -31,14 +31,14 @@ void predictLit(const DrawMesh& mesh, const MeshVertex& vertex, f32 out[3]) {
     const f32 length = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
     const f32 scale = length > 1e-6f ? 1.0f / length : 0.0f;
 
-    // gsRgb: the shader is handed colors over 128, and the vertex color over 255 like any
+    // convertToGsUnits: the shader is handed colors over 128, and the vertex color over 255 like any
     // normalised attribute. Mixing the two is what a hand-written copy of this got wrong.
-    const auto gsRgb = [](Rgba c) {
+    const auto convertToGsUnits = [](Rgba c) {
         return vec3{c.r / sdfGsUnit, c.g / sdfGsUnit, c.b / sdfGsUnit};
     };
     const vec3 lit = shading::sdfMeshLit(
-        vec3{n[0] * scale, n[1] * scale, n[2] * scale}, mesh.lit, gsRgb(mesh.ambient),
-        gsRgb(mesh.diffuse), gsRgb(mesh.color), vec3{mesh.lighting.ambientColor},
+        vec3{n[0] * scale, n[1] * scale, n[2] * scale}, mesh.lit, convertToGsUnits(mesh.ambient),
+        convertToGsUnits(mesh.diffuse), convertToGsUnits(mesh.color), vec3{mesh.lighting.ambientColor},
         vec3{mesh.lighting.base}, vec3{mesh.lighting.fullColor}, vec3{mesh.lighting.direction[0]},
         vec3{mesh.lighting.direction[1]}, vec3{mesh.lighting.direction[2]},
         vec3{mesh.lighting.color[1]}, vec3{mesh.lighting.color[2]}, mesh.flatten,
@@ -65,7 +65,7 @@ Trace::~Trace() {
 }
 
 /// The inputs sdfMeshLit is given, keyed by their bytes so meshes that shade alike share one row.
-u32 Trace::litCase(const DrawMesh& mesh) {
+u32 Trace::getLitCase(const DrawMesh& mesh) {
     struct Key {
         f32 lighting[8][3];
         u8 rgb[4][3];
@@ -157,9 +157,9 @@ void Trace::onSdf3DSetCamera(u32 cameraAddr, u32 screenParamAddr) {
 void Trace::onSdfModelLinkOt(u32 otAddr, u32 rootAddr) {
     const sdfModelRootNodePtr_t rootPtr{rootAddr};
     const bool ok = bool(rootPtr);
-    const sdfModelRootNode_t root = rootPtr.valueOr();
-    const sdfModelNodeList_t list = ok ? root.nodeList.valueOr() : sdfModelNodeList_t{};
-    const sdfModelOt_t ot = sdfModelOtPtr_t{otAddr}.valueOr();
+    const sdfModelRootNode_t root = rootPtr.readOr();
+    const sdfModelNodeList_t list = ok ? root.nodeList.readOr() : sdfModelNodeList_t{};
+    const sdfModelOt_t ot = sdfModelOtPtr_t{otAddr}.readOr();
 
     JsonObject row;
     row.addString("ev", "sdfModelLinkOt")
@@ -232,40 +232,40 @@ void addGsState(JsonObject& row, u64 tex0, u64 tex1, u64 clamp, u64 alpha, u64 t
                 u64 frameMask = 0) {
     row.addUint("prim", attrBits & 7)
         .addUint("iip", (attrBits >> 3) & 1)
-        .addUint("tme", sdfPrimTme(attrBits))
+        .addUint("tme", sdfGetPrimTme(attrBits))
         .addUint("fge", (attrBits >> 5) & 1)
-        .addUint("abe", sdfPrimAbe(attrBits));
+        .addUint("abe", sdfGetPrimAbe(attrBits));
 
-    const GsTex0 t = GsTex0::fromReg(tex0);
+    const GsTex0 t = GsTex0::decode(tex0);
     row.addHexDigits("tex0", tex0, 16)
         .addUint("tbp", t.tbp0)
         .addUint("tbw", t.tbw)
         .addUint("psm", t.psm)
         .addUint("tw", t.tw)
         .addUint("th", t.th)
-        .addUint("tfx", sdfTex0Tfx(tex0))
-        .addUint("tcc", sdfTex0Tcc(tex0));
+        .addUint("tfx", sdfGetTex0Tfx(tex0))
+        .addUint("tcc", sdfGetTex0Tcc(tex0));
 
     row.addHexDigits("tex1", tex1, 16)
-        .addUint("mmag", sdfTex1Mmag(tex1))
-        .addUint("mmin", sdfTex1Mmin(tex1));
+        .addUint("mmag", sdfGetTex1Mmag(tex1))
+        .addUint("mmin", sdfGetTex1Mmin(tex1));
 
     row.addHexDigits("clamp", clamp, 16)
-        .addUint("wms", sdfClampWms(clamp))
-        .addUint("wmt", sdfClampWmt(clamp));
+        .addUint("wms", sdfGetClampWms(clamp))
+        .addUint("wmt", sdfGetClampWmt(clamp));
 
     row.addHexDigits("alpha", alpha, 16)
-        .addUint("a", sdfAlphaA(alpha))
-        .addUint("b", sdfAlphaB(alpha))
-        .addUint("c", sdfAlphaC(alpha))
-        .addUint("d", sdfAlphaD(alpha))
-        .addUint("fix", sdfAlphaFix(alpha));
+        .addUint("a", sdfGetAlphaA(alpha))
+        .addUint("b", sdfGetAlphaB(alpha))
+        .addUint("c", sdfGetAlphaC(alpha))
+        .addUint("d", sdfGetAlphaD(alpha))
+        .addUint("fix", sdfGetAlphaFix(alpha));
 
     row.addHexDigits("test", test, 16)
-        .addUint("ate", sdfTestAte(test))
-        .addUint("atst", sdfTestAtst(test))
-        .addUint("aref", sdfTestAref(test))
-        .addUint("afail", sdfTestAfail(test))
+        .addUint("ate", sdfGetTestAte(test))
+        .addUint("atst", sdfGetTestAtst(test))
+        .addUint("aref", sdfGetTestAref(test))
+        .addUint("afail", sdfGetTestAfail(test))
         .addHexDigits("fbmsk", frameMask, 8);
 }
 
@@ -393,7 +393,7 @@ void Trace::onMesh(const DrawMesh& mesh, const Matrix4& screenTm, u32 frame) {
               .addUint("linkIndex", u64(mesh.linkIndex))
               .addString("producer", mesh.producer)
               .addBool("streamColors", mesh.streamColors)
-              .addUint("litcase", u64(litCase(mesh)))
+              .addUint("litcase", u64(getLitCase(mesh)))
               .addReals("litLo", {litLo[0], litLo[1], litLo[2]}, 4)
               .addReals("litHi", {litHi[0], litHi[1], litHi[2]}, 4)
               .addUint("ot", mesh.otIndex)
@@ -412,7 +412,7 @@ void Trace::onSprite(const DrawSprite& sprite) {
     // of the handle's own upload packet the way sdfTexGetTex0Reg does.
     u64 tex0 = 0;
     if (const sdfTexHandle_t* handle = sprite.texHandle.operator->()) {
-        tex0 = handle->packet.valueOr().tex0.data;
+        tex0 = handle->packet.readOr().tex0.data;
     }
     const u16 attrBits = u16(sdfPrimSprite | (sprite.texHandle ? 0x10 : 0) |
                              (sprite.alpha != GsAlpha::Opaque ? 0x40 : 0));
@@ -447,7 +447,7 @@ void Trace::onSprite(const DrawSprite& sprite) {
 void Trace::onSdfSortOtAvlRegist(u32 otAddr, u32 tagAddr, f32 z) {
     const sdfDrawTagPtr_t tagPtr{tagAddr};
     const bool ok = bool(tagPtr);
-    const sdfDrawTag_t tag = tagPtr.valueOr();
+    const sdfDrawTag_t tag = tagPtr.readOr();
     JsonObject row;
     row.addString("ev", "sdfSortOtAvlRegist")
         .addUint("seq", mSeq++)
@@ -520,7 +520,7 @@ void Trace::onPacket(const LinkedPacket& packet, const char* by, const sdfDmaTag
               .addString("by", by)
               .addUint("verts", verts)
               .addUint("qwc", u64(tag.qwc))
-              .addUint("dmaId", u64(sdfDmaId(tag)))
+              .addUint("dmaId", u64(sdfGetDmaId(tag)))
               .take());
 }
 

@@ -49,12 +49,12 @@ int spriteHook(pcsx2hook_regs* regs, void* user) {
     const s32 v = s32(c.getArg(5));
     const s32 uw = s32(c.getArg(6));
     const s32 vh = s32(c.getArg(7));
-    const u32 rgba = u32Ptr_t{c.getStackArgAddr(8)}.valueOr();
-    const u32 th = u32Ptr_t{c.getStackArgAddr(9)}.valueOr();
+    const u32 rgba = u32Ptr_t{c.getStackArgAddr(8)}.readOr();
+    const u32 th = u32Ptr_t{c.getStackArgAddr(9)}.readOr();
 
     submitSprite(h, "DrwSprite2D", f32(x), f32(y), f32(w), f32(height), f32(u), f32(v),
                  f32(uw), f32(vh),
-                 Rgba::fromPacked(rgba), th);
+                 Rgba::unpack(rgba), th);
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -75,7 +75,7 @@ int spriteFloatHook(pcsx2hook_regs* regs, void* user) {
     const u32 th = c.getArg(5);
 
     submitSprite(h, "DrwSprite2DF", x, y, w, height, f32(u), f32(v), f32(uw), f32(vh),
-                 Rgba::fromPacked(rgba), th);
+                 Rgba::unpack(rgba), th);
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -101,7 +101,7 @@ int sdf2DMakeTexPacketHook(pcsx2hook_regs* regs, void* user) {
 int aDrawBoxGHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
-    const auto stack = [&](usize i) { return u32Ptr_t{c.getStackArgAddr(i)}.valueOr(); };
+    const auto stack = [&](usize i) { return u32Ptr_t{c.getStackArgAddr(i)}.readOr(); };
 
     const s32 x = s32(c.getArg(0));
     const s32 y = s32(c.getArg(1));
@@ -176,8 +176,8 @@ int frCreateDrawFontPacketHook(pcsx2hook_regs* regs, void* user) {
     const s32 Width = s32(c.getArg(2));
     const s32 Height = s32(c.getArg(3));
     const u32 Col = c.getArg(5);
-    const u32 pUv = u32Ptr_t{c.getStackArgAddr(8)}.valueOr();
-    const u32 pGsTex = u32Ptr_t{c.getStackArgAddr(9)}.valueOr();
+    const u32 pUv = u32Ptr_t{c.getStackArgAddr(8)}.readOr();
+    const u32 pGsTex = u32Ptr_t{c.getStackArgAddr(9)}.readOr();
 
     frCreateDrawFontPacket(h, X, Y, Width, Height, Col, pUv, pGsTex);
     return PCSX2HOOK_CONTINUE;
@@ -188,7 +188,7 @@ int frCreateDrawFontPacketHook(pcsx2hook_regs* regs, void* user) {
 int sdfPrimLinkFt4Hook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
-    const auto stack = [&](usize i) { return u32Ptr_t{c.getStackArgAddr(i)}.valueOr(); };
+    const auto stack = [&](usize i) { return u32Ptr_t{c.getStackArgAddr(i)}.readOr(); };
 
     const u32 aColor = c.getArg(1);
     const u32 aPrim = c.getArg(2);
@@ -218,7 +218,7 @@ int sdfPrimLinkFt4Hook(pcsx2hook_regs* regs, void* user) {
 int sdfPrimLinkG4Hook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
-    const auto stack = [&](usize i) { return u32Ptr_t{c.getStackArgAddr(i)}.valueOr(); };
+    const auto stack = [&](usize i) { return u32Ptr_t{c.getStackArgAddr(i)}.readOr(); };
 
     const u32 aPrim = c.getArg(1);
     const s32 aX0 = s32(c.getArg(2));
@@ -465,7 +465,7 @@ int sdfGrReqDrawHook(pcsx2hook_regs* regs, void* user) {
     const u32 aTag = c.getArg(0);
     h.trace->onSdfGrReqDraw(aTag, c.getArg(1));
     placeDraws(h, aTag);
-    censusFrame(h, aTag);
+    takeFrameCensus(h, aTag);
     h.frames.submit();
     return PCSX2HOOK_CONTINUE;
 }
@@ -478,7 +478,7 @@ int dds3DrawProcessHook(pcsx2hook_regs* regs, void* user) {
     h.model.beginFrame(h.trace->getFrame());
     // The clear color is a global the game may change between frames, so it is read per frame.
     const u32 backColor = pcsx2hook_find_symbol(h.runtime, "dds3BackColor");
-    if (backColor) h.state.background = Rgba::fromColorWord(u32Ptr_t{backColor}.valueOr());
+    if (backColor) h.state.background = Rgba::unpackColorWord(u32Ptr_t{backColor}.readOr());
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -627,7 +627,7 @@ int fldDrawPoly3Hook(pcsx2hook_regs* regs, void* user) {
     const sdfVector3_t point[3] = {
         {c.getFloatArg(0), c.getFloatArg(1), c.getFloatArg(2)},
         {c.getFloatArg(3), c.getFloatArg(4), c.getFloatArg(5)},
-        {c.getFloatArg(6), c.getFloatArg(7), f32Ptr_t{c.getStackArgAddr(8)}.valueOr()},
+        {c.getFloatArg(6), c.getFloatArg(7), f32Ptr_t{c.getStackArgAddr(8)}.readOr()},
     };
     const u32 color[3] = {c.getArg(0), c.getArg(1), c.getArg(2)};
 

@@ -54,7 +54,7 @@ private:
 
     /// Written once and referenced by id, so a run carries the inputs beside the hardware's
     /// answer without a per-mesh copy.
-    u32 litCase(const DrawMesh& mesh);
+    u32 getLitCase(const DrawMesh& mesh);
 
     std::map<std::string, u32> mLitCases;
     pcsx2hook_ctx* mRuntime;

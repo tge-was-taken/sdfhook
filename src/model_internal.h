@@ -61,7 +61,7 @@ inline Matrix4 MultMatrixRev(const Matrix4& aLeft, const Matrix4& aMatrix) {
 
 // The six bits VCLIP sets. sdfModelCheckBounds ANDs them across the corners, so only agreement
 // matters, not which plane each names.
-inline u32 clipCode(const f32 v[4]) {
+inline u32 getClipCode(const f32 v[4]) {
     const f32 w = v[3];
     u32 code = 0;
     for (int axis = 0; axis < 3; axis++) {
@@ -82,7 +82,7 @@ template <typename List>
 auto readListItem(guest_ptr<List> aList, u32 aIndex) {
     const auto items = aList ? aList->items : decltype(List::items){};
     using Item = std::remove_pointer_t<decltype(items.operator->())>;
-    return items.addr ? guest_ptr<Item>{items.addr + u32(sizeof(Item)) * aIndex}.valueOr() : Item{};
+    return items.addr ? guest_ptr<Item>{items.addr + u32(sizeof(Item)) * aIndex}.readOr() : Item{};
 }
 
 /// A VIF code, as the mesh body carries it: an immediate, a count, then the command.
@@ -107,7 +107,7 @@ inline bool readVifCode(u32 at, VifCode& out) {
 inline bool isUnpack(const VifCode& code) { return (code.command & sdfVifUnpack) == sdfVifUnpack; }
 
 /// Bytes one unpacked element takes, from the command's own component count and element size.
-inline u32 unpackWidth(const VifCode& code) {
+inline u32 getUnpackWidth(const VifCode& code) {
     static const u32 kElementBytes[4] = {4, 2, 1, 0};
     return kElementBytes[code.command & 3] * (((code.command >> 2) & 3) + 1);
 }
@@ -117,7 +117,7 @@ inline u32 unpackWidth(const VifCode& code) {
 inline bool readArray(u32 at, u32 width, u32 count, u32& data, u32& next) {
     VifCode code;
     if (!readVifCode(at, code) || !isUnpack(code)) return false;
-    if (unpackWidth(code) != width || code.count != count) return false;
+    if (getUnpackWidth(code) != width || code.count != count) return false;
     data = code.next;
     next = data + width * count;
     return true;

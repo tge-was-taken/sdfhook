@@ -295,7 +295,7 @@ void reportRun(const sdfhook::HookContext& hooks) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    g_app.config = sdfhook::Config::fromEnvironment();
+    g_app.config = sdfhook::Config::readEnvironment();
     const sdfhook::Config& cfg = g_app.config;
     sdfhook::configureLogging(cfg.logSpec);
 

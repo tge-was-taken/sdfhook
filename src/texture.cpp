@@ -144,7 +144,7 @@ constexpr u32 kSheetHandleBit = 0x80000000;
 void TextureCache::onFontClut(u32 dataAddr) {
     if (!mFontClut.empty() || !dataAddr) return;
     for (u32 i = 0; i < 16; i++) {
-        mFontClut.push_back(Rgba::fromPacked(u32Ptr_t{dataAddr + i * 4}.valueOr()));
+        mFontClut.push_back(Rgba::unpack(u32Ptr_t{dataAddr + i * 4}.readOr()));
     }
 }
 
@@ -152,7 +152,7 @@ void TextureCache::onFontClut(u32 dataAddr) {
 void TextureCache::loadFontClut(u32 tableAddr) {
     if (!mFontClut.empty() || !tableAddr) return;
     for (u32 i = 0; i < 16; i++) {
-        mFontClut.push_back(Rgba::fromPacked(u32Ptr_t{tableAddr + i * 4}.valueOr()));
+        mFontClut.push_back(Rgba::unpack(u32Ptr_t{tableAddr + i * 4}.readOr()));
     }
 }
 
@@ -385,7 +385,7 @@ bool TextureCache::recoverTex0(TexHandle handle, u64 reg) {
         note("packet has no TEX0", 0);
         return false;
     }
-    const GsTex0 tex0 = GsTex0::fromReg(reg);
+    const GsTex0 tex0 = GsTex0::decode(reg);
     log.debug("recover {:08X} tbp0 {:#x} psm {:#x} cbp {:#x} cpsm {:#x} csa {}", handle.addr,
               tex0.tbp0, tex0.psm, tex0.cbp, tex0.cpsm, tex0.csa);
     if (!tex0.isReadable()) {

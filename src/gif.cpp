@@ -49,15 +49,15 @@ public:
     void position(const sdfGifXyz2_t& xyz) {
         if (!mHavePrim) return;
         (void)xyz;
-        mCounts->verts[sdfPrimType(mPrim)]++;
+        mCounts->verts[sdfGetPrimType(mPrim)]++;
         mCount++;
     }
 
 private:
     void close() {
         if (!mCount) return;
-        mCounts->prims[sdfPrimType(mPrim)]++;
-        if (sdfPrimTme(mPrim) && mTex0) {
+        mCounts->prims[sdfGetPrimType(mPrim)]++;
+        if (sdfGetPrimTme(mPrim) && mTex0) {
             mCounts->texDraws[sdfDecodeTex0(mTex0).psm & 0x3F]++;
         } else {
             mCounts->untexturedDraws++;
@@ -144,7 +144,7 @@ void feedAd(GeometryWalk& walk, const u8* qword) {
 // Quadwords a tag's own data occupies, which is how the walk finds the next tag.
 constexpr u32 kNotAGifList = 0xFFFFFFFF;
 
-u32 payloadQwords(u32 flg, u32 nloop, u32 nreg) {
+u32 countPayloadQwords(u32 flg, u32 nloop, u32 nreg) {
     switch (flg) {
         case 0:
             return nloop * nreg;
@@ -191,19 +191,19 @@ void GifParser::parse(u32 packetAddr) {
         data += sdfQwordBytes;
         left--;
 
-        const u32 nloop = sdfGifNloop(gif);
-        const u32 nreg = sdfGifNreg(gif) ? sdfGifNreg(gif) : 16;  // the field encodes 16 as zero
-        const u32 flg = sdfGifFlg(gif);
-        const u32 payload = payloadQwords(flg, nloop, nreg);
+        const u32 nloop = sdfGetGifNloop(gif);
+        const u32 nreg = sdfGetGifNreg(gif) ? sdfGetGifNreg(gif) : 16;  // the field encodes 16 as zero
+        const u32 flg = sdfGetGifFlg(gif);
+        const u32 payload = countPayloadQwords(flg, nloop, nreg);
         if (!nloop || payload == kNotAGifList || payload > left) {
             counts.unparsed++;
             return;
         }
-        if (sdfGifPre(gif)) walk.setPrim(sdfGifPrim(gif));
+        if (sdfGetGifPre(gif)) walk.setPrim(sdfGetGifPrim(gif));
 
         if (flg == 0) {
             for (u32 i = 0; i < payload; i++) {
-                const u32 reg = sdfGifRegAt(gif.regs, i % nreg);
+                const u32 reg = sdfGetGifRegAt(gif.regs, i % nreg);
                 const u8* qword = data + i * sdfQwordBytes;
                 if (reg == sdfGifRegAD) {
                     feedAd(walk, qword);
@@ -215,7 +215,7 @@ void GifParser::parse(u32 packetAddr) {
             for (u32 i = 0; i < nloop * nreg; i++) {
                 u64 word = 0;
                 std::memcpy(&word, data + i * 8, sizeof(word));
-                feedRegister(walk, sdfGifRegAt(gif.regs, i % nreg), word);
+                feedRegister(walk, sdfGetGifRegAt(gif.regs, i % nreg), word);
             }
         }
 
@@ -238,8 +238,8 @@ bool GsRegisterReplay::write(u32 at, u32 count) {
             case sdfGsAddrAlpha2: mState.context[1].alpha = writes[i].data; break;
             case sdfGsAddrTest1: mState.context[0].test = writes[i].data; break;
             case sdfGsAddrTest2: mState.context[1].test = writes[i].data; break;
-            case sdfGsAddrFrame1: mState.context[0].frameMask = sdfFrameMask(writes[i].data); break;
-            case sdfGsAddrFrame2: mState.context[1].frameMask = sdfFrameMask(writes[i].data); break;
+            case sdfGsAddrFrame1: mState.context[0].frameMask = sdfGetFrameMask(writes[i].data); break;
+            case sdfGsAddrFrame2: mState.context[1].frameMask = sdfGetFrameMask(writes[i].data); break;
             default: break;
         }
     }
@@ -260,11 +260,11 @@ bool GsRegisterReplay::apply(u32 packetAddr) {
     while (at < qwc) {
         // Anything but an A+D tag is geometry or VIF, and nothing after it is replayed.
         const sdfGifTagPtr_t gif{data + sdfQwordBytes * at};
-        if (!gif || sdfGifFlg(*gif) != 0 || sdfGifNreg(*gif) != 1 ||
-            sdfGifRegAt(gif->regs, 0) != sdfGifRegAD) {
+        if (!gif || sdfGetGifFlg(*gif) != 0 || sdfGetGifNreg(*gif) != 1 ||
+            sdfGetGifRegAt(gif->regs, 0) != sdfGifRegAD) {
             return false;
         }
-        const u32 count = sdfGifNloop(*gif);
+        const u32 count = sdfGetGifNloop(*gif);
         const u32 here = std::min(count, qwc - at - 1);
         kicked |= write(data + sdfQwordBytes * (at + 1), here);
         mPending = count - here;

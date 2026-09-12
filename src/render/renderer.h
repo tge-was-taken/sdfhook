@@ -86,7 +86,7 @@ private:
     int mScreenHeight = 0;
 
     /// Aspect-preserving destination rectangle for the blit, in window pixels.
-    void screenRect(int* x, int* y, int* width, int* height) const;
+    void getScreenRect(int* x, int* y, int* width, int* height) const;
     int mCurrent = 0;
     u32 mProgram = 0;
     u32 mVao = 0;
