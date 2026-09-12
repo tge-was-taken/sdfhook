@@ -367,7 +367,8 @@ void main() {
     vec3 rgb = uTexFunction == 0 ? texel.rgb * color.rgb             // MODULATE
              : uTexFunction == 1 ? texel.rgb                          // DECAL
                                  : texel.rgb * color.rgb + color.a;   // HIGHLIGHT, HIGHLIGHT2
-    if (uTextured == 0) rgb = color.rgb;
+    // Untextured, the GS writes the vertex color as it is; only MODULATE scales it by 1/128.
+    if (uTextured == 0) rgb = color.rgb / kVertexColorScale;
     oColor = vec4(rgb, testA);
     oColor.rgb = mix(uFogColor, oColor.rgb, vFog);
     if (uDebugDepth != 0) oColor = vec4(vec3(gl_FragCoord.z), 1.0);
@@ -1075,6 +1076,8 @@ void Renderer::drawMeshes(const Frame& frame, const std::vector<u32>& indices) {
             applyBlend(convertAlphaToBlend(mesh.multi.alpha));
             glUniform1i(mtexPass, mesh.multi.ramp ? 1 : (mesh.multi.algo == 3 ? 2 : 3));
             glUniform3fv(mtexDiffuse, 1, convertToGsUnits(mesh.multi.diffuse).v);
+            // The pass's vertex alpha is its own material's, which the RGB above drops.
+            glUniform1f(diffuseAlpha, f32(mesh.multi.diffuse.a) / sdfGsUnit);
             glUniform1f(mtexConstant, mesh.multi.constant);
             glUniform3fv(mtexRampLo, 1, mesh.multi.rampColors.lo);
             glUniform3fv(mtexRampDelta, 1, mesh.multi.rampColors.delta);
@@ -1085,6 +1088,7 @@ void Renderer::drawMeshes(const Frame& frame, const std::vector<u32>& indices) {
                         textured, texFunction, texAlpha);
             glUniform1i(secondUv, 1);
             drawMesh(mesh);
+            glUniform1f(diffuseAlpha, f32(mesh.diffuse.a) / sdfGsUnit);
         }
 
         // corePktEmitRefMapPass, additive with ALPHA 72. The per-vertex loop writes u as the
