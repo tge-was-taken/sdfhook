@@ -673,8 +673,13 @@ void ModelHooks::sdf3DPrimMakePoly(sdf3DPrimPolyParmPtr_t aPoly, Frame* frame) {
         return;
     }
     const u32 unread = (aPoly->normal.addr ? 1 : 0) | (aPoly->uv.addr ? 2 : 0) |
-                       (aPoly->multiUv.addr ? 4 : 0) | (aPoly->vertexColor.addr ? 8 : 0);
-    if (unread) reportUnsupported("sdf3DPrimMakePoly arrays (normal 1, uv 2, multiUv 4, color 8)", unread);
+                       (aPoly->multiUv.addr ? 4 : 0);
+    if (unread) reportUnsupported("sdf3DPrimMakePoly arrays (normal 1, uv 2, multiUv 4)", unread);
+    // 0x2BAEA4: UNPACK V4-8, one RGBA word a vertex, red in the low byte.
+    const u32* vertexColor = aPoly->vertexColor.addr ? aPoly->vertexColor.slice(vertexCount) : nullptr;
+    if (aPoly->vertexColor.addr && !vertexColor) {
+        reportUnsupported("sdf3DPrimMakePoly vertex colors outside guest memory", aPoly->vertexColor.addr);
+    }
 
     DrawMesh mesh;
     mesh.producer = "sdf3DPrimMakePoly";
@@ -697,7 +702,7 @@ void ModelHooks::sdf3DPrimMakePoly(sdf3DPrimPolyParmPtr_t aPoly, Frame* frame) {
     for (u32 v = 0; v < vertexCount; v++) {
         setRigidInfluence(mesh.vertices[v], sdfVector3_t{point[v].x, point[v].y, point[v].z},
                           nullptr);
-        mesh.vertices[v].color = mesh.color;
+        mesh.vertices[v].color = vertexColor ? Rgba::unpack(vertexColor[v]) : mesh.color;
     }
     for (u32 t = 0; t < triangles; t++) {
         for (int corner = 0; corner < 3; corner++) {

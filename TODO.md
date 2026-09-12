@@ -2354,22 +2354,21 @@ right.
       register the draw env writes, so what is left of it is what a draw cannot honour (P7).
 
 - [ ] **P7: what the 2D renderer cannot do with a decoded primitive.** Reported per draw:
-      - **DATE.** Implemented, and it draws nothing yet. A pre-pass copies the target and marks in
-        the stencil where alpha bit 7 equals DATM; the tested draw runs under it, and a fragment that
-        leaves the bit other than DATM clears its mark, so overlapping fans darken once. The target
-        keeps the source alpha unblended, as the GS writes it.
-        The GS trace (underground, frame 105) shows the pattern: a full-screen fan clears alpha to 0
-        (batch 19), then each shadow volume, `fldSdwDraw`'s `sdf3DPrimMakePoly` triangles at vertex
-        alpha 0x80 with FBMSK 0x00FFFFFF, sets bit 7 (20, 22, 24...), and a black DATE fan at alpha
-        0x0A darkens under it (21, 23, 25...). The volumes were placed by identity and projected
-        behind the camera; they now take the chain's prim transform and land where the GS draws
-        them. **What still blocks it:** a volume our side sees at vertex alpha 0x40 writes 0x40 where
-        the GS has 0x80, so bit 7 is never set. VU1's poly path doubles the vertex alpha and ours
-        does not, the same unexplained factor as V8. Doubling it for the polys alone (unknown realm
-        4.240 -> 8.115) sets the bit, but over the whole character, which then draws as a dark
-        silhouette; the GS marks only the floor the shadow falls on. So the volumes' depth against
-        the character's own geometry does not match yet either: compare the volumes' GS z
-        (`zmin`/`zmax` per batch in the GS trace) with ours before changing the alpha.
+      - **DATE.** Implemented. A pre-pass copies the target and marks in the stencil where alpha
+        bit 7 equals DATM; the tested draw runs under it, and a fragment that leaves the bit other
+        than DATM clears its mark, so overlapping fans darken once. The target keeps the source
+        alpha unblended, as the GS writes it.
+        `fldSdwDraw`'s shadow is volumes then fans: a full-screen fan clears alpha to 0, each volume
+        (`sdf3DPrimMakePoly` triangles, FBMSK 0x00FFFFFF, ATST NEVER with FB_ONLY, ZTST GREATER)
+        writes its vertex alpha, and a black DATE fan darkens where bit 7 came out set. Measured with
+        `PCSX2HOOK_GS_DUMP` and `PCSX2HOOK_GS_DUMP_FRAMES` on the unknown realm field, frame 230: the
+        volumes write alpha 64 on 17,429 pixels and never 128, so no fan passes and the GS draws no
+        shadow there. The volumes carry per-vertex alpha, 64 to 128, which `sdf3DPrimMakePoly`'s
+        vertex-color array holds and we did not read: a volume whose flat color was 0x80 marked
+        every pixel it passed, and in play the fans then wrote the nearest z over the character.
+        The volumes also take the chain's prim transform now; before, they projected behind the
+        camera. No savestate has a frame where the GS shadow shows, so a live one should be captured
+        (F9) to check the darkening against the emulator.
       - **Depth.** Done: the depth buffer holds GS z as 1 - z / 2^24 in 32-bit float, exact for
         every 24-bit z. Meshes write the z VU1 puts on the GS (screenOffset.z + screenScale.z *
         clip.z / clip.w, from `sdf3DScreenParam`), decoded draws their own, and the menus' z 0 to 32
