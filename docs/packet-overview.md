@@ -69,7 +69,7 @@ function's hook.
   `dds3BillboardTagLink`. Today the batch is keyed and the transform only checked as carried; a span
   would make the pair one unit and catch a transform with no batch.
 - **Shadow**: `fldSdwDraw`'s four links. One is the inline VIF stream, the rest are the REF links
-  P6 lists; the DATE fans the renderer refuses are probably the same shadow sent the other way.
+  P6 lists; the DATE fans drawn magenta are probably the same shadow sent the other way.
   Worth a span once the renderer has a destination alpha test.
 - **Poly**: `sdf3DPrimMakePoly` and `fldDrawPoly3`, PolyStream behind a transform. One packet
   each, so a span adds nothing over the type.

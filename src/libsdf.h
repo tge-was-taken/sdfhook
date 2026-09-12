@@ -1659,7 +1659,6 @@ constexpr u32 sdfGetTestAtst(u64 r) { return u32((r >> 1) & 7); }
 constexpr u32 sdfGetTestAref(u64 r) { return u32((r >> 4) & 0xFF); }
 constexpr u32 sdfGetTestAfail(u64 r) { return u32((r >> 12) & 3); }
 constexpr u32 sdfGetTestDate(u64 r) { return u32((r >> 14) & 1); }
-constexpr u32 sdfGetTestDatm(u64 r) { return u32((r >> 15) & 1); }
 constexpr u32 sdfGetTestZte(u64 r) { return u32((r >> 16) & 1); }
 constexpr u32 sdfGetTestZtst(u64 r) { return u32((r >> 17) & 3); }
 
