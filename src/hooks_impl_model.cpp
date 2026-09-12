@@ -236,6 +236,8 @@ void ModelHooks::sdfModelLinkOt(sdfModelRootNodePtr_t aRoot, Frame* frame) {
         frame->screenTm = mParser.mScreenTm;
         frame->projectionScale[0] = mParser.mProjectionScale[0];
         frame->projectionScale[1] = mParser.mProjectionScale[1];
+        frame->depthScale = mParser.mDepthScale;
+        frame->depthOffset = mParser.mDepthOffset;
     }
 
     mParser.mTrace.countRoot((root->flags & sdfModelRootTempPackets) != 0);

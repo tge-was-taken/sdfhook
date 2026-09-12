@@ -1659,6 +1659,7 @@ constexpr u32 sdfGetTestAtst(u64 r) { return u32((r >> 1) & 7); }
 constexpr u32 sdfGetTestAref(u64 r) { return u32((r >> 4) & 0xFF); }
 constexpr u32 sdfGetTestAfail(u64 r) { return u32((r >> 12) & 3); }
 constexpr u32 sdfGetTestDate(u64 r) { return u32((r >> 14) & 1); }
+constexpr u32 sdfGetTestDatm(u64 r) { return u32((r >> 15) & 1); }
 constexpr u32 sdfGetTestZte(u64 r) { return u32((r >> 16) & 1); }
 constexpr u32 sdfGetTestZtst(u64 r) { return u32((r >> 17) & 3); }
 
@@ -1797,6 +1798,35 @@ enum sdfVifCommand_t : u32 {
 
 /// sdfCorePacketGen's own threshold for a blend shape being worth applying.
 constexpr f32 sdfMorphEpsilon = 0.000001f;
+
+/// The viewport sdf3DMakeViewportPacket copies into the camera packet VU1 loads. TM is the
+/// projection; scale and trans map clip space onto GS coordinates at 0x02BD.
+struct sdf3DScreenParam_t {
+    u32 flags;
+    f32 aspect;
+    f32 projDist;
+    f32 fovy;
+    f32 ox;
+    f32 oy;
+    f32 width;
+    f32 height;
+    f32 zMin;
+    f32 zMax;
+    f32 nearClip;
+    f32 farClip;
+    sdfMatrix4_t TM;
+    sdfVector4_t scale;
+    sdfVector4_t trans;
+    sdfVector4_t cameraPos;
+};
+SDF_STATIC_ASSERT_SIZE(sdf3DScreenParam_t, 160);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DScreenParam_t, zMin, 0x20);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DScreenParam_t, TM, 0x30);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DScreenParam_t, scale, 0x70);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DScreenParam_t, trans, 0x80);
+SDF_STATIC_ASSERT_OFFSETOF(sdf3DScreenParam_t, cameraPos, 0x90);
+
+using sdf3DScreenParamPtr_t = guest_ptr<sdf3DScreenParam_t>;
 
 /// The parallel-light packet VU1 shades with: three directions, a base term and a color each, all
 /// in the GS's own 0..255 units.

@@ -358,9 +358,11 @@ bool ModelParser::isWorldSpace(const sdfVector3_t& point, f32 out[3]) const {
 bool ModelParser::readScreenTm() {
     if (!mSdf3DScreenTm) return false;
     mScreenTm = *mSdf3DScreenTm;
-    if (const sdfVector4_t* p = mSdf3DScreenParam.slice(7)) {
-        mProjectionScale[0] = p[3].x;
-        mProjectionScale[1] = p[4].y;
+    if (mSdf3DScreenParam) {
+        mProjectionScale[0] = mSdf3DScreenParam->TM.row[0].x;
+        mProjectionScale[1] = mSdf3DScreenParam->TM.row[1].y;
+        mDepthScale = mSdf3DScreenParam->scale.z;
+        mDepthOffset = mSdf3DScreenParam->trans.z;
     }
     static bool shown = false;
     if (!shown && mConfig->dumpScreen) {

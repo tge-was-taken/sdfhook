@@ -39,6 +39,9 @@ struct SpriteCorner {
     f32 x, y;
     f32 u, v;
     Rgba color;
+
+    /// GS z as the depth buffer holds it, 1 - z / 2^24, for a draw decoded from its packet.
+    f32 z = 0.0f;
 };
 
 /// A draw's index in the frame's generated links when its packet address is not known yet.
@@ -67,6 +70,11 @@ struct DrawSprite {
     /// The renderer cannot draw it as the GS would, so it paints it magenta.
     bool unhandled = false;
 
+    /// Depth-tested against the meshes by TEST, and written unless ZBUF masks it. A hooked sprite
+    /// never saw either.
+    bool hasDepth = false;
+    u64 zbuf = 0;
+
     /// TEX1 and CLAMP, for a draw decoded from its packet. A hooked sprite never saw them.
     bool hasSampler = false;
     u64 tex1 = 0;
@@ -93,6 +101,10 @@ struct DrawSprite {
 
     void setColor(Rgba color) {
         for (SpriteCorner& c : corner) c.color = color;
+    }
+
+    void setDepth(f32 z) {
+        for (SpriteCorner& c : corner) c.z = z;
     }
 };
 
@@ -288,6 +300,10 @@ struct Frame {
     /// From sdf3DScreenParam quadwords 3 and 4. screenTm is projection times view, so dividing
     /// by these recovers the view rotation.
     f32 projectionScale[2] = {1.0f, 1.0f};
+
+    /// VU1's map from clip z over w onto GS z, so a mesh's depth is the z the GS would test.
+    f32 depthScale = 0.0f;
+    f32 depthOffset = 0.0f;
     std::vector<DrawSprite> sprites;
     std::vector<DrawMesh> meshes;
     std::vector<TextureUpload> textureUploads;

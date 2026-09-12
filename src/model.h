@@ -244,8 +244,12 @@ private:
     // The engine's own globals, resolved once from the symbol map and named for it.
     Matrix4Ptr_t mSdf3DScreenTm;
     guest_ptr<u32> mSdf3DSpecularTex;
-    guest_ptr<sdfVector4_t> mSdf3DScreenParam;
+    sdf3DScreenParamPtr_t mSdf3DScreenParam;
     f32 mProjectionScale[2] = {1.0f, 1.0f};
+
+    /// VU1's map from clip z over w onto GS z, screenScale.z and screenOffset.z at 0x02BD.
+    f32 mDepthScale = 0.0f;
+    f32 mDepthOffset = 0.0f;
     u32Ptr_t mSdfFrameId;
     f32Ptr_t mSdfFaceDivBias;
     f32Ptr_t mSdfFaceDivSoften;

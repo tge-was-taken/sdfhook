@@ -202,6 +202,7 @@ private:
     bool decodeTransfer(const ChainEntry& entry);
     void emitDecodedPrimitives(const ChainEntry& entry);
     bool convertPrimitive(const GsPrimitive& primitive, DrawSprite* sprite);
+    f32 getDepth(u32 z) const;
     enum class Verdict { Honoured, Invisible, Unhonoured };
     Verdict judgePrimitive(const GsPrimitive& primitive, const DrawSprite& sprite,
                            const char** why) const;
@@ -545,7 +546,8 @@ void PacketProcessor::emitDecodedPrimitives(const ChainEntry& entry) {
             h.coverage.unhonouredDraws[producer]++;
             sprite.unhandled = true;
         }
-        if (!h.config->dumpDecoded.empty() && std::strstr(sprite.producer, h.config->dumpDecoded.c_str())) {
+        const std::string& wanted = h.config->dumpDecoded;
+        if (!wanted.empty() && (wanted == "*" || std::strstr(sprite.producer, wanted.c_str()))) {
             dumpPrimitive(primitive, sprite);
         }
         h.coverage.decodedDraws[sprite.producer]++;
@@ -553,6 +555,13 @@ void PacketProcessor::emitDecodedPrimitives(const ChainEntry& entry) {
         mFrame.sprites.push_back(sprite);
         mEmitted++;
     }
+}
+
+/// GS z as normalised device depth, 1 - 2z / 2^24, which the meshes write too. Exact in the float
+/// depth buffer for every 24-bit z; ZBUF's 32-bit format would lose the low bits.
+f32 PacketProcessor::getDepth(u32 z) const {
+    if (z >> 24) reportUnsupported("decoded z past 24 bits", z);
+    return 1.0f - 2.0f * (f32(z) / 16777216.0f);
 }
 
 /// A primitive as the 2D renderer's four corners: a triangle repeats its last, a line is a
@@ -582,6 +591,7 @@ bool PacketProcessor::convertPrimitive(const GsPrimitive& primitive, DrawSprite*
             corner.v = vertex.t / q * f32(1u << tex0.th);
         }
         corner.color = Rgba::unpack(vertex.rgba);
+        corner.z = getDepth(vertex.z);
         return corner;
     };
 
@@ -592,8 +602,9 @@ bool PacketProcessor::convertPrimitive(const GsPrimitive& primitive, DrawSprite*
             const SpriteCorner a = getCorner(vertex[0]);
             const SpriteCorner b = getCorner(vertex[1]);
             sprite = DrawSprite::makeRect(a.x, a.y, b.x - a.x, b.y - a.y, a.u, a.v, b.u, b.v);
-            // A sprite takes the color of the vertex that kicked it.
+            // A sprite takes the color and depth of the vertex that kicked it.
             sprite.setColor(b.color);
+            sprite.setDepth(b.z);
             break;
         }
         case sdfPrimTriangle:
@@ -616,12 +627,14 @@ bool PacketProcessor::convertPrimitive(const GsPrimitive& primitive, DrawSprite*
             sprite = DrawSprite::makeRect(left, top, std::max(std::abs(b.x - a.x), 1.0f),
                                           std::max(std::abs(b.y - a.y), 1.0f), 0, 0, 0, 0);
             sprite.setColor(b.color);
+            sprite.setDepth(b.z);
             break;
         }
         case sdfPrimPoint: {
             const SpriteCorner a = getCorner(vertex[0]);
             sprite = DrawSprite::makeRect(a.x, a.y, 1.0f, 1.0f, a.u, a.v, a.u, a.v);
             sprite.setColor(a.color);
+            sprite.setDepth(a.z);
             break;
         }
         default: reportUnsupported("decoded PRIM type", sdfGetPrimType(prim)); return false;
@@ -629,6 +642,8 @@ bool PacketProcessor::convertPrimitive(const GsPrimitive& primitive, DrawSprite*
     sprite.blends = sdfGetPrimAbe(prim) != 0;
     sprite.alpha = state.alpha;
     sprite.test = u32(state.test);
+    sprite.hasDepth = true;
+    sprite.zbuf = state.zbuf;
     sprite.frameMask = sdfGetFrameMask(state.frame);
     mTextureMissing = false;
     if (sdfGetPrimTme(prim)) {
@@ -654,15 +669,18 @@ PacketProcessor::Verdict PacketProcessor::judgePrimitive(const GsPrimitive& prim
         return Verdict::Unhonoured;
     };
 
-    // A failing fragment that keeps nothing, or only depth, adds no color at all.
+    // Every fragment fails and keeps nothing.
     const u32 atst = sdfGetTestAtst(test);
     const u32 afail = sdfGetTestAfail(test);
-    if (sdfGetTestAte(test) && atst == sdfAtstNever &&
-        (afail == sdfAfailKeep || afail == sdfAfailZbOnly)) {
+    if (sdfGetTestAte(test) && atst == sdfAtstNever && afail == sdfAfailKeep) {
         return Verdict::Invisible;
     }
     if (sdfGetTestZte(test) && sdfGetTestZtst(test) == sdfZtstNever) return Verdict::Invisible;
-    if (sdfGetTestDate(test)) return unhonoured("decoded primitive destination alpha test");
+    // @todo TODO.md P7: DATE passes where destination alpha bit 7 equals DATM.
+    if (sdfGetTestDate(test)) {
+        return unhonoured(sdfGetTestDatm(test) ? "decoded primitive destination alpha test, bit set"
+                                               : "decoded primitive destination alpha test, bit clear");
+    }
     if (sdfGetPrimTme(prim)) {
         if (!sprite.texHandle.addr && mTextureMissing) return unhonoured("decoded texture not found");
         if (sdfGetTex0Tfx(state.tex0) != sdfTexModulate) return unhonoured("decoded primitive TFX");
@@ -675,18 +693,10 @@ PacketProcessor::Verdict PacketProcessor::judgePrimitive(const GsPrimitive& prim
     return Verdict::Honoured;
 }
 
-/// Differences reported but drawn as they are. Depth is one: 2D here neither tests nor writes it,
-/// and the chain's own order already layers what the menus depth-test against each other.
+/// Differences reported but drawn as they are.
 void PacketProcessor::reportUnhonoured(const GsPrimitive& primitive) {
     const GsDrawState& state = primitive.state;
-    if (sdfGetTestZte(state.test) && sdfGetTestZtst(state.test) != sdfZtstAlways) {
-        reportUnsupported("decoded primitive depth test", sdfGetTestZtst(state.test));
-    }
     if (sdfGetPrimAa1(state.prim)) reportUnsupported("decoded primitive with antialiasing", state.prim);
-    if (sdfGetTestAte(state.test) && sdfGetTestAfail(state.test) == sdfAfailRgbOnly) {
-        reportUnsupported("decoded primitive alpha test keeping alpha", sdfGetTestAtst(state.test));
-    }
-    if (!((state.zbuf >> 32) & 1)) reportUnsupported("decoded primitive writes depth", 0);
 }
 
 void PacketProcessor::dumpPrimitive(const GsPrimitive& primitive, const DrawSprite& sprite) const {

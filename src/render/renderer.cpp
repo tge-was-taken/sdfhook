@@ -24,6 +24,7 @@ constexpr const char* kVertexShader = R"(#version 330 core
 layout(location = 0) in vec2 aPos;
 layout(location = 1) in vec2 aUv;
 layout(location = 2) in vec4 aColor;
+layout(location = 3) in float aZ;
 out vec2 vUv;
 out vec4 vColor;
 uniform vec2 uGuestSize;
@@ -34,7 +35,7 @@ const float kPs2Alpha = 255.0 / 128.0;
 
 void main() {
     vec2 ndc = vec2(aPos.x / uGuestSize.x * 2.0 - 1.0, 1.0 - aPos.y / uGuestSize.y * 2.0);
-    gl_Position = vec4(ndc + uPixelOffset, 0.0, 1.0);
+    gl_Position = vec4(ndc + uPixelOffset, aZ, 1.0);
     vUv = aUv;
     vColor = vec4(aColor.rgb, aColor.a * kPs2Alpha);
 }
@@ -46,8 +47,9 @@ in vec4 vColor;
 out vec4 oColor;
 uniform sampler2D uTexture;
 uniform int uTextured;
-uniform int uAtest;       // TEST's ATST, ALWAYS when the failing half still writes the color
+uniform int uAtest;
 uniform float uAtestRef;
+uniform int uAtestInvert;  // AFAIL's half: the fragments that fail
 
 // In the GS's integer units, as the mesh shader tests.
 bool isAlphaTestFailing(float normalised) {
@@ -63,7 +65,7 @@ bool isAlphaTestFailing(float normalised) {
 
 void main() {
     oColor = uTextured != 0 ? texture(uTexture, vUv) * vColor * 2.0 : vColor;
-    if (isAlphaTestFailing(oColor.a)) discard;
+    if (isAlphaTestFailing(oColor.a) != (uAtestInvert != 0)) discard;
 }
 )";
 
@@ -83,6 +85,7 @@ layout(location = 8) in vec4 aUv;
 layout(location = 9) in vec4 aColor;
 
 uniform mat4 uScreen;
+uniform vec2 uDepthMap;  // screenScale.z and screenOffset.z; a zero scale leaves clip z as it is
 uniform mat4 uBones[16];
 uniform vec3 uLightDir[3];
 uniform vec3 uLightColor[3];
@@ -146,10 +149,15 @@ void main() {
 
     vec4 clip = uScreen * vec4(world.xyz, 1.0);
 
-    // emitTexTriangles 0x02A0/0x02BD: the GS depth is affine in clip.z / clip.w, not in w.
-    // Negated for sdf3DScreenParam's negative z scale, and unclamped so GL clips the near plane.
+    // emitTexTriangles 0x02BD puts screenOffset.z + screenScale.z * clip.z / clip.w on the GS,
+    // and the depth buffer holds GS z as 1 - z / 2^24, which the decoded draws write outright.
+    // Unclamped, so GL clips past the near plane as VU1 culls there.
+    const float kDepthUnit = 2.0 / 16777216.0;
+    float depthZ = uDepthMap.x != 0.0
+        ? clip.w - kDepthUnit * (uDepthMap.y * clip.w + uDepthMap.x * clip.z)
+        : -clip.z;
     gl_Position = vec4(clip.x + uPixelOffset.x * clip.w, -clip.y + uPixelOffset.y * clip.w,
-                       -clip.z, clip.w);
+                       depthZ, clip.w);
 
     // VU1's vertex-color variant at 0x0173 is not modelled. Dropping the light term outright
     // overshoots, so the flat term stands until that routine is transcribed.
@@ -441,6 +449,34 @@ void applySpriteSampler(const DrawSprite& sprite, bool isFeedback) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, getWrap(sdfGetClampWmt(sprite.clamp)));
 }
 
+/// FRAME's write mask, with the alpha channel dropped as well when only RGB may be written.
+void applyFrameMask(u64 mask, bool rgbOnly) {
+    glColorMask((mask & 0x0000FF) != 0x0000FF, (mask & 0x00FF00) != 0x00FF00,
+                (mask & 0xFF0000) != 0xFF0000, !rgbOnly && (mask & 0xFF000000u) != 0xFF000000u);
+}
+
+/// The passing half writes color and, unless ZBUF masks it, depth; the failing half whatever
+/// AFAIL lets through. Back to back, so the blend order stays the engine's.
+void drawSpriteHalves(const DrawSprite& sprite, bool alphaTests, int atestInvert, GLsizei count) {
+    const bool depthWrites = sprite.hasDepth && !((sprite.zbuf >> 32) & 1);
+    glUniform1i(atestInvert, 0);
+    applyFrameMask(sprite.frameMask, false);
+    glDepthMask(depthWrites ? GL_TRUE : GL_FALSE);
+    glDrawArrays(GL_TRIANGLES, 0, count);
+    if (!alphaTests) return;
+
+    const u32 afail = sdfGetTestAfail(sprite.test);
+    if (afail == sdfAfailKeep) return;
+    glUniform1i(atestInvert, 1);
+    if (afail == sdfAfailZbOnly) {
+        glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    } else {
+        applyFrameMask(sprite.frameMask, afail == sdfAfailRgbOnly);
+    }
+    glDepthMask(afail == sdfAfailZbOnly && depthWrites ? GL_TRUE : GL_FALSE);
+    glDrawArrays(GL_TRIANGLES, 0, count);
+}
+
 /// PRIM without ABE: the GS writes the source and reads nothing back.
 void applySpriteBlend(const DrawSprite& sprite) {
     applyBlend(sprite.blends ? convertAlphaToBlend(sprite.alpha) : GsBlend{});
@@ -551,13 +587,15 @@ bool Renderer::init(const Config& config, int width, int height) {
     glGenBuffers(1, &mVbo);
     glBindVertexArray(mVao);
     glBindBuffer(GL_ARRAY_BUFFER, mVbo);
-    constexpr int kStride = 8 * sizeof(f32);
+    constexpr int kStride = 9 * sizeof(f32);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, kStride, nullptr);
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, kStride, (void*)(2 * sizeof(f32)));
     glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, kStride, (void*)(4 * sizeof(f32)));
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, kStride, (void*)(8 * sizeof(f32)));
     glEnableVertexAttribArray(0);
     glEnableVertexAttribArray(1);
     glEnableVertexAttribArray(2);
+    glEnableVertexAttribArray(3);
 
     glGenVertexArrays(1, &mMeshVao);
     glGenBuffers(1, &mMeshVbo);
@@ -739,6 +777,7 @@ void Renderer::drawMeshes(const Frame& frame, const std::vector<u32>& indices) {
     // point composes in the engine's order.
     glUniformMatrix4fv(glGetUniformLocation(mMeshProgram, "uScreen"), 1, GL_FALSE,
                        &frame.screenTm.m[0][0]);
+    glUniform2f(glGetUniformLocation(mMeshProgram, "uDepthMap"), frame.depthScale, frame.depthOffset);
     const int bones = glGetUniformLocation(mMeshProgram, "uBones");
     const int textured = glGetUniformLocation(mMeshProgram, "uTextured");
     const int lightDir = glGetUniformLocation(mMeshProgram, "uLightDir");
@@ -1058,7 +1097,11 @@ void Renderer::drawSprites(const Frame& frame, const std::vector<u32>& indices) 
     const int textured = glGetUniformLocation(mProgram, "uTextured");
     const int atest = glGetUniformLocation(mProgram, "uAtest");
     const int atestRef = glGetUniformLocation(mProgram, "uAtestRef");
+    const int atestInvert = glGetUniformLocation(mProgram, "uAtestInvert");
     glBindVertexArray(mVao);
+    // A decoded draw's z can sit past the near plane, as the HUD's and the shadows' largest z do;
+    // the GS clamps rather than clips it.
+    glEnable(GL_DEPTH_CLAMP);
     glBindBuffer(GL_ARRAY_BUFFER, mVbo);
     glEnable(GL_BLEND);
 
@@ -1070,9 +1113,9 @@ void Renderer::drawSprites(const Frame& frame, const std::vector<u32>& indices) 
     for (const u32 index : indices) {
         const DrawSprite& sprite = frame.sprites[index];
         if (skipProducer && std::strstr(sprite.producer, skipProducer)) continue;
-        // ATST NEVER with AFAIL ZB_ONLY writes no color: it lays a depth barrier, and drawing it
-        // paints a rectangle the hardware never shows.
-        if (sdfGetTestAte(sprite.test) && sdfGetTestAtst(sprite.test) == 0 &&
+        // ATST NEVER with AFAIL ZB_ONLY writes no color: a hooked sprite has no depth to lay, so
+        // drawing it would only paint a rectangle the hardware never shows.
+        if (!sprite.hasDepth && sdfGetTestAte(sprite.test) && sdfGetTestAtst(sprite.test) == 0 &&
             sdfGetTestAfail(sprite.test) == sdfAfailZbOnly) {
             continue;
         }
@@ -1100,20 +1143,20 @@ void Renderer::drawSprites(const Frame& frame, const std::vector<u32>& indices) 
             mBounds.add(v);
             attribs.insert(attribs.end(), {v.x, v.y, v.u, v.v, v.color.r / 255.0f,
                                            v.color.g / 255.0f, v.color.b / 255.0f,
-                                           v.color.a / 255.0f});
+                                           v.color.a / 255.0f, v.z});
         }
         applySpriteBlend(sprite);
         if (sprite.unhandled) applyBlend(GsBlend{});
-        const u64 mask = sprite.frameMask;
-        glColorMask((mask & 0x0000FF) != 0x0000FF, (mask & 0x00FF00) != 0x00FF00,
-                    (mask & 0xFF0000) != 0xFF0000, (mask & 0xFF000000u) != 0xFF000000u);
         glUniform1i(textured, hasTexture && !sprite.unhandled ? 1 : 0);
-        // FB_ONLY and RGB_ONLY write the failing half's color anyway, and depth is not drawn here.
-        const u32 afail = sdfGetTestAfail(sprite.test);
-        const bool discards = sdfGetTestAte(sprite.test) && !sprite.unhandled &&
-                              (afail == sdfAfailKeep || afail == sdfAfailZbOnly);
-        glUniform1i(atest, discards ? int(sdfGetTestAtst(sprite.test)) : int(sdfAtstAlways));
+        const bool alphaTests = sdfGetTestAte(sprite.test) && !sprite.unhandled;
+        glUniform1i(atest, alphaTests ? int(sdfGetTestAtst(sprite.test)) : int(sdfAtstAlways));
         glUniform1f(atestRef, f32(sdfGetTestAref(sprite.test)));
+        if (sprite.hasDepth) {
+            glEnable(GL_DEPTH_TEST);
+            glDepthFunc(getDepthFunc(sprite.test));
+        } else {
+            glDisable(GL_DEPTH_TEST);
+        }
         if (hasTexture) {
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D,
@@ -1122,9 +1165,12 @@ void Renderer::drawSprites(const Frame& frame, const std::vector<u32>& indices) 
         }
         glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(attribs.size() * sizeof(f32)), attribs.data(),
                      GL_STREAM_DRAW);
-        glDrawArrays(GL_TRIANGLES, 0, GLsizei(mVerts.size()));
+        drawSpriteHalves(sprite, alphaTests, atestInvert, GLsizei(mVerts.size()));
     }
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_DEPTH_CLAMP);
 }
 
 std::vector<u8> Renderer::readPixels(int* width, int* height) const {

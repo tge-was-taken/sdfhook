@@ -2359,9 +2359,12 @@ right.
         character, so they draw magenta: 2380 a run underground, 4080 on the unknown realm field,
         where they cover a third of the frame (43.671 against 4.591 without them). PCSX2 builds the
         test from a stencil pre-pass over the target's alpha.
-      - **Depth.** 2D draws neither test nor write depth. `aDrawBoxG` and `DrwSprite2D` run ZTST
-        GEQUAL and the shadows GREATER; every draw env leaves ZMSK 0. Needs GS z against our linear
-        mesh depth.
+      - **Depth.** Done: the depth buffer holds GS z as 1 - z / 2^24 in 32-bit float, exact for
+        every 24-bit z. Meshes write the z VU1 puts on the GS (screenOffset.z + screenScale.z *
+        clip.z / clip.w, from `sdf3DScreenParam`), decoded draws their own, and the menus' z 0 to 32
+        stay distinct where VU1's clip range would have clamped them together. Menu 2.099 -> 2.018,
+        the rest unchanged; the shadow volumes now draw magenta over the character, which is DATE's
+        to cut back.
       - **TFX other than MODULATE** has no path in the sprite shader, and draws magenta. The alpha
         test does, for the AFAIL modes that drop the color.
       - **Streamed textures.** GS memory is read at the frame boundary, so a texture uploaded twice

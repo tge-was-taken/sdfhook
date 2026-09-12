@@ -68,11 +68,15 @@ glyph uploads built, an engine handle whose upload wrote the same TEX0 (`sdfTexH
 memory read through the register. GS memory holds only what was uploaded last, so a texture streamed
 in mid-frame reads wrong from there: the font did until it was routed to the sheet.
 
+**The depth buffer holds GS z**, as 1 - z / 2^24 in a 32-bit float buffer, exact for every 24-bit
+z. A mesh writes the z VU1 would (0x02BD, `sdf3DScreenParam`'s scale and trans) and a decoded draw
+its own, so the two test against each other as the GS has them. Mapping GS z into clip space the
+other way does not work: the menus draw at z 0 to 32, below VU1's `zMin`, and clamp together.
+
 **What the 2D renderer cannot do is painted magenta**, as the mesh shader paints an unmodelled
 state, and counted in `unhonouredDraws` by producer: a destination alpha test, a texture function
-other than MODULATE, fog, a texture that cannot be found. Depth is only reported, since the chain's
-order already layers what the menus depth-test against each other; a draw whose tests pass no
-color is not drawn.
+other than MODULATE, fog, a texture that cannot be found. A draw whose tests pass no color is not
+drawn.
 
 **Inlining limits what a hook can enumerate.** "Never called" from a hook means never called out of
 line. Trust the `[todo]` ranking over any call-count enumeration.
@@ -417,7 +421,7 @@ buffer. **1:1 is the point**: `SDF_SCALE=1` makes the two comparable.
 
 See `README.md` for the environment variables. Additionally:
 
-- `SDF_DUMP_DECODED=<producer substring>` dumps every decoded primitive from a matching producer
+- `SDF_DUMP_DECODED=<producer substring>` (or `*`) dumps every decoded primitive from a matching producer
   with the registers it drew under; `scripts/cropcmp.py` puts the same tile of several shots side by
   side.
 - `SDF_DUMP_PACKETS=<caller substring>` hexdumps packets from a matching linker that yielded no

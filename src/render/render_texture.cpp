@@ -26,7 +26,7 @@ bool RenderTexture::create(int width, int height) {
 
     glGenRenderbuffers(1, &mDepth);
     glBindRenderbuffer(GL_RENDERBUFFER, mDepth);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT32F, width, height);
 
     glGenFramebuffers(1, &mFramebuffer);
     glBindFramebuffer(GL_FRAMEBUFFER, mFramebuffer);

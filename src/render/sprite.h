@@ -11,6 +11,7 @@ struct ScreenVertex {
     f32 x, y;
     f32 u, v;
     Rgba color;
+    f32 z = 0.0f;
 };
 
 // The GS magnifies this 2x vertically to the 512x448 it presents.
