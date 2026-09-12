@@ -1299,6 +1299,8 @@ std::vector<u8> Renderer::readPixels(int* width, int* height) const {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, target.getFramebuffer());
 
     std::vector<u8> gl(usize(*width) * usize(*height) * 3);
+    // Rows of RGB are not a multiple of 4 bytes at every width, and GL pads to 4 by default.
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadPixels(0, 0, *width, *height, GL_RGB, GL_UNSIGNED_BYTE, gl.data());
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     const int width_ = *width;

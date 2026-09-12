@@ -2384,11 +2384,8 @@ right.
         from TEXA's TA0, where we sampled the target's own. Underground 4.910 -> 4.371 against
         4.287 hooked; unknown realm 4.591 -> 4.240.
 
-- [ ] **X7: a play session died on `malloc(): corrupted top size`.** Did not reproduce;
-      `SDF_ASAN=ON` builds our sources with AddressSanitizer for the next attempt, after the
-      `_aligned_malloc` fix that lets ASan past PCSX2's own start-up. Separately, a run whose GL is
-      llvmpipe (no `GALLIUM_DRIVER`) aborts at exit in a thread-local destructor of an unloaded
-      library; with d3d12 it exits cleanly.
+- [ ] **X7: a run whose GL is llvmpipe aborts at exit**, in a thread-local destructor of an
+      unloaded library. With `GALLIUM_DRIVER=d3d12` it exits cleanly.
 
 - [ ] **P2: the packet writes the typed IDB exposed.** With the packets typed in the IDB,
       `ida_facts.py` sees what `sdfModelLinkOt` (13 facts, 0x2B2018..0x2B20E4) and
@@ -2492,6 +2489,12 @@ right.
       the slice when the last pending return is taken, the save runs there, a stop is never
       paused over, and captures number past what exists. Resumed captures score 4.512 (battle)
       and 4.162 (underground).
+
+- [x] **X9: play sessions died on `malloc(): corrupted top size`.** `Renderer::readPixels` read
+      GL_RGB rows under the default pack alignment of 4, so at a window width whose rows are not
+      a multiple of 4 bytes (1553 wide: 1357 bytes a shot) the driver wrote past the buffer. Every
+      F9 capture after a resize did it, and the shots were sheared. ASan never saw it, since the
+      write is the driver's; a six minute ASan battle run without captures was clean.
 
 ## Ruled out
 
