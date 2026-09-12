@@ -28,6 +28,7 @@ add_executable(sdfhook
 	unsupported.cpp
 	hooks.cpp
 	hooks_impl.cpp
+	packet_processor.cpp
 	trace.cpp)
 
 target_include_directories(sdfhook PRIVATE

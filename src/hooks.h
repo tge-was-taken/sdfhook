@@ -31,6 +31,7 @@ enum class LinkKind : u8 { Packet, Ref, Call };
 struct LinkedPacket {
     u32 addr = 0;
     u32 caller = 0;
+    sdfDrawTagPtr_t tag;
     LinkKind kind = LinkKind::Packet;
 };
 

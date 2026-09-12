@@ -240,7 +240,7 @@ bool GsRegisterReplay::write(u32 at, u32 count) {
             case sdfGsAddrTest2: mState.context[1].test = writes[i].data; break;
             case sdfGsAddrFrame1: mState.context[0].frameMask = sdfGetFrameMask(writes[i].data); break;
             case sdfGsAddrFrame2: mState.context[1].frameMask = sdfGetFrameMask(writes[i].data); break;
-            default: break;
+            default: mUntracked.set(writes[i].reg & 0x7F); break;
         }
     }
     return kicked;
@@ -249,6 +249,7 @@ bool GsRegisterReplay::write(u32 at, u32 count) {
 bool GsRegisterReplay::apply(u32 packetAddr) {
     const u32 pending = mPending;
     mPending = 0;
+    mUntracked.reset();
     const sdfDmaTagPtr_t tag{packetAddr};
     if (!tag || !tag->qwc) return false;
 

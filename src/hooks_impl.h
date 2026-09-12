@@ -9,13 +9,12 @@ namespace sdfhook {
 /// Reading a packet that yielded nothing, rather than guessing at it.
 void dumpPacket(const LinkedPacket& packet, const char* by, const sdfDmaTag_t& tag);
 
-/// Walks the frame's DMA chain as channel 1 transmits it and puts the frame's draws in that order,
-/// each under the GS state in force at its packet. A draw whose packet the chain never reaches is
-/// not drawn. Also where the shadows are read and every linked packet is accounted for.
-void placeDraws(HookContext& h, u32 aTag);
+/// sdfGrReqDraw(aTag, ...): the frame's chain is complete, so its command stream is processed into
+/// the frame and the frame submitted.
+void sdfGrReqDraw(HookContext& h, u32 aTag);
 
-/// An inventory of the frame's DMA chain, for judging what is left untyped. Runs after placeDraws
-/// and forgets the frame's linked packets and their types either way.
+/// An inventory of the frame's DMA chain, for judging what is left untyped. Runs after the command
+/// stream is processed and forgets the frame's linked packets and their types either way.
 void takeFrameCensus(HookContext& h, u32 aTag);
 
 /// A builder ran, handed its four argument registers. Records the packet it makes by address.

@@ -93,9 +93,11 @@ itself. Expect to rewrite the game-level 2D group per disc while the `sdf*` hook
 
 **The renderer draws the frame's DMA chain, not the order the hooks fire in.** Every draw records the
 packet that carries it: `linkAddr`, or `linkIndex` for a generated mesh, whose address is known only
-once it links. `placeDraws` at `sdfGrReqDraw` walks the chain as channel 1 sends it, replays the A+D
-writes per GS context, and puts each packet's draws into `Frame::order` under the ALPHA and TEST in
-force there. The renderer draws `order` as it stands, switching pass run by run.
+once it links. At `sdfGrReqDraw`, `processCommandStream` (`packet_processor.cpp`) walks the chain as
+channel 1 sends it, replays the A+D writes per GS context, and handles each packet by its recorded
+type in one switch, a `process*Packet` per type. A model node is a span, checked for first and
+consumed from its first link to its draw tag's tail. Each packet's draws go into `Frame::order`
+under the ALPHA and TEST in force there, and the renderer draws `order` as it stands.
 
 - **A model stream is keyed by the REF that names it**, not by the call chain it sits in.
 - **A producer's draws are claimed by the first draw-carrying packet it links**, so a texture or ALPHA
@@ -112,6 +114,9 @@ force there. The renderer draws `order` as it stands, switching pass run by run.
 - **Lighting and fog are not chain state for a generated mesh.** `sdfCorePacketGen` lights on the
   EE with `corePktCurrLight`, which `sdfCoreDrawSetLight` sets at generation time, so a mesh keeps its
   root's light. Replaying light and fog packets from the chain for every mesh cost 0.8 to 4.4 points.
+- **Every packet type is consumed or reported.** State the renderer takes from a producer's call
+  counts as read only when a producer with recorded draws linked it; anything else is
+  `reportUnsupported`, as is every register a state packet sets that the replay drops.
 - **A GIF tag's writes can arrive in the next DMA transfer.** `sdfGrSetRefGifPacket` sends the A+D
   tag in its own packet and REFs the writes, which is how the frame-mask pair reaches FRAME. A
   transfer is state only if no write kicks a vertex: `dds3DrawFade` sends its quad as A+D.

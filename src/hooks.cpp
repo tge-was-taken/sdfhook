@@ -464,9 +464,7 @@ int sdfGrReqDrawHook(pcsx2hook_regs* regs, void* user) {
     HookContext& h = *static_cast<HookContext*>(user);
     const u32 aTag = c.getArg(0);
     h.trace->onSdfGrReqDraw(aTag, c.getArg(1));
-    placeDraws(h, aTag);
-    takeFrameCensus(h, aTag);
-    h.frames.submit();
+    sdfGrReqDraw(h, aTag);
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -492,10 +490,9 @@ void dds3DrawProcessPost(pcsx2hook_regs*, void* user) {
 int sdfDrawTagLinkHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
-    if (c.getArg(1)) {
-        const LinkedPacket packet{.addr = c.getArg(1), .caller = c.getRa()};
-        h.frames.link(packet);
-    }
+    const sdfDrawTagPtr_t aTag{c.getArg(0)};
+    const u32 aPacket = c.getArg(1);
+    if (aPacket) h.frames.link(LinkedPacket{.addr = aPacket, .caller = c.getRa(), .tag = aTag});
     return PCSX2HOOK_CONTINUE;
 }
 
@@ -503,9 +500,11 @@ int sdfDrawTagLinkHook(pcsx2hook_regs* regs, void* user) {
 int sdfDrawTagLinkRefHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
-    if (c.getArg(1)) {
-        const LinkedPacket packet{.addr = c.getArg(1), .caller = c.getRa(), .kind = LinkKind::Ref};
-        h.frames.link(packet);
+    const sdfDrawTagPtr_t aTag{c.getArg(0)};
+    const u32 aPacket = c.getArg(1);
+    if (aPacket) {
+        h.frames.link(
+            LinkedPacket{.addr = aPacket, .caller = c.getRa(), .tag = aTag, .kind = LinkKind::Ref});
     }
     return PCSX2HOOK_CONTINUE;
 }
@@ -515,8 +514,11 @@ int sdfDrawTagLinkRefHook(pcsx2hook_regs* regs, void* user) {
 int sdfDrawTagLinkCallHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
-    if (c.getArg(1)) {
-        const LinkedPacket packet{.addr = c.getArg(1), .caller = c.getRa(), .kind = LinkKind::Call};
+    const sdfDrawTagPtr_t aTag{c.getArg(0)};
+    const u32 aPacket = c.getArg(1);
+    if (aPacket) {
+        const LinkedPacket packet{
+            .addr = aPacket, .caller = c.getRa(), .tag = aTag, .kind = LinkKind::Call};
         h.frames.link(packet);
     }
     return PCSX2HOOK_CONTINUE;
@@ -542,9 +544,11 @@ int sdfTexFreeHook(pcsx2hook_regs* regs, void* user) {
 int sdfDrawTagLinkRefGifHook(pcsx2hook_regs* regs, void* user) {
     Context c{regs};
     HookContext& h = *static_cast<HookContext*>(user);
-    if (c.getArg(1)) {
-        const LinkedPacket packet{.addr = c.getArg(1), .caller = c.getRa(), .kind = LinkKind::Ref};
-        h.frames.link(packet);
+    const sdfDrawTagPtr_t aTag{c.getArg(0)};
+    const u32 aPacket = c.getArg(1);
+    if (aPacket) {
+        h.frames.link(
+            LinkedPacket{.addr = aPacket, .caller = c.getRa(), .tag = aTag, .kind = LinkKind::Ref});
     }
     return PCSX2HOOK_CONTINUE;
 }

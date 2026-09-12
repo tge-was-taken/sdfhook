@@ -135,6 +135,9 @@ PacketType getPacketTypeByLinker(const char* symbol) {
         {"rsetFrameMaskRgbOff", PacketType::FrameMask},
         {"cmpDisableRGB", PacketType::FrameMask},
         {"sdfModelLinkShapedDrawPacket", PacketType::MeshShaped},
+        // The exception: four link sites, and only the inline VIF stream is the shadow, which the
+        // processor tells apart by its tag.
+        {"fldSdwDraw", PacketType::Shadow},
     };
     for (const Entry& entry : kLinkers) {
         if (std::strcmp(entry.symbol, symbol) == 0) return entry.type;
@@ -157,6 +160,7 @@ bool isDrawType(PacketType type) {
         case PacketType::ZClear:
         case PacketType::Fade:
         case PacketType::BillboardBatch:
+        case PacketType::Shadow:
         case PacketType::Packet2D:
         case PacketType::Primitive3D:
         case PacketType::DebugText:

@@ -2318,8 +2318,8 @@ right.
       setup, and lights can be built at scene load, so a resumed state never sees those calls. Light
       packets are typed by shape as the fallback: three unit direction rows at +0x90, colours at
       +0x70 and +0x80. That disagrees with CLAUDE.md's "+16, columns" note; settle which is right.
-      **Rendering.** `placeDraws` draws in chain order; the `[todo]` ranking is transmitted packets of a
-      draw-carrying type with nothing placed. The VIF streams nothing claims are the next producers.
+      **Rendering.** `processCommandStream` draws in chain order; the `[todo]` ranking is transmitted
+      packets of a draw-carrying type with nothing placed. The VIF streams nothing claims are the next producers.
       `smt3_field_underground_facility` has no `vifData` or `transform` at all: that state sits on
       a load or menu and does not exercise the 3D path.
 
@@ -2346,6 +2346,14 @@ right.
       That attempt checked only entry addresses, so it also missed a light an ex packet REFs. The
       viewport is the same split: the frame has one `screenTm` from `sdf3DScreenTm`, while the chain
       carries the env's `ViewportPacket` and `HighViewportPacket` for the VU1 draws after each.
+
+- [ ] **P6: chain packets the processor reports as unread.** Every scene, per submitted frame: one
+      draw env (`DrawEnv`), which is more than A+D since it carries a clear sprite, and sets PRIM,
+      RGBAQ, XYOFFSET, PRMODECONT, TEXA, SCISSOR, DTHE, COLCLAMP and ZBUF, none replayed; 2 each of
+      viewport, light and fog (P5); 11 terminators outside a model span; one VU1 microcode upload.
+      Field scenes add 1 to 2 texture uploads and 53 to 68 `fldSdwDraw` REF links that are neither
+      state nor its inline stream. Reporting them moved no score; read each before modelling or
+      excusing it.
 
 - [ ] **P2: the packet writes the typed IDB exposed.** With the packets typed in the IDB,
       `ida_facts.py` sees what `sdfModelLinkOt` (13 facts, 0x2B2018..0x2B20E4) and

@@ -36,6 +36,7 @@ enum class PacketType : u8 {
     Fade,
     BillboardBatch,
     BillboardTransform,
+    Shadow,
     Packet2D,
     Primitive3D,
     BitBlt,
@@ -88,6 +89,7 @@ constexpr const char* getPacketTypeName(PacketType type) {
         case PacketType::Fade: return "fade";
         case PacketType::BillboardBatch: return "billboardBatch";
         case PacketType::BillboardTransform: return "billboardTransform";
+        case PacketType::Shadow: return "shadow";
         case PacketType::Packet2D: return "packet2D";
         case PacketType::Primitive3D: return "primitive3D";
         case PacketType::BitBlt: return "bitBlt";

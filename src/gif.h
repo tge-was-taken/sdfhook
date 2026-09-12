@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bitset>
 #include <memory>
 #include <vector>
 
@@ -53,11 +54,15 @@ public:
 
     const sdfGsState_t& getContext(u32 context) const { return mState.context[context]; }
 
+    /// Registers the last transfer wrote that the replay does not track.
+    const std::bitset<128>& getUntracked() const { return mUntracked; }
+
 private:
     /// @return Whether a write kicked a vertex.
     bool write(u32 at, u32 count);
 
     GsContexts mState;
+    std::bitset<128> mUntracked;
 
     /// Writes a tag announced that its own transfer did not hold. Only the next transfer carries
     /// them on.
