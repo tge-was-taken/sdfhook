@@ -2384,14 +2384,11 @@ right.
         from TEXA's TA0, where we sampled the target's own. Underground 4.910 -> 4.371 against
         4.287 hooked; unknown realm 4.591 -> 4.240.
 
-- [ ] **X5: an F9 capture wrote a savestate that cannot be resumed, and the session later died on
-      `malloc(): corrupted top size`.** `captures/capture_000.p2s` (unknown realm, after a few
-      minutes of play and mesh picking) loads and at once returns to the sentinel with nothing
-      pending, at sp 0x00556290, a guest thread stack in engine data. `pcsx2hook_save_state` waits
-      for `Hooks::PendingReturns()` to reach zero, so the return stack missed a live call: look at
-      the sp matching in `Hooks::Dispatch` across guest thread switches. The heap corruption did not
-      reproduce; `SDF_ASAN=ON` builds our sources with AddressSanitizer for the next attempt, after
-      the `_aligned_malloc` fix that lets ASan past PCSX2's own start-up.
+- [ ] **X7: a play session died on `malloc(): corrupted top size`.** Did not reproduce;
+      `SDF_ASAN=ON` builds our sources with AddressSanitizer for the next attempt, after the
+      `_aligned_malloc` fix that lets ASan past PCSX2's own start-up. Separately, a run whose GL is
+      llvmpipe (no `GALLIUM_DRIVER`) aborts at exit in a thread-local destructor of an unloaded
+      library; with d3d12 it exits cleanly.
 
 - [ ] **P2: the packet writes the typed IDB exposed.** With the packets typed in the IDB,
       `ida_facts.py` sees what `sdfModelLinkOt` (13 facts, 0x2B2018..0x2B20E4) and
@@ -2486,6 +2483,15 @@ right.
   on a frame that never existed.
 - **T1 render textures and T2 movie frames do not happen.** `dds3AllocRenderTexture` and
   `sdfIpuSetChainSource` are hooked and neither fires in any sample scene.
+
+- [x] **X8: F9 captures wrote no savestate.** The save retried through `Host::RunOnCPUThread`,
+      which only ran when something else ended the VM's slice, so in play it never ran; a frame
+      limit's stop was overwritten by the retry's pause and the run went on forever. The
+      `capture_000.p2s` that "could not resume" was a 09-07 file from before the in-flight check,
+      paired with new shots because every session numbered from 000. Now `Hooks::Dispatch` ends
+      the slice when the last pending return is taken, the save runs there, a stop is never
+      paused over, and captures number past what exists. Resumed captures score 4.512 (battle)
+      and 4.162 (underground).
 
 ## Ruled out
 

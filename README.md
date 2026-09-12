@@ -45,11 +45,10 @@ SDF_BIOS=<bios.bin> SDF_TRACE=dumps/sdf_trace.jsonl SDF_FRAMES=400 \
 
 **Under WSL**, both GPUs go through D3D12. Our GL renderer needs `GALLIUM_DRIVER=d3d12`
 (`MESA_LOADER_DRIVER_OVERRIDE=d3d12`, `LD_LIBRARY_PATH=/usr/lib/wsl/lib`). The emulator's software GS
-presents through Vulkan, and the only Vulkan driver installed is lavapipe, which costs about a sixth
-of the CPU and falls behind 1x when the machine is busy. Point `VK_DRIVER_FILES` at a dzn build
-(Mesa's `microsoft-experimental`, not in Debian's package) to put it on the GPU; pcsx2-hook's
-PCSX2 allocates descriptor sets where dzn lacks `VK_KHR_push_descriptor`. The emulator's shot is
-identical under both.
+presents through Vulkan: on lavapipe that costs about a sixth of the CPU and falls behind 1x when
+the machine is busy, so install dzn (Mesa's `microsoft-experimental`, not in Debian's package) as a
+user ICD. pcsx2-hook's PCSX2 allocates descriptor sets where dzn lacks `VK_KHR_push_descriptor`.
+The emulator's shot is identical under both.
 
 The window never takes keyboard focus, which needs the X11 backend: a Wayland toplevel cannot refuse
 focus, so `SDL_WINDOW_NOT_FOCUSABLE` does nothing there. `x11,wayland` is set as a default only, so

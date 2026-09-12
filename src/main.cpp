@@ -75,8 +75,12 @@ void captureScene(App& app, uint32_t frame) {
     std::error_code failed;
     std::filesystem::create_directories(app.config.captureDir, failed);
 
+    // Numbered past what an earlier session left, so a state never sits beside another run's shots.
     static u32 index = 0;
-    const std::string base = std::format("{}/capture_{:03}", app.config.captureDir, index++);
+    std::string base;
+    do {
+        base = std::format("{}/capture_{:03}", app.config.captureDir, index++);
+    } while (std::filesystem::exists(base + ".p2s") || std::filesystem::exists(base + "-emu.png"));
     app.renderer->requestShot(base + "-native.png");
     if (!app.renderer->waitForShot(kShotWaitMs)) {
         log.warn("no native shot within {}ms: the capture is of two frames", kShotWaitMs);
