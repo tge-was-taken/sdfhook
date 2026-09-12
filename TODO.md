@@ -2395,10 +2395,15 @@ right.
       only. `rsetTest` reads through `sdfGrRegPacket_t+0x20`, the flexible `reg[]`, which no C++
       member names. guestcheck's unaccounted count went from 563 to 586 on this alone.
 
-- [ ] **P3: `sdf3DPrimMakePoly` reads `vertex`, `faceIndex` and `vertexColor`, not `normal`, `uv` or
-      `multiUv`.** Those three report as a mask when set. A null `faceIndex` (`fldDrawPoly3`'s)
+- [ ] **P3: `sdf3DPrimMakePoly` reads `vertex`, `faceIndex`, `vertexColor` and `uv`, not `normal`
+      or `multiUv`.** Those two report as a mask when set. A null `faceIndex` (`fldDrawPoly3`'s)
       takes `sdf3DPrimDefaultFaceIndex` (0x5297A0, named from `unk_5297A0`), a plain triangle
-      list: the 12852 battle polys now draw, battle 4.561 -> 4.545, the fields unchanged.
+      list. A textured poly takes TEX0, TEX1 and CLAMP from the material packet
+      `sdf3DPrimLinkMat` links ahead of it (`dds3P2APolygonDraw`), since VU1 emits them and the
+      GIF path never carries them; its vertex colors reach the GS unlit. The effects' second
+      texture (`multiUv`, `sdfMatSetMultiTex`) is what is left: capture 009's yellow burst.
+      Capture scores (local captures/labels.tsv names them): 009 67.4 -> 42.6, 012 59.2 -> 52.8, 011 52.8
+      -> 47.3; 018 29.1 -> 32.4, its pink pillars fainter.
 
 - [ ] **B1: battle's remaining differences.** The wisps' flames draw pinker than the emulator's
       violet and the smoke above them stronger; the shapes differ too (the emulator has thin

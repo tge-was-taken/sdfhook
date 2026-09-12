@@ -150,6 +150,7 @@ uniform int uDebugNormal;
 uniform vec3 uSolid;      // a picked mesh draws in this, ignoring texture and lighting
 uniform int uSolidOn;
 uniform int uStreamColors;
+uniform int uUnlitColors;
 uniform int uRefMapPass;     // the reflection pass samples a ramp, so it needs its own UV
 uniform int uOverlayPass;    // sdf3DSpecularTex: the texture alone, unlit
 uniform vec2 uProjScale;     // the projection's x and y, so a normal can leave clip space
@@ -223,6 +224,7 @@ void main() {
     } else if (uMtexPass > 2) {
         vLit = kUnhandled;
     }
+    if (uUnlitColors != 0) vLit = vec3(1.0);
     if (uDebugNormal != 0) vLit = normalize(facing) * 0.5 + 0.5;
     if (uSolidOn != 0) vLit = uSolid;
 
@@ -873,6 +875,7 @@ void Renderer::drawMeshes(const Frame& frame, const std::vector<u32>& indices) {
     const int flatten = glGetUniformLocation(mMeshProgram, "uFlatten");
     const int flipNormal = glGetUniformLocation(mMeshProgram, "uFlipNormal");
     const int streamColors = glGetUniformLocation(mMeshProgram, "uStreamColors");
+    const int unlitColors = glGetUniformLocation(mMeshProgram, "uUnlitColors");
     const int diffuseAlpha = glGetUniformLocation(mMeshProgram, "uDiffuseAlpha");
     const int refMapPass = glGetUniformLocation(mMeshProgram, "uRefMapPass");
     const int overlayPass = glGetUniformLocation(mMeshProgram, "uOverlayPass");
@@ -999,6 +1002,7 @@ void Renderer::drawMeshes(const Frame& frame, const std::vector<u32>& indices) {
         glUniform1f(flatten, mesh.flatten);
         glUniform1i(flipNormal, 0);
         glUniform1i(streamColors, mesh.streamColors ? 1 : 0);
+        glUniform1i(unlitColors, mesh.unlitColors ? 1 : 0);
         glUniform1f(faceDivSoften, mesh.faceDivSoften);
         glUniform1f(faceDivBias, mesh.faceDivBias);
         glUniform1i(mtexPass, 0);

@@ -196,6 +196,7 @@ private:
     void processGsStatePacket(const ChainEntry& entry, PacketType type);
     void processCarriedPacket(const ChainEntry& entry, PacketType type);
     void processTransformPacket(const ChainEntry& entry, PacketType type);
+    void processMaterialPacket(const ChainEntry& entry, PacketType type);
     void processEmptyPacket(const ChainEntry& entry);
     void processTransferPacket(const ChainEntry& entry, PacketType type);
     void reportUnreadPacket(PacketType type);
@@ -211,6 +212,8 @@ private:
     void dumpPrimitive(const GsPrimitive& primitive, const DrawSprite& sprite) const;
     TexHandle resolveTexture(u64 tex0);
     void takeChainTexture(DrawMesh& mesh);
+    void takePrimMaterial(DrawMesh& mesh);
+    void scaleTexelUvs(DrawMesh& mesh);
     const char* getProducer(const ChainEntry& entry) const;
     void dumpStateChange(const sdfGsState_t& was, u32 at);
     void emitSprites(const ChainEntry& entry);
@@ -238,6 +241,7 @@ private:
 
     /// What sdf3DPrimSetTmPacket last put in the chain, identity until then and after a reset.
     Matrix4 mPrimTransform{};
+    sdfMatPacketPtr_t mPrimMaterial;
     u32 mIdentityTm = 0;
 
     /// The last texture looked up was tried and cannot be had, as against still on its way.
@@ -419,11 +423,11 @@ void PacketProcessor::processPacketOfType(const ChainEntry& entry, PacketType ty
         case PacketType::RefGif:
         case PacketType::GifRegisters: processGsStatePacket(entry, type); break;
         case PacketType::Transform: processTransformPacket(entry, type); break;
+        case PacketType::Material: processMaterialPacket(entry, type); break;
         case PacketType::TransformRef:
         case PacketType::Viewport:
         case PacketType::LightParallel:
         case PacketType::Fog:
-        case PacketType::Material:
         case PacketType::MaterialRef:
         case PacketType::DrawParams:
         case PacketType::VuMicrocode:
@@ -509,6 +513,15 @@ void PacketProcessor::processTransformPacket(const ChainEntry& entry, PacketType
         return;
     }
     std::memcpy(&mPrimTransform, &*matrix, sizeof(mPrimTransform));
+    processCarriedPacket(entry, type);
+}
+
+/// sdf3DPrimLinkMat's material, which VU1 textures the polys after it with. A model node's own
+/// materials are its span's.
+void PacketProcessor::processMaterialPacket(const ChainEntry& entry, PacketType type) {
+    const u32 target = entry.getRefTarget();
+    if (target) mPrimMaterial = sdfMatPacketPtr_t{target};
+    else reportUnsupported("material packet with no REF", entry.getId());
     processCarriedPacket(entry, type);
 }
 
@@ -769,13 +782,30 @@ void PacketProcessor::dumpPrimitive(const GsPrimitive& primitive, const DrawSpri
 
 /// A frame buffer is the previous frame and the font is the sheet the glyph uploads built; a 2D
 /// texture packet names its handle; anything else is found by its TEX0.
+/// VU1 emits a poly's TEX0, TEX1 and CLAMP out of the material packet sdf3DPrimLinkMat links
+/// ahead of it, so the GIF path never carries them.
+void PacketProcessor::takePrimMaterial(DrawMesh& mesh) {
+    if (!mPrimMaterial) {
+        reportUnsupported("textured poly with no material ahead of it in the chain", 0);
+        return;
+    }
+    mesh.tex0 = mPrimMaterial->tex0Data;
+    mesh.tex1 = mPrimMaterial->tex1Data;
+    mesh.clamp = mPrimMaterial->clampData;
+    mesh.texHandle = resolveTexture(mesh.tex0);
+}
+
 /// VU1 draws a billboard batch under the chain's TEX0; the hook sees only the last resource
-/// tagged before the batches are made. Texel UVs are over TW and TH, as the GS takes them.
+/// tagged before the batches are made.
 void PacketProcessor::takeChainTexture(DrawMesh& mesh) {
     mesh.tex0 = mDecoder.getRegister(sdfGsAddrTex01);
     mesh.tex1 = mDecoder.getRegister(sdfGsAddrTex11);
     mesh.clamp = mDecoder.getRegister(sdfGsAddrClamp1);
     mesh.texHandle = resolveTexture(mesh.tex0);
+}
+
+/// A billboard batch stores texel coordinates, which the GS takes over TW and TH.
+void PacketProcessor::scaleTexelUvs(DrawMesh& mesh) {
     const GsTex0 tex0 = GsTex0::decode(mesh.tex0);
     const f32 uScale = 1.0f / f32(1u << tex0.tw);
     const f32 vScale = 1.0f / f32(1u << tex0.th);
@@ -859,7 +889,11 @@ void PacketProcessor::emitMeshes(u32 packet) {
     if (found == mMeshesByPacket.end()) return;
     for (const u32 index : found->second) {
         DrawMesh& mesh = mFrame.meshes[index];
-        if (mesh.billboard) takeChainTexture(mesh);
+        if (mesh.billboard) {
+            takeChainTexture(mesh);
+            scaleTexelUvs(mesh);
+        }
+        if (mesh.chainTransform && (mesh.attrBits & sdfCoreAttrTextured)) takePrimMaterial(mesh);
         // VU1 places a poly by the transform in force at its packet.
         if (mesh.chainTransform && mesh.bones.size() == 1) mesh.bones[0] = mPrimTransform;
         if (!h.config->noTransmitState) mesh.gs = mDecoder.getContext(0);

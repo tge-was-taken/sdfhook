@@ -671,9 +671,10 @@ void ModelHooks::sdf3DPrimMakePoly(sdf3DPrimPolyParmPtr_t aPoly, Frame* frame) {
         reportUnsupported("sdf3DPrimMakePoly face indices outside guest memory", aPoly->faceIndex.addr);
         return;
     }
-    const u32 unread = (aPoly->normal.addr ? 1 : 0) | (aPoly->uv.addr ? 2 : 0) |
-                       (aPoly->multiUv.addr ? 4 : 0);
-    if (unread) reportUnsupported("sdf3DPrimMakePoly arrays (normal 1, uv 2, multiUv 4)", unread);
+    const u32 unread = (aPoly->normal.addr ? 1 : 0) | (aPoly->multiUv.addr ? 4 : 0);
+    if (unread) reportUnsupported("sdf3DPrimMakePoly arrays (normal 1, multiUv 4)", unread);
+    const sdfVector2_t* uv = aPoly->uv.addr ? aPoly->uv.slice(vertexCount) : nullptr;
+    if (aPoly->uv.addr && !uv) reportUnsupported("sdf3DPrimMakePoly uvs outside guest memory", aPoly->uv.addr);
     // 0x2BAEA4: UNPACK V4-8, one RGBA word a vertex, red in the low byte.
     const u32* vertexColor = aPoly->vertexColor.addr ? aPoly->vertexColor.slice(vertexCount) : nullptr;
     if (aPoly->vertexColor.addr && !vertexColor) {
@@ -691,10 +692,16 @@ void ModelHooks::sdf3DPrimMakePoly(sdf3DPrimPolyParmPtr_t aPoly, Frame* frame) {
     // Its callers set their own ALPHA and TEST through rsetAlpha and rsetTest rather than taking an
     // ordering table's pair, and the chain walk replaces this with what is in force at the packet.
     mesh.gs = sdfGetGsStateForOt(0);
-    // 0x2BAAF4: the prim word is the descriptor's own or'd with 0x68, which is IIP, FGE and ABE.
+    // 0x2BAAF4: the prim word is the descriptor's own or'd with 0x68, which is IIP, FGE and ABE;
+    // 0x2BAB24 adds TME with UVs, 0x2BAB34 the second set, 0x2BAB4C the color flag.
     mesh.attrBits = u16(aPoly->attr | 0x68);
+    if (aPoly->uv.addr) mesh.attrBits |= sdfCoreAttrTextured;
+    if (aPoly->uv.addr && aPoly->multiUv.addr) mesh.attrBits |= sdfCoreAttrMultiTexPass;
+    if (aPoly->vertexColor.addr) mesh.attrBits |= sdfCoreAttrColor;
     mesh.color = Rgba::unpack(aPoly->color);
     mesh.lit = false;
+    // The GS trace shows each vertex at exactly its array's color.
+    mesh.unlitColors = true;
     mesh.packetType = sdfPacketGenerated;
 
     mesh.vertices.resize(vertexCount);
@@ -702,6 +709,10 @@ void ModelHooks::sdf3DPrimMakePoly(sdf3DPrimPolyParmPtr_t aPoly, Frame* frame) {
         setRigidInfluence(mesh.vertices[v], sdfVector3_t{point[v].x, point[v].y, point[v].z},
                           nullptr);
         mesh.vertices[v].color = vertexColor ? Rgba::unpack(vertexColor[v]) : mesh.color;
+        if (uv) {
+            mesh.vertices[v].u = uv[v].x;
+            mesh.vertices[v].v = uv[v].y;
+        }
     }
     for (u32 t = 0; t < triangles; t++) {
         for (int corner = 0; corner < 3; corner++) {

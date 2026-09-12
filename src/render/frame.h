@@ -283,6 +283,9 @@ struct DrawMesh {
     /// it a second time.
     bool streamColors = false;
 
+    /// VU1 sends the vertex colors to the GS as they are, with no light term.
+    bool unlitColors = false;
+
     /// A type 1 VIF stream, which is the level geometry and is built two-sided.
     bool worldGeometry = false;
 
