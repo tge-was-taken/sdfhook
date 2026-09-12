@@ -2409,10 +2409,12 @@ right.
       154.7 -> 5.0, 015 28.0 -> 16.6, 016 50.6 -> 14.5, 017 55.6 -> 22.4, 018 29.1 -> 9.7. Worst
       left: 013 (focus, 86.7) and 010 (mabufudyne, 54.8).
 
-- [ ] **B1: battle's remaining differences.** The wisps' flames draw pinker than the emulator's
-      violet and the smoke above them stronger; the shapes differ too (the emulator has thin
-      streaks), so compare the billboard batch's vertices (`PCSX2HOOK_GS_VERTS`) before touching
-      the blend. The character's hair, now drawn from its weighted stream, is lit lighter on one
+- [ ] **B1: battle's remaining differences.** Billboard quads carried the vertex default 0x80
+      instead of their batch color, which reached the shader only through the light term, so
+      their alpha was 128 however faint the batch; now each corner takes the batch color, drawn
+      unlit, at As = Ta * Av / 128^2 as the GS computes it. Battle 4.545 -> 4.264; capture 013
+      (focus) 86.7 -> 14.3, 015 16.6 -> 10.5, 019 15.6 -> 8.1. Capture 010 (mabufudyne, 38.9)
+      draws its ice crystals dull where the emulator's are bright. The character's hair, now drawn from its weighted stream, is lit lighter on one
       side where the emulator's is near black. `PCSX2HOOK_GS_ONLY`'s `i=` counts batches over the
       whole run, not per frame, so it cannot keep a frame's clear; use `GS_SKIP` for a pass.
 

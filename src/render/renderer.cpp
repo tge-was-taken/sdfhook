@@ -352,8 +352,8 @@ void main() {
     float texA = uTexAlpha != 0 ? min(texel.a * kPs2Alpha, 1.0) : 1.0;
     // The mesh path's kPs2Alpha looks like a double application, but removing it costs underground
     // 4.272 to 22.681, so something upstream is not in the units it appears to be. See TODO V8.
-    // VU1's sprite path unpacks no material, so a billboard's alpha is the batch's own, once.
-    float testA = uBillboard != 0 ? min(texA * color.a, 1.0)
+    // VU1's sprite path unpacks no material, so a billboard's alpha is the batch's own.
+    float testA = uBillboard != 0 ? min(texA * color.a * kPs2Alpha, 1.0)
                                   : min(texA * color.a * kPs2Alpha * uDiffuseAlpha, 1.0);
     // AFAIL FB_ONLY is two GL draws; uAtestInvert selects the half.
     // HIGHLIGHT and HIGHLIGHT2 add the vertex alpha to the color; HIGHLIGHT adds it to the

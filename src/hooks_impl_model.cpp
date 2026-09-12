@@ -898,6 +898,8 @@ void ModelHooks::sdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Fram
         mesh.gs = sdfGetGsStateForOt(otIndex);
         mesh.attrBits = sdfCoreAttrTextured | sdfCoreAttrBlend | sdfPrimTriangle;
         mesh.lit = false;
+        // The GS trace shows each quad at exactly its batch color.
+        mesh.unlitColors = true;
         mesh.billboard = true;
         mesh.packetType = sdfPacketGenerated;
         // Texels from the batch's 12.4; the texture and its size are the chain's.
@@ -910,6 +912,7 @@ void ModelHooks::sdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Fram
                                      centre.y + right[1] * at.x + up[1] * at.y,
                                      centre.z + right[2] * at.x + up[2] * at.y};
             setRigidInfluence(out, world, nullptr);
+            out.color = mesh.color;
             out.u = f32(uv[c].u) * kTexel;
             out.v = f32(uv[c].v) * kTexel;
         }
