@@ -2384,6 +2384,15 @@ right.
         from TEXA's TA0, where we sampled the target's own. Underground 4.910 -> 4.371 against
         4.287 hooked; unknown realm 4.591 -> 4.240.
 
+- [ ] **X5: an F9 capture wrote a savestate that cannot be resumed, and the session later died on
+      `malloc(): corrupted top size`.** `captures/capture_000.p2s` (unknown realm, after a few
+      minutes of play and mesh picking) loads and at once returns to the sentinel with nothing
+      pending, at sp 0x00556290, a guest thread stack in engine data. `pcsx2hook_save_state` waits
+      for `Hooks::PendingReturns()` to reach zero, so the return stack missed a live call: look at
+      the sp matching in `Hooks::Dispatch` across guest thread switches. The heap corruption did not
+      reproduce; `SDF_ASAN=ON` builds our sources with AddressSanitizer for the next attempt, after
+      the `_aligned_malloc` fix that lets ASan past PCSX2's own start-up.
+
 - [ ] **P2: the packet writes the typed IDB exposed.** With the packets typed in the IDB,
       `ida_facts.py` sees what `sdfModelLinkOt` (13 facts, 0x2B2018..0x2B20E4) and
       `sdfModelTempPacketLinkOt` (12, 0x2B1BD0..0x2B1C9C) write into `sdfModelNodeDrawPacket_t`,
