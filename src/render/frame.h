@@ -42,6 +42,9 @@ struct SpriteCorner {
 
     /// GS z as the depth buffer holds it, 1 - z / 2^24, for a draw decoded from its packet.
     f32 z = 0.0f;
+
+    /// The GS's F, 1.0 for none of FOGCOL.
+    f32 fog = 1.0f;
 };
 
 /// A draw's index in the frame's generated links when its packet address is not known yet.
@@ -69,6 +72,13 @@ struct DrawSprite {
 
     /// The renderer cannot draw it as the GS would, so it paints it magenta.
     bool unhandled = false;
+
+    /// TEX0's TFX and TCC, and PRIM's FGE with FOGCOL, for a draw decoded from its packet. A hooked
+    /// sprite modulates with the texture's alpha and has no fog.
+    u32 textureFunction = sdfTexModulate;
+    bool textureAlpha = true;
+    bool fogs = false;
+    Rgba fogColor{0, 0, 0, 0};
 
     /// Depth-tested against the meshes by TEST, and written unless ZBUF masks it. A hooked sprite
     /// never saw either.

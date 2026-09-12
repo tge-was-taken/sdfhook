@@ -74,9 +74,8 @@ its own, so the two test against each other as the GS has them. Mapping GS z int
 other way does not work: the menus draw at z 0 to 32, below VU1's `zMin`, and clamp together.
 
 **What the 2D renderer cannot do is painted magenta**, as the mesh shader paints an unmodelled
-state, and counted in `unhonouredDraws` by producer: a destination alpha test, a texture function
-other than MODULATE, fog, a texture that cannot be found. A draw whose tests pass no color is not
-drawn.
+state, and counted in `unhonouredDraws` by producer: a destination alpha test, PABE, FBA, COLCLAMP
+off, a texture that cannot be found. A draw whose tests pass no color is not drawn.
 
 **Inlining limits what a hook can enumerate.** "Never called" from a hook means never called out of
 line. Trust the `[todo]` ranking over any call-count enumeration.

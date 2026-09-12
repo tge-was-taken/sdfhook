@@ -25,8 +25,10 @@ layout(location = 0) in vec2 aPos;
 layout(location = 1) in vec2 aUv;
 layout(location = 2) in vec4 aColor;
 layout(location = 3) in float aZ;
+layout(location = 4) in float aFog;
 out vec2 vUv;
 out vec4 vColor;
+out float vFog;
 uniform vec2 uGuestSize;
 uniform vec2 uPixelOffset;
 
@@ -37,6 +39,7 @@ void main() {
     vec2 ndc = vec2(aPos.x / uGuestSize.x * 2.0 - 1.0, 1.0 - aPos.y / uGuestSize.y * 2.0);
     gl_Position = vec4(ndc + uPixelOffset, aZ, 1.0);
     vUv = aUv;
+    vFog = aFog;
     vColor = vec4(aColor.rgb, aColor.a * kPs2Alpha);
 }
 )";
@@ -44,9 +47,14 @@ void main() {
 constexpr const char* kFragmentShader = R"(#version 330 core
 in vec2 vUv;
 in vec4 vColor;
+in float vFog;
 out vec4 oColor;
 uniform sampler2D uTexture;
 uniform int uTextured;
+uniform int uTexFunction;  // TEX0's TFX
+uniform int uTexAlpha;     // TEX0's TCC
+uniform int uFogOn;
+uniform vec3 uFogColor;
 uniform int uAtest;
 uniform float uAtestRef;
 uniform int uAtestInvert;  // AFAIL's half: the fragments that fail
@@ -63,8 +71,22 @@ bool isAlphaTestFailing(float normalised) {
         || (uAtest == 7 && a == uAtestRef);
 }
 
+// The GS's texture functions, as PCSX2's tfx_fs.glsl has them. The vertex color is Cf / 255 with
+// Af / 128, the texel Ct / 255 with At / 255, so modulating doubles.
 void main() {
-    oColor = uTextured != 0 ? texture(uTexture, vUv) * vColor * 2.0 : vColor;
+    oColor = vColor;
+    if (uTextured != 0) {
+        vec4 t = texture(uTexture, vUv);
+        vec3 modulated = t.rgb * vColor.rgb * 2.0;
+        float vertexA = vColor.a * 128.0 / 255.0;
+        float textureA = t.a * 2.0;
+        oColor = uTexFunction == 0 ? vec4(modulated, t.a * vColor.a * 2.0)
+               : uTexFunction == 1 ? vec4(t.rgb, textureA)
+               : uTexFunction == 2 ? vec4(modulated + vertexA, textureA + vColor.a)
+                                   : vec4(modulated + vertexA, textureA);
+        if (uTexAlpha == 0) oColor.a = vColor.a;
+    }
+    if (uFogOn != 0) oColor.rgb = mix(uFogColor, oColor.rgb, vFog * 255.0 / 256.0);
     if (isAlphaTestFailing(oColor.a) != (uAtestInvert != 0)) discard;
 }
 )";
@@ -587,15 +609,17 @@ bool Renderer::init(const Config& config, int width, int height) {
     glGenBuffers(1, &mVbo);
     glBindVertexArray(mVao);
     glBindBuffer(GL_ARRAY_BUFFER, mVbo);
-    constexpr int kStride = 9 * sizeof(f32);
+    constexpr int kStride = 10 * sizeof(f32);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, kStride, nullptr);
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, kStride, (void*)(2 * sizeof(f32)));
     glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, kStride, (void*)(4 * sizeof(f32)));
     glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, kStride, (void*)(8 * sizeof(f32)));
+    glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, kStride, (void*)(9 * sizeof(f32)));
     glEnableVertexAttribArray(0);
     glEnableVertexAttribArray(1);
     glEnableVertexAttribArray(2);
     glEnableVertexAttribArray(3);
+    glEnableVertexAttribArray(4);
 
     glGenVertexArrays(1, &mMeshVao);
     glGenBuffers(1, &mMeshVbo);
@@ -1098,6 +1122,10 @@ void Renderer::drawSprites(const Frame& frame, const std::vector<u32>& indices) 
     const int atest = glGetUniformLocation(mProgram, "uAtest");
     const int atestRef = glGetUniformLocation(mProgram, "uAtestRef");
     const int atestInvert = glGetUniformLocation(mProgram, "uAtestInvert");
+    const int texFunction = glGetUniformLocation(mProgram, "uTexFunction");
+    const int texAlpha = glGetUniformLocation(mProgram, "uTexAlpha");
+    const int fogOn = glGetUniformLocation(mProgram, "uFogOn");
+    const int fogColor = glGetUniformLocation(mProgram, "uFogColor");
     glBindVertexArray(mVao);
     // A decoded draw's z can sit past the near plane, as the HUD's and the shadows' largest z do;
     // the GS clamps rather than clips it.
@@ -1143,11 +1171,16 @@ void Renderer::drawSprites(const Frame& frame, const std::vector<u32>& indices) 
             mBounds.add(v);
             attribs.insert(attribs.end(), {v.x, v.y, v.u, v.v, v.color.r / 255.0f,
                                            v.color.g / 255.0f, v.color.b / 255.0f,
-                                           v.color.a / 255.0f, v.z});
+                                           v.color.a / 255.0f, v.z, v.fog});
         }
         applySpriteBlend(sprite);
         if (sprite.unhandled) applyBlend(GsBlend{});
         glUniform1i(textured, hasTexture && !sprite.unhandled ? 1 : 0);
+        glUniform1i(texFunction, int(sprite.textureFunction));
+        glUniform1i(texAlpha, sprite.textureAlpha ? 1 : 0);
+        glUniform1i(fogOn, sprite.fogs && !sprite.unhandled ? 1 : 0);
+        glUniform3f(fogColor, sprite.fogColor.r / 255.0f, sprite.fogColor.g / 255.0f,
+                    sprite.fogColor.b / 255.0f);
         const bool alphaTests = sdfGetTestAte(sprite.test) && !sprite.unhandled;
         glUniform1i(atest, alphaTests ? int(sdfGetTestAtst(sprite.test)) : int(sdfAtstAlways));
         glUniform1f(atestRef, f32(sdfGetTestAref(sprite.test)));

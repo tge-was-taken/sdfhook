@@ -592,6 +592,7 @@ bool PacketProcessor::convertPrimitive(const GsPrimitive& primitive, DrawSprite*
         }
         corner.color = Rgba::unpack(vertex.rgba);
         corner.z = getDepth(vertex.z);
+        corner.fog = f32(vertex.fog) / 255.0f;
         return corner;
     };
 
@@ -644,11 +645,15 @@ bool PacketProcessor::convertPrimitive(const GsPrimitive& primitive, DrawSprite*
     sprite.test = u32(state.test);
     sprite.hasDepth = true;
     sprite.zbuf = state.zbuf;
+    sprite.fogs = sdfGetPrimFge(prim) != 0;
+    sprite.fogColor = Rgba::unpack(u32(state.fogcol & 0xFFFFFF));
     sprite.frameMask = sdfGetFrameMask(state.frame);
     mTextureMissing = false;
     if (sdfGetPrimTme(prim)) {
         sprite.texHandle = resolveTexture(state.tex0);
         sprite.hasSampler = true;
+        sprite.textureFunction = sdfGetTex0Tfx(state.tex0);
+        sprite.textureAlpha = sdfGetTex0Tcc(state.tex0) != 0;
         sprite.tex1 = state.tex1;
         sprite.clamp = state.clamp;
     }
@@ -683,10 +688,7 @@ PacketProcessor::Verdict PacketProcessor::judgePrimitive(const GsPrimitive& prim
     }
     if (sdfGetPrimTme(prim)) {
         if (!sprite.texHandle.addr && mTextureMissing) return unhonoured("decoded texture not found");
-        if (sdfGetTex0Tfx(state.tex0) != sdfTexModulate) return unhonoured("decoded primitive TFX");
-        if (!sdfGetTex0Tcc(state.tex0)) return unhonoured("decoded primitive without texture alpha");
     }
-    if (sdfGetPrimFge(prim)) return unhonoured("decoded primitive with fog");
     if (state.pabe & 1) return unhonoured("decoded primitive under PABE");
     if (state.fba & 1) return unhonoured("decoded primitive under FBA");
     if (!(state.colclamp & 1)) return unhonoured("decoded primitive with COLCLAMP off");

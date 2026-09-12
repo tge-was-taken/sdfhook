@@ -2365,8 +2365,8 @@ right.
         stay distinct where VU1's clip range would have clamped them together. Menu 2.099 -> 2.018,
         the rest unchanged; the shadow volumes now draw magenta over the character, which is DATE's
         to cut back.
-      - **TFX other than MODULATE** has no path in the sprite shader, and draws magenta. The alpha
-        test does, for the AFAIL modes that drop the color.
+      - **TFX, TCC and fog** are in the sprite shader, after PCSX2's `tfx_fs.glsl`. No savestate
+        draws them, so they are unmeasured.
       - **Streamed textures.** GS memory is read at the frame boundary, so a texture uploaded twice
         in one frame reads as the last upload. The font is routed to its glyph sheet; anything else
         streamed would need GS memory shadowed from the chain's IMAGE transfers.
