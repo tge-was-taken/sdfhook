@@ -1790,6 +1790,7 @@ enum sdfWrapMode_t : u32 { sdfWrapRepeat = 0, sdfWrapClamp = 1 };
 
 // A VIF code, which is how a mesh body names each of its vertex arrays.
 enum sdfVifCommand_t : u32 {
+    sdfVifNop = 0x00,
     sdfVifFlushEnd = 0x10,
     sdfVifActMicro = 0x14,
     sdfVifCntMicro = 0x17,

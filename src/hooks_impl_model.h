@@ -89,6 +89,7 @@ public:
     /// @fn sdfModelSetNormalDrawPacket
     /// @note SLUS-20911 0x002B0AC0
     void sdfModelSetNormalDrawPacket(const NodeDraw& draw, u32 chainAddr, Frame* frame);
+    static bool isBoneRef(u32 vifCode, u32 qwc);
 
     /// @fn corePktBuildFaceList
     /// @note SLUS-20911 0x002B7A80

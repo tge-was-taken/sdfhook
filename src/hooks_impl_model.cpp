@@ -922,17 +922,36 @@ void ModelHooks::sdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Fram
 /// @note SLUS-20911 0x002B0AC0
 void ModelHooks::sdfModelSetNormalDrawPacket(const NodeDraw& draw, u32 chainAddr, Frame* frame) {
     sdfMatPtr_t mat;
+    std::vector<Matrix4> bones;
     for (u32 at = chainAddr; ; at += 16) {
-        const u32* tag = u32Ptr_t{at}.slice(2);
+        const u32* tag = u32Ptr_t{at}.slice(4);
         if (!tag) return;
 
         const u32 id = (tag[0] >> 28) & 7;
-        if (id != sdfDmaTagRef) return;
+        const u32 qwc = tag[0] & 0xFFFF;
+        if (id == sdfDmaTagRet) return;
+        // Inline VU setup ahead of a weighted stream: the bone count and the kick that takes them.
+        if (id == sdfDmaTagCnt) {
+            mParser.mTrace.countSetupRef();
+            at += 16 * qwc;
+            continue;
+        }
+        if (id != sdfDmaTagRef) {
+            reportUnsupported("type 1 chain tag", id);
+            return;
+        }
 
         const u32 target = tag[1];
         const auto found = mParser.mMatByPacket.find(target);
         if (found != mParser.mMatByPacket.end()) {
             mat = {found->second};
+            continue;
+        }
+
+        if (isBoneRef(tag[3], qwc)) {
+            const Matrix4Ptr_t tm{target};
+            if (!tm) return;
+            bones.push_back(*tm);
             continue;
         }
 
@@ -944,10 +963,25 @@ void ModelHooks::sdfModelSetNormalDrawPacket(const NodeDraw& draw, u32 chainAddr
             mParser.mTrace.countSetupRef();
             continue;
         }
-        if (!mParser.readVifStreamMesh(target, target + 16u * (tag[0] & 0xFFFF), draw, mat, frame)) {
-            mParser.mTrace.countStrayRef();
-        }
+        const u32 end = target + 16u * qwc;
+        const sdfCoreBatchHeaderPtr_t header{code.next};
+        const bool weighted = header && (header->packetBits & sdfCorePacketWeights);
+        const bool read = weighted ? mParser.readWeightedVifStream(target, end, draw, mat, bones, frame)
+                                   : mParser.readVifStreamMesh(target, end, draw, mat, frame);
+        if (!read) mParser.mTrace.countStrayRef();
+        bones.clear();
     }
+}
+
+/// A weighted stream's bone is the node's tm packet (sdfModelSetTmRefPacket), sent without its
+/// trailing command quadword.
+bool ModelHooks::isBoneRef(u32 vifCode, u32 qwc) {
+    VifCode code;
+    code.command = vifCode >> 24;
+    code.count = (vifCode >> 16) & 0xFF;
+    const u32 matrixQwords = u32(sizeof(sdf3DTmPacketData_t::tm) / sdfQwordBytes);
+    return isUnpack(code) && getUnpackWidth(code) == 16 && code.count == matrixQwords &&
+           qwc == matrixQwords;
 }
 /// Keeps a triangle when its signed screen area times the packet's backface
 /// sign is non-negative.

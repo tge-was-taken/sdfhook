@@ -277,6 +277,11 @@ concatenate.
   material, one opening with the batch-header unpack is a mesh, anything else is setup. Batch header
   `[faceCount, pointCount, attrBits, packetBits]`, byte triangle indices local to the batch. These
   are three quarters of a field scene's triangles.
+- **Type 1, weighted** (packetBits `0x800`, battle characters): the chain REFs each bone's tm packet
+  (`sdfModelSetTmRefPacket`'s 7 matrix quadwords), then a CNT carrying the bone count and a kick,
+  then the stream. One VU1 pass per bone sends that bone's float4 positions (weight in w) and
+  normals; the last pass adds faces, texcoords and colors. **Walk the chain as the DMA does**: a
+  CNT's data is inline and the chain goes on after it.
 
 **A blended mesh must not write depth** (`attrBits & 0x40`), or a transparent panel occludes the
 scene behind it. **The engine's projection is not GL clip space**: rebuild depth linearly from `w`

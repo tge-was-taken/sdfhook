@@ -227,8 +227,12 @@ private:
     /// @note SLUS-20911 0x002B1950
     void reportFaceDiv(const char* what, f32 value);
 
+    DrawMesh startStreamMesh(u32 at, const NodeDraw& draw) const;
+    void finishStreamMesh(DrawMesh& mesh, sdfMatPtr_t aMat, Frame* frame);
     bool readVifStreamMesh(u32 at, u32 end, const NodeDraw& draw, sdfMatPtr_t aMat,
                            Frame* frame);
+    bool readWeightedVifStream(u32 at, u32 end, const NodeDraw& draw, sdfMatPtr_t aMat,
+                               const std::vector<Matrix4>& bones, Frame* frame);
 
     void readSecondUv(u32 at, const sdfCorePacket_t& packet, DrawMesh& mesh);
 

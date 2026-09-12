@@ -391,21 +391,26 @@ void ModelParser::dumpWords(const char* what, u32 at) {
     if (!left) return;
     left--;
 
-    for (int tag = 0; tag < 8; tag++) {
-        const u32* head = u32Ptr_t{at}.slice(2);
+    for (int tag = 0; tag < 64; tag++) {
+        const u32* head = u32Ptr_t{at}.slice(4);
         if (!head) return;
         const u32 id = (head[0] >> 28) & 7;
+        const u32 qwc = head[0] & 0xFFFF;
 
         JsonObject row;
         row.addString("dump", what)
             .addHexDigits("tag", at, 8)
             .addUint("id", id)
-            .addUint("qwc", head[0] & 0xFFFF)
-            .addHexDigits("addr", head[1], 8);
-        if (id == sdfDmaTagRef) {
+            .addUint("qwc", qwc)
+            .addHexDigits("addr", head[1], 8)
+            .addHexDigits("vif0", head[2], 8)
+            .addHexDigits("vif1", head[3], 8);
+        // A CNT's data follows it inline; a REF's is at its address.
+        const u32 data = id == sdfDmaTagCnt ? at + 16 : head[1];
+        if (id == sdfDmaTagRef || id == sdfDmaTagCnt) {
             row.beginArray("words");
             for (u32 word = 0; word < mConfig->dumpCallWords; word++) {
-                const u32Ptr_t at32{head[1] + 4 * word};
+                const u32Ptr_t at32{data + 4 * word};
                 if (!at32) break;
                 const u32 raw = *at32;
                 f32 value = 0.0f;
@@ -420,8 +425,9 @@ void ModelParser::dumpWords(const char* what, u32 at) {
         }
         log.dump(row.take());
 
-        if (id != sdfDmaTagRef) return;
-        at += 16;
+        if (id == sdfDmaTagRef) at += 16;
+        else if (id == sdfDmaTagCnt) at += 16 * (qwc + 1);
+        else return;
     }
 }
 
@@ -481,8 +487,7 @@ void ModelParser::reportFaceDiv(const char* what, f32 value) {
 
 
 
-bool ModelParser::readVifStreamMesh(u32 at, u32 end, const NodeDraw& draw, sdfMatPtr_t aMat,
-                                    Frame* frame) {
+DrawMesh ModelParser::startStreamMesh(u32 at, const NodeDraw& draw) const {
     DrawMesh mesh;
     // The chain names the stream by a REF to its first quadword.
     mesh.linkAddr = at;
@@ -490,13 +495,35 @@ bool ModelParser::readVifStreamMesh(u32 at, u32 end, const NodeDraw& draw, sdfMa
     mesh.sortZ = draw.sortZ;
     mesh.otIndex = draw.otIndex;
     mesh.color = Rgba::unpack(draw.color);
-    mesh.bones.push_back(draw.model);
     mesh.lighting = mLighting;
     mesh.fog = mFog;
     mesh.gs = sdfGetGsStateForOt(mesh.otIndex);
     mesh.reverseFacing = draw.reverse;
     mesh.worldGeometry = true;
     mesh.packetType = sdfPacketDmaCall;
+    return mesh;
+}
+
+void ModelParser::finishStreamMesh(DrawMesh& mesh, sdfMatPtr_t aMat, Frame* frame) {
+    if (aMat) {
+        mesh.texHandle = mTextures->getHandle(aMat->texHandle, frame);
+        mTrace.countTexture(aMat->texHandle.addr != 0, mesh.texHandle.addr != 0);
+        mHooks->readMaterialPacket(*aMat, mesh, frame);
+    }
+
+    mTrace.countOt(mesh.otIndex);
+    mTrace.countSampler(mesh.tex0, mesh.tex1, mesh.clamp);
+    mTrace.countDeterminant(mesh.bones[0]);
+    mTrace.countStreamGeom(u32(mesh.indices.size() / 3));
+    mTrace.countStreamMesh(u32(mesh.indices.size() / 3));
+    mTrace.countBones(u32(mesh.bones.size()));
+    if (frame) frame->addMesh(std::move(mesh));
+}
+
+bool ModelParser::readVifStreamMesh(u32 at, u32 end, const NodeDraw& draw, sdfMatPtr_t aMat,
+                                    Frame* frame) {
+    DrawMesh mesh = startStreamMesh(at, draw);
+    mesh.bones.push_back(draw.model);
 
     bool first = true;
     while (at + 16 <= end) {
@@ -590,20 +617,131 @@ bool ModelParser::readVifStreamMesh(u32 at, u32 end, const NodeDraw& draw, sdfMa
         at = kick.next;
     }
     if (mesh.vertices.empty()) return false;
+    finishStreamMesh(mesh, aMat, frame);
+    return true;
+}
 
-    if (aMat) {
-        mesh.texHandle = mTextures->getHandle(aMat->texHandle, frame);
-        mTrace.countTexture(aMat->texHandle.addr != 0, mesh.texHandle.addr != 0);
-        mHooks->readMaterialPacket(*aMat, mesh, frame);
+/// A skinned stream runs one VU1 pass per bone, each sending that bone's positions (weight in w)
+/// and normals; the last also carries the faces, texcoords and colors.
+bool ModelParser::readWeightedVifStream(u32 at, u32 end, const NodeDraw& draw, sdfMatPtr_t aMat,
+                                        const std::vector<Matrix4>& bones, Frame* frame) {
+    if (bones.empty() || bones.size() > kMaxBones) {
+        reportUnsupported("weighted stream bone count", u32(bones.size()));
+        return false;
     }
+    DrawMesh mesh = startStreamMesh(at, draw);
+    mesh.bones = bones;
 
-    mTrace.countOt(mesh.otIndex);
-    mTrace.countSampler(mesh.tex0, mesh.tex1, mesh.clamp);
-    mTrace.countDeterminant(mesh.bones[0]);
-    mTrace.countStreamGeom(u32(mesh.indices.size() / 3));
-    mTrace.countStreamMesh(u32(mesh.indices.size() / 3));
-    mTrace.countBones(1);
-    if (frame) frame->addMesh(std::move(mesh));
+    const u32 lastPass = u32(bones.size()) - 1;
+    for (;;) {
+        VifCode code;
+        while (at < end && readVifCode(at, code) && code.command == sdfVifNop) at = code.next;
+        if (at + 16 > end) break;
+
+        u16 faceCount = 0;
+        u16 pointCount = 0;
+        u32 base = 0;
+        u32 indices = 0;
+        for (u32 pass = 0; pass <= lastPass; pass++) {
+            u32 headerData = 0;
+            u32 next = 0;
+            if (!readArray(at, 8, 1, headerData, next)) return false;
+            const sdfCoreBatchHeaderPtr_t header{headerData};
+            if (!header || !header->faceCount || !header->pointCount) return false;
+            if (pass == 0) {
+                faceCount = header->faceCount;
+                pointCount = header->pointCount;
+                if (mesh.vertices.empty()) {
+                    mesh.attrBits = header->attrBits & draw.attrMask;
+                    mesh.packetBits = header->packetBits;
+                }
+                base = u32(mesh.vertices.size());
+                mesh.vertices.resize(base + pointCount);
+            } else if (header->faceCount != faceCount || header->pointCount != pointCount) {
+                return false;
+            }
+
+            if (pass == lastPass && !readArray(next, 4, faceCount, indices, next)) return false;
+            u32 positions = 0;
+            u32 normals = 0;
+            if (!readArray(next, 16, pointCount, positions, next)) return false;
+            if (!readArray(next, 12, pointCount, normals, next)) return false;
+            const sdfVector4_t* position = sdfVector4Ptr_t{positions}.slice(pointCount);
+            const sdfVector3_t* normal = sdfVector3Ptr_t{normals}.slice(pointCount);
+            if (!position || !normal) return false;
+
+            for (u16 v = 0; v < pointCount; v++) {
+                const f32 weight = position[v].w;
+                if (weight == 0.0f) continue;
+                MeshVertex& out = mesh.vertices[base + v];
+                usize slot = 0;
+                while (slot < kMaxBoneInfluences && out.influence[slot].weight != 0.0f) slot++;
+                if (slot == kMaxBoneInfluences) {
+                    mTrace.countInfluences(kMaxBoneInfluences + 1);
+                    continue;
+                }
+                out.influence[slot] = {position[v].x, position[v].y, position[v].z, weight,
+                                       normal[v].x,   normal[v].y,   normal[v].z,   f32(pass)};
+            }
+
+            if (pass == lastPass) {
+                const u16 attrBits = header->attrBits;
+                const bool bothUv = (attrBits & sdfCoreAttrMultiTexPass) != 0;
+                u32 texcoords = 0;
+                if ((attrBits & sdfCoreAttrTextured) &&
+                    !readArray(next, bothUv ? 16 : 8, pointCount, texcoords, next)) {
+                    return false;
+                }
+                u32 colors = 0;
+                if ((attrBits & sdfCoreAttrColor) && !readArray(next, 4, pointCount, colors, next)) {
+                    return false;
+                }
+                const sdfVector2_t* uv =
+                    sdfVector2Ptr_t{texcoords}.slice(pointCount * (bothUv ? 2u : 1u));
+                const u32* color = u32Ptr_t{colors}.slice(pointCount);
+                for (u16 v = 0; v < pointCount; v++) {
+                    MeshVertex& out = mesh.vertices[base + v];
+                    if (uv) {
+                        const sdfVector2_t* pair = uv + (bothUv ? 2u : 1u) * v;
+                        out.u = pair[0].x;
+                        out.v = pair[0].y;
+                        if (bothUv) {
+                            out.u2 = pair[1].x;
+                            out.v2 = pair[1].y;
+                        }
+                    }
+                    if (color) {
+                        out.color = Rgba::unpack(color[v]);
+                        mesh.streamColors = true;
+                    }
+                }
+            }
+
+            // The microprogram kick that closes the pass.
+            VifCode kick;
+            if (!readVifCode(next, kick)) return false;
+            at = kick.next;
+        }
+
+        const u32* triangles = u32Ptr_t{indices}.slice(faceCount);
+        if (!triangles) return false;
+        for (u16 f = 0; f < faceCount; f++) {
+            for (int corner = 0; corner < 3; corner++) {
+                const u32 index = (triangles[f] >> (8 * corner)) & 0xFF;
+                if (index >= pointCount) return false;
+                mesh.indices.push_back(u16(base + index));
+            }
+        }
+    }
+    if (mesh.vertices.empty()) return false;
+
+    mesh.lit = true;
+    for (const MeshVertex& vertex : mesh.vertices) {
+        u32 used = 0;
+        for (const MeshInfluence& influence : vertex.influence) used += influence.weight != 0.0f;
+        mTrace.countInfluences(used);
+    }
+    finishStreamMesh(mesh, aMat, frame);
     return true;
 }
 
