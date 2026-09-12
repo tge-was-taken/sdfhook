@@ -28,7 +28,7 @@ SDF_BIOS=<bios.bin> SDF_TRACE=dumps/sdf_trace.jsonl SDF_FRAMES=400 \
 | variable | what |
 |---|---|
 | `SDF_BIOS` | BIOS image, full path |
-| `SDF_TRACE` | where the JSONL trace goes |
+| `SDF_TRACE` | where the JSONL trace goes; `dumps/trace.jsonl`, or none in a window run |
 | `SDF_FRAMES` | stop after this many frames |
 | `SDF_SYMBOLS` | optional symbol map, a file or a directory holding `<ELF>.map` |
 | `SDF_WINDOW` | open the native window and draw what the hooks decode |
@@ -42,6 +42,14 @@ SDF_BIOS=<bios.bin> SDF_TRACE=dumps/sdf_trace.jsonl SDF_FRAMES=400 \
 | `SDF_SPRITE_HOOKS` | draw 2D from the producers' hooked arguments instead of the decoded packets; a packet no hook drew is decoded either way |
 | `SDF_DUMP_DECODED` | dump every decoded primitive from a matching producer, with the registers it drew under |
 | `SDF_DRAW_ONLY` | draw only matching meshes: comma separated `i=N`, `i=A-B`, `tbp=N`. Pairs with the emulator's `PCSX2HOOK_GS_ONLY`, which takes the same terms plus `prim=N`, so a frame can be cut to one draw on both sides and diffed without matching anything |
+
+**Under WSL**, both GPUs go through D3D12. Our GL renderer needs `GALLIUM_DRIVER=d3d12`
+(`MESA_LOADER_DRIVER_OVERRIDE=d3d12`, `LD_LIBRARY_PATH=/usr/lib/wsl/lib`). The emulator's software GS
+presents through Vulkan, and the only Vulkan driver installed is lavapipe, which costs about a sixth
+of the CPU and falls behind 1x when the machine is busy. Point `VK_DRIVER_FILES` at a dzn build
+(Mesa's `microsoft-experimental`, not in Debian's package) to put it on the GPU; pcsx2-hook's
+PCSX2 allocates descriptor sets where dzn lacks `VK_KHR_push_descriptor`. The emulator's shot is
+identical under both.
 
 The window never takes keyboard focus, which needs the X11 backend: a Wayland toplevel cannot refuse
 focus, so `SDL_WINDOW_NOT_FOCUSABLE` does nothing there. `x11,wayland` is set as a default only, so

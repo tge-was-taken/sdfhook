@@ -16,6 +16,9 @@ export SDF_BIOS SDF_FRAMES SDF_SHOT_FRAME SDF_SYMBOLS=assets SDF_SCALE=1
 export GALLIUM_DRIVER=${GALLIUM_DRIVER:-d3d12}
 export MESA_LOADER_DRIVER_OVERRIDE=${MESA_LOADER_DRIVER_OVERRIDE:-d3d12}
 export LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-/usr/lib/wsl/lib}
+# The emulator's software GS on the GPU through dzn when there is one; lavapipe otherwise.
+DZN_ICD=$HOME/src/mesa-dzn/build/src/microsoft/vulkan/dzn_devenv_icd.x86_64.json
+if [ -z "${VK_DRIVER_FILES:-}" ] && [ -f "$DZN_ICD" ]; then export VK_DRIVER_FILES=$DZN_ICD; fi
 
 REFDIFF=${REFDIFF:-$HOME/projects/pcsx2-hook/pcsx2-hook/scripts/refdiff.py}
 mkdir -p "$OUT"

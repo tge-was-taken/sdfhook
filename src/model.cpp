@@ -380,7 +380,7 @@ bool ModelParser::readScreenTm() {
 
 
 void ModelParser::traceMeshes(const Frame& frame) {
-    if (!mEvents) return;
+    if (!mEvents || !mEvents->isOpen()) return;
     for (const DrawMesh& mesh : frame.meshes) mEvents->onMesh(mesh, mScreenTm, mDecodeFrame);
 }
 

@@ -43,7 +43,7 @@ App g_app;
 // The state a run came from, kept beside its trace: a dump nobody can reproduce is worth little a
 // week later, and the state is the only part that cannot be recovered from the rest.
 void copyStateBesideTrace(const sdfhook::Config& config) {
-    if (config.statePath.empty()) return;
+    if (config.statePath.empty() || config.tracePath.empty()) return;
     std::error_code ec;
     const std::filesystem::path beside =
         std::filesystem::path(config.tracePath).parent_path() / "state.p2s";

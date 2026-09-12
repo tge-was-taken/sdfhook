@@ -29,7 +29,9 @@ Config Config::readEnvironment() {
     config.bios = readText("SDF_BIOS", "assets/bios.bin");
     config.symbols = readText("SDF_SYMBOLS");
     config.logSpec = readText("SDF_LOG");
-    config.tracePath = readText("SDF_TRACE", "dumps/trace.jsonl");
+    config.window = readFlag("SDF_WINDOW");
+    // A played run's trace costs frame rate and is never diffed.
+    config.tracePath = readText("SDF_TRACE", config.window ? "" : "dumps/trace.jsonl");
     config.shotPath = readText("SDF_SHOT", "dumps/shot.png");
     config.nativeShotPath = readText("SDF_NATIVE_SHOT");
     config.dumpTextures = readText("SDF_DUMP_TEXTURES");
@@ -37,7 +39,6 @@ Config Config::readEnvironment() {
     config.frames = readText("SDF_FRAMES");
     config.shotFrame = readNumber("SDF_SHOT_FRAME", 0);
     config.scale = int(readNumber("SDF_SCALE", 1));
-    config.window = readFlag("SDF_WINDOW");
     config.gsTrace = readFlag("PCSX2HOOK_GS_TRACE");
     config.vuTrace = readFlag("PCSX2HOOK_VU_TRACE");
 

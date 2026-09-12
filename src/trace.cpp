@@ -54,6 +54,7 @@ void predictLit(const DrawMesh& mesh, const MeshVertex& vertex, f32 out[3]) {
 }  // namespace
 
 Trace::Trace(pcsx2hook_ctx* runtime, const std::string& path) : mRuntime(runtime) {
+    if (path.empty()) return;
     mFile = std::fopen(path.c_str(), "w");
     if (!mFile) {
         log.info("cannot open {}", path);
@@ -132,10 +133,12 @@ void Trace::write(const std::string& row) {
 
 void Trace::onFrame(u32 frame) {
     mFrame = frame;
+    if (!mFile) return;
     write(JsonObject().addString("ev", "frame").addUint("seq", mSeq++).addUint("frame", u64(frame)).take());
 }
 
 void Trace::onDds3DrawProcess(u32 arg) {
+    if (!mFile) return;
     write(JsonObject()
               .addString("ev", "dds3DrawProcess")
               .addUint("seq", mSeq++)
@@ -145,6 +148,7 @@ void Trace::onDds3DrawProcess(u32 arg) {
 }
 
 void Trace::onSdf3DSetCamera(u32 cameraAddr, u32 screenParamAddr) {
+    if (!mFile) return;
     write(JsonObject()
               .addString("ev", "sdf3DSetCamera")
               .addUint("seq", mSeq++)
@@ -155,6 +159,7 @@ void Trace::onSdf3DSetCamera(u32 cameraAddr, u32 screenParamAddr) {
 }
 
 void Trace::onSdfModelLinkOt(u32 otAddr, u32 rootAddr) {
+    if (!mFile) return;
     const sdfModelRootNodePtr_t rootPtr{rootAddr};
     const bool ok = bool(rootPtr);
     const sdfModelRootNode_t root = rootPtr.readOr();
@@ -187,6 +192,7 @@ void Trace::onSdfModelLinkOt(u32 otAddr, u32 rootAddr) {
 }
 
 void Trace::onSdfCorePacketGen(u32 nodeAddr, u32 packetAddr, u32 attrMask, u32 color) {
+    if (!mFile) return;
     JsonObject row;
     row.addString("ev", "sdfCorePacketGen")
         .addUint("seq", mSeq++)
@@ -215,6 +221,7 @@ void Trace::onSdfCorePacketGen(u32 nodeAddr, u32 packetAddr, u32 attrMask, u32 c
 }
 
 void Trace::onSdfModelLinkShapedDrawPacket(u32 nodeAddr, u32 shapeAddr) {
+    if (!mFile) return;
     write(JsonObject()
               .addString("ev", "sdfModelLinkShapedDrawPacket")
               .addUint("seq", mSeq++)
@@ -272,6 +279,7 @@ void addGsState(JsonObject& row, u64 tex0, u64 tex1, u64 clamp, u64 alpha, u64 t
 }  // namespace
 
 void Trace::onMesh(const DrawMesh& mesh, const Matrix4& screenTm, u32 frame) {
+    if (!mFile) return;
     const MeshInfluence& first = mesh.vertices[0].influence[0];
     f32 lo[3] = {first.x, first.y, first.z};
     f32 hi[3] = {lo[0], lo[1], lo[2]};
@@ -408,6 +416,7 @@ void Trace::onMesh(const DrawMesh& mesh, const Matrix4& screenTm, u32 frame) {
 }
 
 void Trace::onSprite(const DrawSprite& sprite) {
+    if (!mFile) return;
     // A sprite names its texture by handle; the GS trace keys on TBP, so the register is read out
     // of the handle's own upload packet the way sdfTexGetTex0Reg does.
     u64 tex0 = 0;
@@ -445,6 +454,7 @@ void Trace::onSprite(const DrawSprite& sprite) {
 }
 
 void Trace::onSdfSortOtAvlRegist(u32 otAddr, u32 tagAddr, f32 z) {
+    if (!mFile) return;
     const sdfDrawTagPtr_t tagPtr{tagAddr};
     const bool ok = bool(tagPtr);
     const sdfDrawTag_t tag = tagPtr.readOr();
@@ -466,6 +476,7 @@ void Trace::onSdfSortOtAvlRegist(u32 otAddr, u32 tagAddr, f32 z) {
 }
 
 void Trace::onSdfGrReqDraw(u32 tagAddr, u32 predrawAddr) {
+    if (!mFile) return;
     write(JsonObject()
               .addString("ev", "sdfGrReqDraw")
               .addUint("seq", mSeq++)
@@ -476,6 +487,7 @@ void Trace::onSdfGrReqDraw(u32 tagAddr, u32 predrawAddr) {
 }
 
 void Trace::onSdfGrDrawFrame(u32 chainAddr) {
+    if (!mFile) return;
     write(JsonObject()
               .addString("ev", "sdfGrDrawFrame")
               .addUint("seq", mSeq++)
@@ -485,6 +497,7 @@ void Trace::onSdfGrDrawFrame(u32 chainAddr) {
 }
 
 void Trace::onSdfMatSet(u32 matAddr) {
+    if (!mFile) return;
     write(JsonObject()
               .addString("ev", "sdfMatSet")
               .addUint("seq", mSeq++)
@@ -494,6 +507,7 @@ void Trace::onSdfMatSet(u32 matAddr) {
 }
 
 void Trace::onSdfTexSetEx(u32 texAddr) {
+    if (!mFile) return;
     write(JsonObject()
               .addString("ev", "sdfTexSetEx")
               .addUint("seq", mSeq++)
@@ -503,6 +517,7 @@ void Trace::onSdfTexSetEx(u32 texAddr) {
 }
 
 void Trace::onPrimEntry(const char* name, u32 arg) {
+    if (!mFile) return;
     write(JsonObject()
               .addString("ev", name)
               .addUint("seq", mSeq++)
@@ -512,6 +527,7 @@ void Trace::onPrimEntry(const char* name, u32 arg) {
 }
 
 void Trace::onPacket(const LinkedPacket& packet, const char* by, const sdfDmaTag_t& tag, u64 verts) {
+    if (!mFile) return;
     write(JsonObject()
               .addString("ev", "packet")
               .addUint("seq", mSeq++)
@@ -525,6 +541,7 @@ void Trace::onPacket(const LinkedPacket& packet, const char* by, const sdfDmaTag
 }
 
 void Trace::onSdfGrSetClearPacket(u32 packetAddr) {
+    if (!mFile) return;
     write(JsonObject()
               .addString("ev", "sdfGrSetClearPacket")
               .addUint("seq", mSeq++)
