@@ -242,6 +242,8 @@ private:
 
     /// The last texture looked up was tried and cannot be had, as against still on its way.
     bool mTextureMissing = false;
+    // GS memory is read at the frame boundary, so a texture first named here has no pixels yet.
+    bool mTexturePending = false;
 
     std::unordered_map<u32, LinkedPacket> mLinked;
     std::unordered_map<u32, std::vector<u32>> mSpritesByPacket;
@@ -675,6 +677,7 @@ bool PacketProcessor::convertPrimitive(const GsPrimitive& primitive, DrawSprite*
     sprite.fogColor = Rgba::unpack(u32(state.fogcol & 0xFFFFFF));
     sprite.frameMask = sdfGetFrameMask(state.frame);
     mTextureMissing = false;
+    mTexturePending = false;
     if (sdfGetPrimTme(prim)) {
         sprite.texHandle = resolveTexture(state.tex0);
         sprite.hasSampler = true;
@@ -714,6 +717,7 @@ PacketProcessor::Verdict PacketProcessor::judgePrimitive(const GsPrimitive& prim
     if (sdfGetTestZte(test) && sdfGetTestZtst(test) == sdfZtstNever) return Verdict::Invisible;
     if (sdfGetPrimTme(prim)) {
         if (!sprite.texHandle.addr && mTextureMissing) return unhonoured("decoded texture not found");
+        if (!sprite.texHandle.addr && mTexturePending) return unhonoured("decoded texture not read yet");
     }
     if (state.pabe & 1) return unhonoured("decoded primitive under PABE");
     if (state.fba & 1) return unhonoured("decoded primitive under FBA");
@@ -794,6 +798,8 @@ TexHandle PacketProcessor::resolveTexture(u64 tex0) {
         handle = h.textures.getHandleForGsTex0(tex0, &mFrame);
         mTextureMissing = !handle.addr && h.textures.isGsTex0Missing(tex0);
     }
+    mTexturePending = !handle.addr && !mTextureMissing;
+    if (mTexturePending) reportUnsupported("decoded texture read from GS memory a frame late, tbp", tbp0);
     return handle;
 }
 
