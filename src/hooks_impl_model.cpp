@@ -667,9 +667,8 @@ void ModelHooks::sdf3DPrimMakePoly(sdf3DPrimPolyParmPtr_t aPoly, Frame* frame) {
         reportUnsupported("sdf3DPrimMakePoly without vertices", aPoly.addr);
         return;
     }
-    // fldDrawPoly3 leaves faceIndex null.
-    if (!index) {
-        reportUnsupported("sdf3DPrimMakePoly without face indices", aPoly->faceCount);
+    if (aPoly->faceIndex.addr && !index) {
+        reportUnsupported("sdf3DPrimMakePoly face indices outside guest memory", aPoly->faceIndex.addr);
         return;
     }
     const u32 unread = (aPoly->normal.addr ? 1 : 0) | (aPoly->uv.addr ? 2 : 0) |
@@ -706,7 +705,8 @@ void ModelHooks::sdf3DPrimMakePoly(sdf3DPrimPolyParmPtr_t aPoly, Frame* frame) {
     }
     for (u32 t = 0; t < triangles; t++) {
         for (int corner = 0; corner < 3; corner++) {
-            const u32 at = (index[t] >> (8 * corner)) & 0xFF;
+            // 0x2BAD14: a null faceIndex takes sdf3DPrimDefaultFaceIndex, the list 3t, 3t+1, 3t+2.
+            const u32 at = index ? (index[t] >> (8 * corner)) & 0xFF : 3 * t + u32(corner);
             if (at >= vertexCount) return;
             mesh.indices.push_back(u16(at));
         }
@@ -892,12 +892,8 @@ void ModelHooks::sdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Fram
         mesh.lit = false;
         mesh.billboard = true;
         mesh.packetType = sdfPacketGenerated;
-        mesh.texHandle = mParser.mTextures->getHandle(mParser.mBillboardTexture, frame);
-        // The batch stores texel coordinates in 12.4; the sampler wants them over the texture.
-        const f32 width = mParser.mBillboardTexture ? f32(mParser.mBillboardTexture->width) : 0.0f;
-        const f32 height = mParser.mBillboardTexture ? f32(mParser.mBillboardTexture->height) : 0.0f;
-        const f32 uScale = width > 0.0f ? 1.0f / (16.0f * width) : 0.0f;
-        const f32 vScale = height > 0.0f ? 1.0f / (16.0f * height) : 0.0f;
+        // Texels from the batch's 12.4; the texture and its size are the chain's.
+        constexpr f32 kTexel = 1.0f / 16.0f;
         mesh.vertices.resize(4);
         for (u32 c = 0; c < 4; c++) {
             MeshVertex& out = mesh.vertices[c];
@@ -906,8 +902,8 @@ void ModelHooks::sdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Fram
                                      centre.y + right[1] * at.x + up[1] * at.y,
                                      centre.z + right[2] * at.x + up[2] * at.y};
             setRigidInfluence(out, world, nullptr);
-            out.u = f32(uv[c].u) * uScale;
-            out.v = f32(uv[c].v) * vScale;
+            out.u = f32(uv[c].u) * kTexel;
+            out.v = f32(uv[c].v) * kTexel;
         }
         // Wound the way the engine lists the corners, which is the reverse of a GL front face.
         static constexpr u16 kQuad[6] = {0, 2, 1, 0, 3, 2};

@@ -210,6 +210,7 @@ private:
     void reportUnhonoured(const GsPrimitive& primitive);
     void dumpPrimitive(const GsPrimitive& primitive, const DrawSprite& sprite) const;
     TexHandle resolveTexture(u64 tex0);
+    void takeChainTexture(DrawMesh& mesh);
     const char* getProducer(const ChainEntry& entry) const;
     void dumpStateChange(const sdfGsState_t& was, u32 at);
     void emitSprites(const ChainEntry& entry);
@@ -764,6 +765,22 @@ void PacketProcessor::dumpPrimitive(const GsPrimitive& primitive, const DrawSpri
 
 /// A frame buffer is the previous frame and the font is the sheet the glyph uploads built; a 2D
 /// texture packet names its handle; anything else is found by its TEX0.
+/// VU1 draws a billboard batch under the chain's TEX0; the hook sees only the last resource
+/// tagged before the batches are made. Texel UVs are over TW and TH, as the GS takes them.
+void PacketProcessor::takeChainTexture(DrawMesh& mesh) {
+    mesh.tex0 = mDecoder.getRegister(sdfGsAddrTex01);
+    mesh.tex1 = mDecoder.getRegister(sdfGsAddrTex11);
+    mesh.clamp = mDecoder.getRegister(sdfGsAddrClamp1);
+    mesh.texHandle = resolveTexture(mesh.tex0);
+    const GsTex0 tex0 = GsTex0::decode(mesh.tex0);
+    const f32 uScale = 1.0f / f32(1u << tex0.tw);
+    const f32 vScale = 1.0f / f32(1u << tex0.th);
+    for (MeshVertex& vertex : mesh.vertices) {
+        vertex.u *= uScale;
+        vertex.v *= vScale;
+    }
+}
+
 TexHandle PacketProcessor::resolveTexture(u64 tex0) {
     const u32 tbp0 = GsTex0::decode(tex0).tbp0;
     if (h.textures.isFrameBuffer(tbp0)) return TexHandle{kPreviousFrameHandle};
@@ -836,6 +853,7 @@ void PacketProcessor::emitMeshes(u32 packet) {
     if (found == mMeshesByPacket.end()) return;
     for (const u32 index : found->second) {
         DrawMesh& mesh = mFrame.meshes[index];
+        if (mesh.billboard) takeChainTexture(mesh);
         // VU1 places a poly by the transform in force at its packet.
         if (mesh.chainTransform && mesh.bones.size() == 1) mesh.bones[0] = mPrimTransform;
         if (!h.config->noTransmitState) mesh.gs = mDecoder.getContext(0);

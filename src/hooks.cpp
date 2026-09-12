@@ -553,19 +553,6 @@ int sdfDrawTagLinkRefGifHook(pcsx2hook_regs* regs, void* user) {
     return PCSX2HOOK_CONTINUE;
 }
 
-/// dds3BillboardTagLink(hBillboard, hResource, use_mesh_idx): only the resource names the texture,
-/// and sdfBillBoardMakeN is handed the geometry alone, so the handle is taken here.
-/// @fn dds3BillboardTagLink
-/// @note SLUS-20911 0x0015B320
-int dds3BillboardTagLinkHook(pcsx2hook_regs* regs, void* user) {
-    Context c{regs};
-    HookContext& h = *static_cast<HookContext*>(user);
-
-    const dds3BillResourcePtr_t hResource{c.getArg(1)};
-    if (hResource) h.model.setBillboardTexture(hResource->hTex);
-    return PCSX2HOOK_CONTINUE;
-}
-
 /// dds3BillboardLinkOt(): each pending batch into the table its node names. Read at entry, since
 /// the engine's loop rewrites the list as it consumes it.
 /// @fn dds3BillboardLinkOt
@@ -786,7 +773,6 @@ constexpr Entry kEngineEntries[] = {
     {"sdfPrimLinkBoxLine", &observeHook, nullptr},
     {"sdfPrimLinkBitBltPacket", &observeHook, nullptr},
     {"sdfBillBoardMakeN", &sdfBillBoardMakeNHook, &packetTypePost},
-    {"dds3BillboardTagLink", &dds3BillboardTagLinkHook, nullptr},
     {"dds3BillboardLinkOt", &dds3BillboardLinkOtHook, nullptr},
     {"sdfGrLinkDispFrameTex", &traceEntryHook, nullptr},
     {"dds3DrawProcess", &dds3DrawProcessHook, &dds3DrawProcessPost},

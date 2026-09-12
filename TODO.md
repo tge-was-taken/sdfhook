@@ -2401,13 +2401,17 @@ right.
       only. `rsetTest` reads through `sdfGrRegPacket_t+0x20`, the flexible `reg[]`, which no C++
       member names. guestcheck's unaccounted count went from 563 to 586 on this alone.
 
-- [ ] **P3: `sdf3DPrimMakePoly` reads only `vertex` and `faceIndex`.** `fldDrawPoly3` leaves
-      `faceIndex` null (its memset of 0x2C, never set) and sets `vertexColor`, so each of its polys
-      reports "without face indices" and is drawn only by the `fldDrawPoly3` hook: 12852 on the
-      battle scene, 4320 and 3744 on the two field scenes. `normal`, `uv`, `multiUv` and
-      `vertexColor` report as a mask when set; the unknown realm field has 1404 indexed polys with
-      `vertexColor` set that draw flat in the material colour. Read the guest's null-`faceIndex`
-      path before drawing it here.
+- [ ] **P3: `sdf3DPrimMakePoly` reads `vertex`, `faceIndex` and `vertexColor`, not `normal`, `uv` or
+      `multiUv`.** Those three report as a mask when set. A null `faceIndex` (`fldDrawPoly3`'s)
+      takes `sdf3DPrimDefaultFaceIndex` (0x5297A0, named from `unk_5297A0`), a plain triangle
+      list: the 12852 battle polys now draw, battle 4.561 -> 4.545, the fields unchanged.
+
+- [ ] **B1: battle's remaining differences.** The wisps' flames draw pinker than the emulator's
+      violet and the smoke above them stronger; the shapes differ too (the emulator has thin
+      streaks), so compare the billboard batch's vertices (`PCSX2HOOK_GS_VERTS`) before touching
+      the blend. The character's hair, now drawn from its weighted stream, is lit lighter on one
+      side where the emulator's is near black. `PCSX2HOOK_GS_ONLY`'s `i=` counts batches over the
+      whole run, not per frame, so it cannot keep a frame's clear; use `GS_SKIP` for a pass.
 
 ## Done
 

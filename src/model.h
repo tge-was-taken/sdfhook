@@ -194,7 +194,6 @@ public:
     ModelTrace& getTrace() { return mTrace; }
     const ModelTrace& getTrace() const { return mTrace; }
 
-    void setBillboardTexture(sdfTexHandlePtr_t aTex) { mBillboardTexture = aTex; }
 
 private:
     struct NodeDraw {
@@ -275,7 +274,6 @@ private:
     MeshLighting mLighting{};
     MeshFog mFog{};
     /// sdfBillBoardMakeN gets the geometry alone, so the handle comes from the call that fills.
-    sdfTexHandlePtr_t mBillboardTexture;
     dds3BillboardTagPtr_t mDds3BillboardTag;
     std::unordered_map<u32, u32> mBillboardOt;
     u32 mLinkIndex = 0;
