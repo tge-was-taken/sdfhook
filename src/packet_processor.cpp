@@ -195,6 +195,7 @@ private:
     void processTexBindPacket(const ChainEntry& entry);
     void processGsStatePacket(const ChainEntry& entry, PacketType type);
     void processCarriedPacket(const ChainEntry& entry, PacketType type);
+    void processTransformPacket(const ChainEntry& entry, PacketType type);
     void processEmptyPacket(const ChainEntry& entry);
     void processTransferPacket(const ChainEntry& entry, PacketType type);
     void reportUnreadPacket(PacketType type);
@@ -234,6 +235,10 @@ private:
     const char* mLastLinker = "chain";
     bool mLastClaimed = false;
 
+    /// What sdf3DPrimSetTmPacket last put in the chain, identity until then and after a reset.
+    Matrix4 mPrimTransform{};
+    u32 mIdentityTm = 0;
+
     /// The last texture looked up was tried and cannot be had, as against still on its way.
     bool mTextureMissing = false;
 
@@ -249,6 +254,8 @@ private:
 PacketProcessor::PacketProcessor(HookContext& h, Frame& frame)
     : h(h), mFrame(frame), mParser(&h.coverage.gif) {
     for (const LinkedPacket& packet : h.frames.getPackets()) mLinked.emplace(packet.addr, packet);
+    for (int axis = 0; axis < 4; axis++) mPrimTransform.m[axis][axis] = 1.0f;
+    mIdentityTm = pcsx2hook_find_symbol(h.runtime, "sdf3DPrimIdentityTm");
     resolveClaims();
     indexDrawsByPacket();
 }
@@ -266,6 +273,11 @@ const char* PacketProcessor::getLinker(const LinkedPacket& packet) const {
 PacketType PacketProcessor::getType(u32 at) const {
     const auto built = h.packetTypes.find(at);
     if (built != h.packetTypes.end()) return built->second;
+    // sdf3DPrimLinkResetTm REFs the engine's own identity matrix.
+    const sdfDmaTagPtr_t tag{at};
+    if (mIdentityTm && tag && sdfDmaIsRef(*tag) && (tag->addr & 0x0FFFFFFFu) == mIdentityTm) {
+        return getPacketTypeByGlobal("sdf3DPrimIdentityTm");
+    }
     const LinkedPacket* linked = findLinked(at);
     return linked ? getPacketTypeByLinker(getLinker(*linked)) : PacketType::Unknown;
 }
@@ -403,7 +415,7 @@ void PacketProcessor::processPacketOfType(const ChainEntry& entry, PacketType ty
         case PacketType::FrameBuffer:
         case PacketType::RefGif:
         case PacketType::GifRegisters: processGsStatePacket(entry, type); break;
-        case PacketType::Transform:
+        case PacketType::Transform: processTransformPacket(entry, type); break;
         case PacketType::TransformRef:
         case PacketType::Viewport:
         case PacketType::LightParallel:
@@ -482,6 +494,19 @@ void PacketProcessor::processGsStatePacket(const ChainEntry&, PacketType) {}
 /// draws linked is unread.
 void PacketProcessor::processCarriedPacket(const ChainEntry& entry, PacketType type) {
     if (!mClaimed.contains(entry.at)) reportUnreadPacket(type);
+}
+
+/// sdf3DPrimSetTmPacket's matrix, which VU1 places the polys after it by. A model node's own
+/// transforms are its span's, and a producer's hook may still carry this one.
+void PacketProcessor::processTransformPacket(const ChainEntry& entry, PacketType type) {
+    const u32 target = entry.getRefTarget();
+    const sdfMatrix4Ptr_t matrix{target ? target : entry.at + sdfQwordBytes};
+    if (!matrix) {
+        reportUnsupported("transform packet outside guest memory", entry.at);
+        return;
+    }
+    std::memcpy(&mPrimTransform, &*matrix, sizeof(mPrimTransform));
+    processCarriedPacket(entry, type);
 }
 
 /// An upload stales what was read from GS memory there, which the decoder has passed on; a
@@ -811,6 +836,8 @@ void PacketProcessor::emitMeshes(u32 packet) {
     if (found == mMeshesByPacket.end()) return;
     for (const u32 index : found->second) {
         DrawMesh& mesh = mFrame.meshes[index];
+        // VU1 places a poly by the transform in force at its packet.
+        if (mesh.chainTransform && mesh.bones.size() == 1) mesh.bones[0] = mPrimTransform;
         if (!h.config->noTransmitState) mesh.gs = mDecoder.getContext(0);
         mFrame.order.push_back({DrawRef::Kind::Mesh, index});
         h.coverage.placedDraws[mesh.producer]++;

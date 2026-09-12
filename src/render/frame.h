@@ -188,6 +188,9 @@ struct MeshRamp {
 };
 
 struct DrawMesh {
+    /// Placed by the prim transform the chain has in force at its packet, as VU1 places a poly.
+    bool chainTransform = false;
+
     std::vector<MeshVertex> vertices;
     std::vector<u16> indices;
     std::vector<Matrix4> bones;

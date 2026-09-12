@@ -2357,11 +2357,15 @@ right.
       - **DATE.** Implemented, and it draws nothing yet. A pre-pass copies the target and marks in
         the stencil where alpha bit 7 equals DATM; the tested draw runs under it, and a fragment that
         leaves the bit other than DATM clears its mark, so overlapping fans darken once. The target
-        now keeps the source alpha unblended, as the GS writes it. At the shadow fans (`aDrawBoxF_Direct`'s
-        `$ra`, TEST 0x7D803, DATM 1) the target's alpha is 0 on about 200k of 229k pixels and has
-        bit 7 on 512, so nothing passes: the emulator darkens the character's right side, we do not.
-        Blocked on what our meshes write as alpha, which is V8's unexplained 255/128. Read the GS
-        frame buffer's own alpha (`pcsx2hook_read_gs_pixels`, PSMCT32) at the fans' draw to settle it.
+        keeps the source alpha unblended, as the GS writes it.
+        The GS trace (underground, frame 105) shows the pattern: a full-screen fan clears alpha to 0
+        (batch 19), then each shadow volume, `fldSdwDraw`'s `sdf3DPrimMakePoly` triangles at vertex
+        alpha 0x80 with FBMSK 0x00FFFFFF, sets bit 7 (20, 22, 24...), and a black DATE fan at alpha
+        0x0A darkens under it (21, 23, 25...). The volumes were placed by identity and projected
+        behind the camera; they now take the chain's prim transform and land where the GS draws
+        them. **What still blocks it:** a volume our side sees at vertex alpha 0x40 writes 0x40 where
+        the GS has 0x80, so bit 7 is never set. VU1's poly path doubles the vertex alpha and ours
+        does not, the same unexplained factor as V8.
       - **Depth.** Done: the depth buffer holds GS z as 1 - z / 2^24 in 32-bit float, exact for
         every 24-bit z. Meshes write the z VU1 puts on the GS (screenOffset.z + screenScale.z *
         clip.z / clip.w, from `sdf3DScreenParam`), decoded draws their own, and the menus' z 0 to 32

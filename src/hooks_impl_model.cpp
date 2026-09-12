@@ -678,6 +678,7 @@ void ModelHooks::sdf3DPrimMakePoly(sdf3DPrimPolyParmPtr_t aPoly, Frame* frame) {
 
     DrawMesh mesh;
     mesh.producer = "sdf3DPrimMakePoly";
+    mesh.chainTransform = true;
     Matrix4 identity{};
     for (int axis = 0; axis < 4; axis++) identity.m[axis][axis] = 1.0f;
     mesh.bones.push_back(identity);
