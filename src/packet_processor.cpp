@@ -536,8 +536,7 @@ void PacketProcessor::emitSprites(u32 packet) {
                 h.coverage.unresolvedTextures[sprite.producer]++;
             }
         }
-        // Without ABE in its PRIM the GS never reads ALPHA, which the producer knows.
-        if (sprite.alpha != GsAlpha::Opaque) sprite.alpha = GsAlpha(u32(gs.alpha & 0xFF));
+        sprite.alpha = gs.alpha;
         sprite.test = u32(gs.test);
         sprite.frameMask = gs.frameMask;
         mFrame.order.push_back({DrawRef::Kind::Sprite, index});

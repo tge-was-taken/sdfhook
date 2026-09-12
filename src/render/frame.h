@@ -32,15 +32,8 @@ using Matrix4Ptr_t = guest_ptr<struct Matrix4>;
 /// Sampled by the engine to blur over itself. Our output, not guest memory, so a reserved handle.
 constexpr u32 kPreviousFrameHandle = 0xFFFFFFFF;
 
-// The GS ALPHA register: (A - B) * C + D over the source, the destination and zero.
-enum class GsAlpha : u32 {
-    Blend = 0x44,            // (Cs - Cd) * As + Cd
-    Additive = 0x48,         // Cs * As + Cd
-    ReverseSubtract = 0x42,  // Cd - Cs * As
-    DestScale = 0x89,        // Cd * As, which darkens what is already there and adds nothing
-    /// PRIM without ABE: the GS writes the source and reads nothing back.
-    Opaque = 0xFFFFFFFF,
-};
+/// ALPHA 0x44, (Cs - Cd) * As + Cd, which the engine sets for every sprite table.
+constexpr u64 kGsAlphaBlend = 0x44;
 
 struct SpriteCorner {
     f32 x, y;
@@ -65,9 +58,11 @@ struct DrawSprite {
     /// packet.
     bool boundTexture = false;
 
-    /// Opaque when the producer's PRIM has no ABE, since the GS then never reads ALPHA. Otherwise
-    /// the ALPHA the chain has in force at the sprite's packet.
-    GsAlpha alpha = GsAlpha::Blend;
+    /// PRIM's ABE: without it the GS never reads ALPHA.
+    bool blends = true;
+
+    /// The ALPHA the chain has in force at the sprite's packet, FIX included.
+    u64 alpha = kGsAlphaBlend;
 
     /// A draw whose alpha test can only fail and whose AFAIL writes depth alone is a Z barrier:
     /// it must not put a rectangle on the screen.

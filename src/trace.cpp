@@ -415,7 +415,7 @@ void Trace::onSprite(const DrawSprite& sprite) {
         tex0 = handle->packet.readOr().tex0.data;
     }
     const u16 attrBits = u16(sdfPrimSprite | (sprite.texHandle ? 0x10 : 0) |
-                             (sprite.alpha != GsAlpha::Opaque ? 0x40 : 0));
+                             (sprite.blends ? 0x40 : 0));
 
     JsonObject row;
     addGsState(row, tex0, 0, 0, u64(sprite.alpha), sprite.test, attrBits);

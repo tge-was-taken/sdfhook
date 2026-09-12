@@ -160,7 +160,6 @@ void submitFrameFeedback(HookContext& h, u8 alpha) {
                                              kGuestWidth, kGuestHeight);
     sprite.setColor(Rgba{0x80, 0x80, 0x80, alpha});
     sprite.texHandle = TexHandle{kPreviousFrameHandle};
-    sprite.alpha = GsAlpha::Blend;
     sprite.producer = "submitFrameFeedback";
     frame->addSprite(sprite);
 }
@@ -267,7 +266,7 @@ void sdfPrimLinkFt4(HookContext& h, const u32 aColor, const u32 aPrim, const s32
     place(3, aX2, aY2, aU2, aV2);
     place(2, aX3, aY3, aU3, aV3);
     sprite.boundTexture = true;
-    sprite.alpha = sdfGetPrimAbe(aPrim) ? GsAlpha::Blend : GsAlpha::Opaque;
+    sprite.blends = sdfGetPrimAbe(aPrim) != 0;
     sprite.producer = "sdfPrimLinkFt4";
     frame->addSprite(sprite);
 }
@@ -291,7 +290,7 @@ void sdfPrimLinkG4(HookContext& h, const u32 aPrim, const s32 aX0, const s32 aY0
     place(1, aX1, aY1, aColor1);
     place(3, aX2, aY2, aColor2);
     place(2, aX3, aY3, aColor3);
-    sprite.alpha = sdfGetPrimAbe(aPrim) ? GsAlpha::Blend : GsAlpha::Opaque;
+    sprite.blends = sdfGetPrimAbe(aPrim) != 0;
     sprite.producer = "sdfPrimLinkG4";
     frame->addSprite(sprite);
 }
@@ -469,7 +468,6 @@ void dds3DrawFade(HookContext& h) {
 
     DrawSprite sprite = DrawSprite::makeRect(0, 0, kGuestWidth, kGuestHeight, 0, 0, 0, 0);
     sprite.setColor(Rgba{r, g, b, u8(128 - state)});
-    sprite.alpha = GsAlpha::Blend;
     sprite.producer = "dds3DrawFade";
     frame->addSprite(sprite);
 }

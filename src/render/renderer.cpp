@@ -233,8 +233,6 @@ uniform int uOverlayPass;
 
 const float kPs2Alpha = 255.0 / 128.0;
 
-const vec3 kUnhandled = vec3(1.0, 0.0, 1.0);
-
 // Quantised as the GS does: AREF 128 against a normalised 1.0 is a knife-edge in float, and
 // fragments either side of it write depth at random.
 bool isAlphaTestFailing(float normalised) {
@@ -285,13 +283,19 @@ void main() {
     float testA = uBillboard != 0 ? min(texA * color.a, 1.0)
                                   : min(texA * color.a * kPs2Alpha * uDiffuseAlpha, 1.0);
     // AFAIL FB_ONLY is two GL draws; uAtestInvert selects the half.
+    // HIGHLIGHT and HIGHLIGHT2 add the vertex alpha to the color; HIGHLIGHT adds it to the
+    // texture's alpha too.
+    float vertexA = color.a * kPs2Alpha;
+    if (uTextured != 0 && uTexFunction >= 2) {
+        testA = uTexAlpha == 0 ? min(vertexA, 1.0)
+              : uTexFunction == 2 ? min(texA + vertexA, 1.0)
+                                  : texA;
+    }
     if (isAlphaTestFailing(testA) != (uAtestInvert != 0)) discard;
 
-    // HIGHLIGHT and HIGHLIGHT2 appear in no scene, so they paint magenta rather than render an
-    // alpha path never measured.
-    vec3 rgb = uTexFunction == 0 ? texel.rgb * color.rgb   // MODULATE
-             : uTexFunction == 1 ? texel.rgb                // DECAL
-                                 : kUnhandled;
+    vec3 rgb = uTexFunction == 0 ? texel.rgb * color.rgb             // MODULATE
+             : uTexFunction == 1 ? texel.rgb                          // DECAL
+                                 : texel.rgb * color.rgb + color.a;   // HIGHLIGHT, HIGHLIGHT2
     if (uTextured == 0) rgb = color.rgb;
     oColor = vec4(rgb, testA);
     oColor.rgb = mix(uFogColor, oColor.rgb, vFog);
@@ -306,12 +310,14 @@ struct GsRgb {
 
 GsRgb convertToGsUnits(Rgba c) { return {{c.r / sdfGsUnit, c.g / sdfGsUnit, c.b / sdfGsUnit}}; }
 
-/// The GS ALPHA register, Cv = (A - B) * C + D, as a GL blend. Follows p3fes SkyGL's
-/// convertAlphaToBlend, minus the FIX cases no SDF draw uses.
+/// The GS ALPHA register, Cv = (A - B) * C + D, as a GL blend.
 struct GsBlend {
     GLenum equation = GL_FUNC_ADD;
-    GLenum src = GL_SRC_ALPHA;
-    GLenum dst = GL_ONE_MINUS_SRC_ALPHA;
+    GLenum src = GL_ONE;
+    GLenum dst = GL_ZERO;
+
+    /// FIX in GL's constant alpha, for a C that names it.
+    f32 fix = 0.0f;
 };
 
 /// The GL depth comparison for a GS TEST register.
@@ -326,46 +332,82 @@ GLenum getDepthFunc(u64 test) {
     }
 }
 
+/// One color's weight in the blend, k * C + m.
+struct BlendWeight {
+    int k = 0;
+    int m = 0;
+};
+
+BlendWeight getBlendWeight(u32 a, u32 b, u32 d, u32 color) {
+    return {int(a == color) - int(b == color), int(d == color)};
+}
+
+/// @return Whether GL has a factor for the weight; 1 + C it has not.
+bool getBlendFactor(BlendWeight weight, GLenum coef, GLenum inverse, GLenum* factor,
+                    bool* negative) {
+    *negative = weight.k < 0 && weight.m == 0;
+    if (weight.k == 0) *factor = weight.m ? GL_ONE : GL_ZERO;
+    else if (weight.m == 0) *factor = coef;
+    else if (weight.k < 0) *factor = inverse;
+    else return false;
+    return true;
+}
+
 GsBlend convertAlphaToBlend(u64 reg) {
-    const u32 a = sdfGetAlphaA(reg);
-    const u32 b = sdfGetAlphaB(reg);
-    const u32 c = sdfGetAlphaC(reg);
-    const u32 d = sdfGetAlphaD(reg);
-    const GLenum coef = c == sdfAlphaAd ? GL_DST_ALPHA : GL_SRC_ALPHA;
-    const GLenum inverse = c == sdfAlphaAd ? GL_ONE_MINUS_DST_ALPHA : GL_ONE_MINUS_SRC_ALPHA;
+    u32 a = sdfGetAlphaA(reg);
+    u32 b = sdfGetAlphaB(reg);
+    u32 c = sdfGetAlphaC(reg);
+    u32 d = sdfGetAlphaD(reg);
+    // Reserved encodings, which the GS manual leaves undefined.
+    if (a == 3 || b == 3 || c == 3 || d == 3) {
+        reportUnsupported("GS ALPHA reserved term", u32(reg & 0xFF));
+        a = a == 3 ? sdfAlphaZero : a;
+        b = b == 3 ? sdfAlphaZero : b;
+        c = c == 3 ? sdfAlphaFixed : c;
+        d = d == 3 ? sdfAlphaZero : d;
+    }
+    const GLenum coef = c == sdfAlphaAs   ? GL_SRC_ALPHA
+                        : c == sdfAlphaAd ? GL_DST_ALPHA
+                                          : GL_CONSTANT_ALPHA;
+    const GLenum inverse = c == sdfAlphaAs   ? GL_ONE_MINUS_SRC_ALPHA
+                           : c == sdfAlphaAd ? GL_ONE_MINUS_DST_ALPHA
+                                             : GL_ONE_MINUS_CONSTANT_ALPHA;
 
     GsBlend blend;
-    if (a == sdfAlphaSource && b == sdfAlphaDest && d == sdfAlphaDest) {
-        blend.src = coef;  // (Cs - Cd) * C + Cd
-        blend.dst = inverse;
-    } else if (a == sdfAlphaSource && b == sdfAlphaZero && d == sdfAlphaDest) {
-        blend.src = coef;  // Cs * C + Cd, additive
-        blend.dst = GL_ONE;
-    } else if (a == sdfAlphaZero && b == sdfAlphaSource && d == sdfAlphaDest) {
-        blend.equation = GL_FUNC_REVERSE_SUBTRACT;  // Cd - Cs * C
-        blend.src = coef;
-        blend.dst = GL_ONE;
-    } else if (a == sdfAlphaSource && b == sdfAlphaZero && d == sdfAlphaZero) {
-        blend.src = coef;  // Cs * C, nothing of the destination
+    blend.fix = f32(sdfGetAlphaFix(reg)) / sdfGsUnit;
+    if (c == sdfAlphaFixed && sdfGetAlphaFix(reg) > 0x80) {
+        reportUnsupported("GS ALPHA FIX above 1.0", sdfGetAlphaFix(reg));
+    }
+    bool srcNegative = false;
+    bool dstNegative = false;
+    if (!getBlendFactor(getBlendWeight(a, b, d, sdfAlphaSource), coef, inverse, &blend.src,
+                        &srcNegative) ||
+        !getBlendFactor(getBlendWeight(a, b, d, sdfAlphaDest), coef, inverse, &blend.dst,
+                        &dstNegative)) {
+        reportUnsupported("GS ALPHA with a weight above 1", u32(reg & 0xFF));
+        return GsBlend{};
+    }
+    if (srcNegative && dstNegative) {
+        // Both terms subtract, so the sum clamps to zero.
+        blend.src = GL_ZERO;
         blend.dst = GL_ZERO;
-    } else if (a == sdfAlphaDest && b == sdfAlphaZero && d == sdfAlphaZero) {
-        blend.src = GL_ZERO;  // Cd * C, which darkens what is already there
-        blend.dst = coef;
-    } else {
-        reportUnsupported("GS ALPHA", u32(reg));
+    } else if (srcNegative) {
+        blend.equation = GL_FUNC_REVERSE_SUBTRACT;
+    } else if (dstNegative) {
+        blend.equation = GL_FUNC_SUBTRACT;
     }
     return blend;
 }
 
-void applyBlend(GsAlpha alpha) {
-    if (alpha == GsAlpha::Opaque) {
-        glBlendEquation(GL_FUNC_ADD);
-        glBlendFunc(GL_ONE, GL_ZERO);
-        return;
-    }
-    const GsBlend blend = convertAlphaToBlend(u64(alpha));
+void applyBlend(const GsBlend& blend) {
     glBlendEquation(blend.equation);
     glBlendFunc(blend.src, blend.dst);
+    glBlendColor(0.0f, 0.0f, 0.0f, blend.fix);
+}
+
+/// PRIM without ABE: the GS writes the source and reads nothing back.
+void applySpriteBlend(const DrawSprite& sprite) {
+    applyBlend(sprite.blends ? convertAlphaToBlend(sprite.alpha) : GsBlend{});
 }
 
 /// PCSX2HOOK_GS_ONLY's own spec, so a frame cuts to the same draws on both sides.
@@ -721,7 +763,6 @@ void Renderer::drawMeshes(const Frame& frame, const std::vector<u32>& indices) {
         const Texture* texture = findTexture(handle);
         glUniform1i(texturedLoc, texture ? 1 : 0);
         const u32 function = texture ? sdfGetTex0Tfx(tex0) : u32(sdfTexModulate);
-        if (function > sdfTexDecal) reportUnsupported("GS TEX0 TFX", function);
         glUniform1i(functionLoc, int(function));
         glUniform1i(alphaLoc, texture && sdfGetTex0Tcc(tex0) ? 1 : 0);
         if (!texture) return;
@@ -837,9 +878,7 @@ void Renderer::drawMeshes(const Frame& frame, const std::vector<u32>& indices) {
         const u64 mask = mesh.gs.frameMask;
         glColorMask((mask & 0x0000FF) != 0x0000FF, (mask & 0x00FF00) != 0x00FF00,
                     (mask & 0xFF0000) != 0xFF0000, (mask & 0xFF000000u) != 0xFF000000u);
-        const GsBlend blend = convertAlphaToBlend(mesh.gs.alpha);
-        glBlendEquation(blend.equation);
-        glBlendFunc(blend.src, blend.dst);
+        applyBlend(convertAlphaToBlend(mesh.gs.alpha));
         glUniform1i(atest, sdfGetTestAte(mesh.gs.test) ? int(sdfGetTestAtst(mesh.gs.test)) : 1);
         glUniform1f(atestRef, f32(sdfGetTestAref(mesh.gs.test)));
 
@@ -864,9 +903,7 @@ void Renderer::drawMeshes(const Frame& frame, const std::vector<u32>& indices) {
 
         // corePktEmitMultiTexPass runs it again through the second UV set, in GS context 2.
         if (mesh.multi.on) {
-            const GsBlend second = convertAlphaToBlend(mesh.multi.alpha);
-            glBlendEquation(second.equation);
-            glBlendFunc(second.src, second.dst);
+            applyBlend(convertAlphaToBlend(mesh.multi.alpha));
             glUniform1i(mtexPass, mesh.multi.ramp ? 1 : (mesh.multi.algo == 3 ? 2 : 3));
             glUniform3fv(mtexDiffuse, 1, convertToGsUnits(mesh.multi.diffuse).v);
             glUniform1f(mtexConstant, mesh.multi.constant);
@@ -1014,7 +1051,7 @@ void Renderer::drawSprites(const Frame& frame, const std::vector<u32>& indices) 
                                            v.color.g / 255.0f, v.color.b / 255.0f,
                                            v.color.a / 255.0f});
         }
-        applyBlend(sprite.alpha);
+        applySpriteBlend(sprite);
         const u64 mask = sprite.frameMask;
         glColorMask((mask & 0x0000FF) != 0x0000FF, (mask & 0x00FF00) != 0x00FF00,
                     (mask & 0xFF0000) != 0xFF0000, (mask & 0xFF000000u) != 0xFF000000u);
