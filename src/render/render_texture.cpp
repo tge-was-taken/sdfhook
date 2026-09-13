@@ -39,7 +39,16 @@ bool RenderTexture::create(int width, int height) {
     glBindFramebuffer(GL_FRAMEBUFFER, mFramebuffer);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, mTexture, 0);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, mDepth);
-    const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+
+    glGenRenderbuffers(1, &mSavedDepth);
+    glBindRenderbuffer(GL_RENDERBUFFER, mSavedDepth);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH32F_STENCIL8, width, height);
+    glGenFramebuffers(1, &mSavedFramebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, mSavedFramebuffer);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
+                              mSavedDepth);
+    if (status == GL_FRAMEBUFFER_COMPLETE) status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     if (status != GL_FRAMEBUFFER_COMPLETE) {
         log.error("{}x{} target incomplete: 0x{:X}", width, height, status);
@@ -54,6 +63,10 @@ void RenderTexture::destroy() {
     glDeleteRenderbuffers(1, &mDepth);
     glDeleteTextures(1, &mTexture);
     glDeleteTextures(1, &mSnapshot);
+    glDeleteFramebuffers(1, &mSavedFramebuffer);
+    glDeleteRenderbuffers(1, &mSavedDepth);
+    mSavedFramebuffer = 0;
+    mSavedDepth = 0;
     mFramebuffer = 0;
     mDepth = 0;
     mTexture = 0;
@@ -78,6 +91,30 @@ u32 RenderTexture::copyColor() const {
     glBindTexture(GL_TEXTURE_2D, mSnapshot);
     glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, mWidth, mHeight);
     return mSnapshot;
+}
+
+namespace {
+
+// A blit is scissored, and the sprites leave the scissor on.
+void blitDepth(u32 from, u32 to, int width, int height) {
+    const GLboolean scissored = glIsEnabled(GL_SCISSOR_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, from);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, to);
+    glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+    if (scissored) glEnable(GL_SCISSOR_TEST);
+}
+
+}  // namespace
+
+void RenderTexture::saveDepth() const {
+    blitDepth(mFramebuffer, mSavedFramebuffer, mWidth, mHeight);
+    glBindFramebuffer(GL_FRAMEBUFFER, mFramebuffer);
+}
+
+void RenderTexture::restoreDepth() const {
+    blitDepth(mSavedFramebuffer, mFramebuffer, mWidth, mHeight);
+    glBindFramebuffer(GL_FRAMEBUFFER, mFramebuffer);
 }
 
 void RenderTexture::bind() const {

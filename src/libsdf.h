@@ -700,6 +700,8 @@ SDF_STATIC_ASSERT_OFFSETOF(sdfLoadImagePacket_t, dmatagFlush, 0x80);
 SDF_STATIC_ASSERT_OFFSETOF(sdfLoadImagePacket_t, giftagFlush, 0x90);
 SDF_STATIC_ASSERT_OFFSETOF(sdfLoadImagePacket_t, texflush, 0xA0);
 
+using sdfLoadImagePacketPtr_t = guest_ptr<sdfLoadImagePacket_t>;
+
 /// sdfSetStoreImage: a GS-to-host readback, with where it lands and the callback to run.
 struct sdfStoreImagePacket_t {
     sdfDmaTag_t dmaAnchor;
@@ -734,6 +736,8 @@ SDF_STATIC_ASSERT_OFFSETOF(sdfStoreImagePacket_t, callbackParam, 0xBC);
 SDF_STATIC_ASSERT_OFFSETOF(sdfStoreImagePacket_t, dmaFooter, 0xC0);
 SDF_STATIC_ASSERT_OFFSETOF(sdfStoreImagePacket_t, gifFooter, 0xD0);
 SDF_STATIC_ASSERT_OFFSETOF(sdfStoreImagePacket_t, footer, 0xE0);
+
+using sdfStoreImagePacketPtr_t = guest_ptr<sdfStoreImagePacket_t>;
 
 /// sdf2DMakeTexPacket
 struct sdf2DTexPacket_t {

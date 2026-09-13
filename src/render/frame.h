@@ -318,7 +318,8 @@ struct TextureUpload {
 
 /// One draw in the order the frame's DMA chain transmits it.
 struct DrawRef {
-    enum class Kind : u8 { Sprite, Mesh };
+    /// SaveDepth and RestoreDepth bracket passes that overwrite the depth buffer; index unused.
+    enum class Kind : u8 { Sprite, Mesh, SaveDepth, RestoreDepth };
     Kind kind;
     u32 index;
 };

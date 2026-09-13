@@ -3,6 +3,7 @@
 #include <bitset>
 #include <cstring>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -16,6 +17,7 @@
 #include "libsdf.h"
 #include "log.h"
 #include "packet_type.h"
+#include "render/sprite.h"
 #include "trace.h"
 #include "unsupported.h"
 
@@ -24,6 +26,41 @@ namespace sdfhook {
 namespace {
 
 LogChannel log("packets");
+
+/// One side of a GS memory transfer: a buffer, and the rectangle within it.
+struct GsRegion {
+    u32 base = 0;
+    u32 bufferWidth = 0;
+    u32 psm = 0;
+    u32 x = 0;
+    u32 y = 0;
+    u32 width = 0;
+    u32 height = 0;
+
+    bool operator==(const GsRegion&) const = default;
+};
+
+GsRegion getTransferSource(const sdfPrimBitBltElem_t& bitblt) {
+    const u64 buf = bitblt.bitbltbuf.data;
+    const u64 pos = bitblt.trxpos.data;
+    const u64 size = bitblt.trxreg.data;
+    return {u32(buf & 0x3FFF),        u32((buf >> 16) & 0x3F), u32((buf >> 24) & 0x3F),
+            u32(pos & 0x7FF),         u32((pos >> 16) & 0x7FF), u32(size & 0xFFF),
+            u32((size >> 32) & 0xFFF)};
+}
+
+GsRegion getTransferDestination(const sdfPrimBitBltElem_t& bitblt) {
+    const u64 buf = bitblt.bitbltbuf.data;
+    const u64 pos = bitblt.trxpos.data;
+    const u64 size = bitblt.trxreg.data;
+    return {u32((buf >> 32) & 0x3FFF), u32((buf >> 48) & 0x3F), u32((buf >> 56) & 0x3F),
+            u32((pos >> 32) & 0x7FF),  u32((pos >> 48) & 0x7FF), u32(size & 0xFFF),
+            u32((size >> 32) & 0xFFF)};
+}
+
+bool isDepthFormat(u32 psm) {
+    return psm == sdfPsmz32 || psm == sdfPsmz24 || psm == sdfPsmz16 || psm == sdfPsmz16s;
+}
 
 /// One DMA tag of the chain, as channel 1 reaches it.
 struct ChainEntry {
@@ -155,7 +192,8 @@ bool isModelNodeType(PacketType type) {
         case PacketType::FrameTex:
         case PacketType::DrawFrame:
         case PacketType::RefGif:
-        case PacketType::TextureUpload:
+        case PacketType::ImageStore:
+        case PacketType::ImageLoad:
         case PacketType::Clear:
         case PacketType::FrameBuffer:
         case PacketType::DirectRef:
@@ -205,7 +243,8 @@ private:
     void processViewportPacket(const ChainEntry& entry);
     void checkChainLighting(const DrawMesh& mesh);
     void processEmptyPacket(const ChainEntry& entry);
-    void processTransferPacket(const ChainEntry& entry, PacketType type);
+    void processImageStorePacket(const ChainEntry& entry);
+    void processImageLoadPacket(const ChainEntry& entry);
     void reportUnreadPacket(u32 at, PacketType type);
 
     bool decodeTransfer(const ChainEntry& entry);
@@ -255,6 +294,16 @@ private:
 
     /// The one z past 24 bits this frame, which the depth clamp orders nearest of all.
     u32 mWideZ = 0;
+
+    /// The depth buffer a store read back and no load has put back yet.
+    struct SavedDepth {
+        GsRegion region;
+        u32 buffer = 0;
+    };
+    std::optional<SavedDepth> mSavedDepth;
+
+    /// The store packet whose own transfer reads GS memory back.
+    u32 mStoreAt = 0;
     u32 mIdentityTm = 0;
 
     /// The last texture looked up was tried and cannot be had, as against still on its way.
@@ -459,8 +508,10 @@ void PacketProcessor::processPacketOfType(const ChainEntry& entry, PacketType ty
         case PacketType::VifSetup: processCarriedPacket(entry, type); break;
         case PacketType::Empty: processEmptyPacket(entry); break;
         case PacketType::Clear: processSpritePacket(entry); break;
-        case PacketType::BitBlt:
-        case PacketType::TextureUpload: processTransferPacket(entry, type); break;
+        // Its transfer stales what was read from GS memory there, which decodeTransfer passes on.
+        case PacketType::BitBlt: break;
+        case PacketType::ImageStore: processImageStorePacket(entry); break;
+        case PacketType::ImageLoad: processImageLoadPacket(entry); break;
         case PacketType::Count: reportUnsupported("packet type", u32(type)); break;
     }
 }
@@ -620,12 +671,44 @@ void PacketProcessor::processMaterialPacket(const ChainEntry& entry) {
     else reportUnsupported("material packet with no REF", entry.getId());
 }
 
-/// An upload stales what was read from GS memory there, which the decoder has passed on; a
-/// copy within GS memory the decoder reports.
-void PacketProcessor::processTransferPacket(const ChainEntry& entry, PacketType type) {
-    if (type == PacketType::TextureUpload && mDecoder.getUploads().empty() && !entry.stateOnly) {
-        reportUnsupported("texture upload packet with no IMAGE transfer", entry.tag.qwc);
+/// fldDrwZSave's read of the depth buffer, which a load puts back after passes that overwrite it.
+void PacketProcessor::processImageStorePacket(const ChainEntry& entry) {
+    const sdfStoreImagePacketPtr_t packet{entry.at};
+    if (!packet) {
+        reportUnsupported("image store outside guest memory", entry.at);
+        return;
     }
+    mStoreAt = entry.at;
+    const GsRegion source = getTransferSource(packet->bitblt);
+    const u32 zbp = u32(mDecoder.getRegister(sdfGsAddrZbuf1) & 0x1FF) * 32;
+    if (!isDepthFormat(source.psm) || source.base != zbp) {
+        reportUnsupported("GS read back of other than the depth buffer", source.base);
+        return;
+    }
+    if (packet->callback) reportUnsupported("GS read back handed to a callback", packet->callback);
+    if (source.x || source.y || f32(source.width) < kGuestWidth || f32(source.height) < kGuestHeight) {
+        reportUnsupported("GS read back of part of the depth buffer", source.width);
+    }
+    if (mSavedDepth) reportUnsupported("depth read back twice before a load", source.base);
+    mSavedDepth = SavedDepth{source, packet->addr.addr & 0x0FFFFFFFu};
+    mFrame.order.push_back({DrawRef::Kind::SaveDepth, 0});
+}
+
+/// fldDrwZLoad puts the depth buffer back from the buffer a store filled.
+void PacketProcessor::processImageLoadPacket(const ChainEntry& entry) {
+    const sdfLoadImagePacketPtr_t packet{entry.at};
+    if (!packet) {
+        reportUnsupported("image load outside guest memory", entry.at);
+        return;
+    }
+    const GsRegion destination = getTransferDestination(packet->bitblt);
+    const u32 buffer = packet->dmatagData.addr & 0x0FFFFFFFu;
+    if (!mSavedDepth || mSavedDepth->buffer != buffer || !(mSavedDepth->region == destination)) {
+        reportUnsupported("image load that restores no saved depth", destination.base);
+        return;
+    }
+    mSavedDepth.reset();
+    mFrame.order.push_back({DrawRef::Kind::RestoreDepth, 0});
 }
 
 void PacketProcessor::processEmptyPacket(const ChainEntry& entry) {
@@ -647,10 +730,13 @@ bool PacketProcessor::decodeTransfer(const ChainEntry& entry) {
     for (const GsUpload& upload : mDecoder.getUploads()) {
         h.textures.onGsUpload(upload.bitbltbuf, upload.trxreg);
         const u32 dpsm = u32((upload.bitbltbuf >> 56) & 0x3F);
-        if (dpsm == sdfPsmz32 || dpsm == sdfPsmz24 || dpsm == sdfPsmz16 || dpsm == sdfPsmz16s) {
+        if (isDepthFormat(dpsm) && getType(entry.at) != PacketType::ImageLoad) {
             reportUnsupported("depth buffer written by an IMAGE transfer", dpsm);
         }
     }
+    const bool inStore = mStoreAt && entry.at >= mStoreAt &&
+                         entry.at < mStoreAt + sizeof(sdfStoreImagePacket_t);
+    if (!mDecoder.getReadbacks().empty() && !inStore) reportUnsupported("GS read back to the host", 0);
     // FBP counts 2048-word pages, TBP0 64-word blocks.
     for (const u32 frame : {sdfGsAddrFrame1, sdfGsAddrFrame2}) {
         if (mDecoder.getWritten()[frame]) {

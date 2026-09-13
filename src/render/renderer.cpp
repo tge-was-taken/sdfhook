@@ -830,6 +830,14 @@ void Renderer::draw(const Frame& frame) {
     mRun.clear();
     for (usize i = 0; i < frame.order.size(); i++) {
         const DrawRef ref = frame.order[i];
+        if (ref.kind == DrawRef::Kind::SaveDepth) {
+            mFrames[mCurrent].saveDepth();
+            continue;
+        }
+        if (ref.kind == DrawRef::Kind::RestoreDepth) {
+            mFrames[mCurrent].restoreDepth();
+            continue;
+        }
         mRun.push_back(ref.index);
         if (i + 1 < frame.order.size() && frame.order[i + 1].kind == ref.kind) continue;
         if (ref.kind == DrawRef::Kind::Mesh) drawMeshes(frame, mRun);

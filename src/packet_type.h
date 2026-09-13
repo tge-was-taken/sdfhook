@@ -48,7 +48,8 @@ enum class PacketType : u8 {
     FrameTex,
     DrawFrame,
     RefGif,
-    TextureUpload,
+    ImageStore,
+    ImageLoad,
     Clear,
     FrameBuffer,
     DirectRef,
@@ -105,7 +106,8 @@ constexpr const char* getPacketTypeName(PacketType type) {
         case PacketType::LightParallel: return "light";
         case PacketType::Fog: return "fog";
         case PacketType::Material: return "material";
-        case PacketType::TextureUpload: return "texUpload";
+        case PacketType::ImageStore: return "imageStore";
+        case PacketType::ImageLoad: return "imageLoad";
         case PacketType::Clear: return "clear";
         case PacketType::FrameBuffer: return "frameBuffer";
         case PacketType::DirectRef: return "directRef";

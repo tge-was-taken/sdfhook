@@ -2386,7 +2386,12 @@ right.
         from the uploads themselves scored 1.274, because the queue is sent at the next
         `sdfGrDrawFrame`, which can be for an earlier chain than the one built beside it. No
         capture streams anything but the movie; the only in-chain IMAGE transfer is
-        `sdfSetLoadImage`'s depth buffer, reported.
+        `sdfSetLoadImage`'s depth buffer.
+      - **Depth save and load.** `fldDrwZSave` reads the depth buffer back to main memory before
+        the shadow passes and `fldDrwZLoad` loads it again after them. The pair is matched by its
+        buffer and rectangle and the renderer saves and restores its own depth there; anything
+        else read back or loaded is reported. 019 6.846 -> 6.684, 008 4.968 -> 4.723, 007 6.037
+        -> 5.938, underground 4.371 -> 4.367, the rest unchanged.
       - **Feedback after a load.** `fldDrawFrameSprite` blends 0.375 of the previous frame, which
         the renderer lacks for its first frame after a state load, so the image converged from
         black: 020 scored 8.7 at frame 6 and 2.7 at frame 10. The first frame's previous is read

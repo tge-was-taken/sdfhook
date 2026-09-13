@@ -92,6 +92,7 @@ sdfGsState_t GsDecoder::getContext(u32 context) const {
 void GsDecoder::feed(const sdfDmaTag_t& tag, u32 dataAddr) {
     mPrimitives.clear();
     mUploads.clear();
+    mReadbacks.clear();
     mWritten.reset();
     mKicked = false;
     mFedVu = false;
@@ -358,7 +359,10 @@ void GsDecoder::writeRegister(u32 address, u64 value) {
         }
         case sdfGsAddrTrxdir:
             if ((value & 3) == kTrxLocalToLocal) reportUnsupported("GS local-to-local copy", 0);
-            if ((value & 3) == kTrxLocalToHost) reportUnsupported("GS read back to the host", 0);
+            if ((value & 3) == kTrxLocalToHost) {
+                mReadbacks.push_back({mReg[sdfGsAddrBitbltbuf], mReg[sdfGsAddrTrxpos],
+                                      mReg[sdfGsAddrTrxreg], value, 0});
+            }
             break;
         case sdfGsAddrHwreg: reportUnsupported("GS image data through HWREG", 0); break;
         case sdfGsAddrTex01:

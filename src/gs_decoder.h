@@ -77,6 +77,7 @@ public:
     /// What the last transfer did.
     const std::vector<GsPrimitive>& getPrimitives() const { return mPrimitives; }
     const std::vector<GsUpload>& getUploads() const { return mUploads; }
+    const std::vector<GsUpload>& getReadbacks() const { return mReadbacks; }
     const std::bitset<128>& getWritten() const { return mWritten; }
 
     /// GIF data and nothing but register writes: no vertex, no image, no VU1 input.
@@ -120,6 +121,7 @@ private:
 
     std::vector<GsPrimitive> mPrimitives;
     std::vector<GsUpload> mUploads;
+    std::vector<GsUpload> mReadbacks;
     std::bitset<128> mWritten;
     bool mKicked = false;
     bool mFedVu = false;

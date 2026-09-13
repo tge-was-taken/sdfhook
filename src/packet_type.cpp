@@ -57,8 +57,8 @@ PacketBuilder getPacketBuilder(const char* symbol) {
         {"sdfPrimSetBitBltPacket", PacketType::BitBlt, 0},
         {"sdf3DSetDefaultFog", PacketType::Fog, 0},
         {"frCreateDrawEnvPacket", PacketType::DrawEnv, 0},
-        {"sdfSetStoreImage", PacketType::TextureUpload, 0},
-        {"sdfSetLoadImage", PacketType::TextureUpload, 0},
+        {"sdfSetStoreImage", PacketType::ImageStore, 0},
+        {"sdfSetLoadImage", PacketType::ImageLoad, 0},
     };
     for (const Entry& entry : kBuilders) {
         if (std::strcmp(entry.symbol, symbol) != 0) continue;
@@ -188,7 +188,8 @@ bool isDrawType(PacketType type) {
         case PacketType::FrameTex:
         case PacketType::DrawFrame:
         case PacketType::RefGif:
-        case PacketType::TextureUpload:
+        case PacketType::ImageStore:
+        case PacketType::ImageLoad:
         case PacketType::Clear:
         case PacketType::FrameBuffer:
         case PacketType::DirectRef:
