@@ -2448,11 +2448,10 @@ right.
 - [ ] **P8: frame-setup packets are checked, not used.** Light and fog packets (inline from
       `dds3InitDrawEnvSub` and `dds3FirstProcess`, and each root's by a REF past its tag) set what
       VU1 lights and fogs a stream with; the processor tracks them and reports a stream mesh lit
-      otherwise. The field scenes check clean. Battle has 115 stream meshes a run whose chain
-      light (root 0x62AC00's) is not the one their own root names: lighting those by the chain's
-      left battle at 4.265, moved capture 013 14.3 -> 10.5 and 015 10.5 -> 18.7, so it stays
-      the root's until the VU1 light upload for a lightless root is read. A viewport packet whose
-      depth mapping is not `sdf3DScreenParam`'s is reported (main menu, underground).
+      otherwise. Every savestate and capture checks clean now, battle's 11,735 stream meshes
+      included. It had 115 a run whose chain light (root 0x62AC00's) was not their root's at
+      db36ebd; which change since closed that was not isolated. A viewport packet whose depth mapping is not
+      `sdf3DScreenParam`'s is reported, and none is.
       `MeshLighting::specularAxis` is never set: `corePktEmitRefMapPass` builds it from the light
       packet's last TM row, rotated by `corePktWorldLightMtxCache` unless the mesh is weighted
       (0x2B8D2C..0x2B8D80, COP2 to decode), so every reflection pass samples column 0.
