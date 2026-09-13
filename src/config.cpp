@@ -59,8 +59,6 @@ Config Config::readEnvironment() {
     config.debugDepth = readFlag("SDF_DEBUG_DEPTH");
     config.debugNormal = readFlag("SDF_DEBUG_NORMAL");
     config.drawPrimPoly = !readFlag("SDF_NO_PRIM_POLY");
-    config.faceDivSoften = readReal("SDF_FACEDIV_SOFTEN", 7.0f);
-    config.faceDivBias = readReal("SDF_FACEDIV_BIAS", 0.0f);
     config.pixelOffsetX = readReal("SDF_PIXEL_OFFSET_X", 0.5f);
     config.pixelOffsetY = readReal("SDF_PIXEL_OFFSET_Y", 0.5f);
 

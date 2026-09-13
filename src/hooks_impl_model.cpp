@@ -1,3 +1,4 @@
+#include <bit>
 #include <cstddef>
 #include <cstring>
 #include <vector>
@@ -24,14 +25,11 @@ LogChannel log("model");
 
 // 0x2B9230/0x2B923C: sdfCorePacketGen keeps its two float arguments in $f20 and $f21 and hands
 // them straight back, so entry is where they can be read.
-void ModelHooks::setFaceDivTerms(f32 soften, f32 bias) {
-    if (!mParser.mFaceDivTermsSeen && mParser.mConfig) {
-        log.info("face division terms from the guest: soften {} bias {}, fitted {} {}", soften, bias,
-                 mParser.mConfig->faceDivSoften, mParser.mConfig->faceDivBias);
+void ModelHooks::checkFaceDivTerms(f32 soften, f32 bias) {
+    if (soften != mParser.mFaceDivSoftenTerm || bias != mParser.mFaceDivBiasTerm) {
+        reportUnsupported("sdfCorePacketGen faceDiv terms other than its root's",
+                          std::bit_cast<u32>(soften));
     }
-    mParser.mFaceDivSoftenTerm = soften;
-    mParser.mFaceDivBiasTerm = bias;
-    mParser.mFaceDivTermsSeen = true;
 }
 // 0x2B6DF4 and 0x2B6E30 read the coordinate's scale from [0].w and its offset from [0].y, and
 // 0x2B6E80 interpolates [16] to [16]+[32] across it.
@@ -171,10 +169,8 @@ void ModelHooks::readMaterialPacket(const sdfMat_t& material, DrawMesh& mesh,
 
     // 0x2B6A4C: read off the material *packet* at +44 and +40, plus the root's, soften clamped to
     // at least one. sdfMat_t carries the same two fields at 0x44 and 0x40 with different values.
-    const f32 softenTerm = mParser.mFaceDivTermsSeen ? mParser.mFaceDivSoftenTerm : mParser.mConfig->faceDivSoften;
-    const f32 biasTerm = mParser.mFaceDivTermsSeen ? mParser.mFaceDivBiasTerm : mParser.mConfig->faceDivBias;
-    mesh.multi.soften = std::max(packet->fdSoften + softenTerm, 1.0f);
-    mesh.multi.bias = packet->fdBias + biasTerm;
+    mesh.multi.soften = std::max(packet->fdSoften + mParser.mFaceDivSoftenTerm, 1.0f);
+    mesh.multi.bias = packet->fdBias + mParser.mFaceDivBiasTerm;
     mesh.faceDivSoften = mesh.multi.soften;
     mesh.faceDivBias = mesh.multi.bias;
 
@@ -268,11 +264,11 @@ void ModelHooks::sdfModelLinkOt(sdfModelRootNodePtr_t aRoot, Frame* frame) {
     mParser.reportFaceDiv("sdfModelLinkOt faceDivBias", (root->flags & sdfModelRootOwnFaceDivBias)
                                                     ? root->faceDivBias
                                                     : mParser.mSdfFaceDivBias.readOr());
-    // The terms reach sdfCorePacketGen in $f12 and $f13, so Config's values are only the first
-    // frame's fallback.
-    if (root->flags & sdfModelRootOwnFaceDivBias) {
-        reportUnsupported("sdfModelLinkOt root faceDiv terms", root->flags);
-    }
+    // 0x2B1E74..0x2B1E84: the terms sdfCorePacketGen gets in $f12 and $f13, the root's own under
+    // flags & 2, else the globals.
+    const bool ownTerms = (root->flags & sdfModelRootOwnFaceDivBias) != 0;
+    mParser.mFaceDivSoftenTerm = ownTerms ? root->faceDivSoften : mParser.mSdfFaceDivSoften.readOr();
+    mParser.mFaceDivBiasTerm = ownTerms ? root->faceDivBias : mParser.mSdfFaceDivBias.readOr();
     if (const u8 soften = mParser.mCorePktSoftenBias.readOr()) {
         reportUnsupported("corePktSoftenBias", soften);
     }
@@ -469,9 +465,10 @@ void ModelHooks::sdfModelTempPacketLinkOt(guest_ref<sdfModelRootNode_t> root, Fr
 
     // 0x2B19FC..0x2B1A17: this walk takes faceDivSoften where sdfModelLinkOt takes faceDivBias,
     // and falls back to its own global.
-    mParser.reportFaceDiv("sdfModelTempPacketLinkOt faceDivSoften",
-                  (root->flags & sdfModelRootOwnFaceDivBias) ? root->faceDivSoften
-                                                             : mParser.mSdfFaceDivSoften.readOr());
+    const bool ownTerms = (root->flags & sdfModelRootOwnFaceDivBias) != 0;
+    mParser.mFaceDivSoftenTerm = ownTerms ? root->faceDivSoften : mParser.mSdfFaceDivSoften.readOr();
+    mParser.mFaceDivBiasTerm = ownTerms ? root->faceDivBias : mParser.mSdfFaceDivBias.readOr();
+    mParser.reportFaceDiv("sdfModelTempPacketLinkOt faceDivSoften", mParser.mFaceDivSoftenTerm);
     mParser.mTrace.countTempPacketWalk();
 
     const sdfModelNodeListPtr_t list = root->nodeList;

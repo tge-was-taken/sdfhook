@@ -57,12 +57,6 @@ struct Config {
     /// How every sdf3DPrim producer reaches the screen.
     bool drawPrimPoly = true;
 
-    /// Fitted, not read: $f16 into sdfCorePacketGen, never shown assigned in the decompilation.
-    f32 faceDivSoften = 7.0f;
-
-    /// Moves the terminator rather than sharpening it. $f17, also fitted.
-    f32 faceDivBias = 0.0f;
-
     /// GL rasterises at pixel centres, the GS covers every pixel an edge reaches; and the target
     /// is twice the guest's height, so the two axes differ.
     f32 pixelOffsetX = 0.0f;

@@ -379,7 +379,7 @@ int sdfCorePacketGenHook(pcsx2hook_regs* regs, void* user) {
     HookContext& h = *static_cast<HookContext*>(user);
     h.trace->onSdfCorePacketGen(c.getArg(0), c.getArg(1), c.getArg(2), c.getArg(3));
     // 0x2B91A8/0x2B91B0: the face-division terms arrive here as $f12 and $f13.
-    h.modelHooks.setFaceDivTerms(regs->fpr[12], regs->fpr[13]);
+    h.modelHooks.checkFaceDivTerms(regs->fpr[12], regs->fpr[13]);
     h.model.getTrace().countGuestGenerated();
     return PCSX2HOOK_CONTINUE;
 }

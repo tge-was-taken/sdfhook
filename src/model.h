@@ -268,11 +268,9 @@ private:
     sdf3DLightDefaultPtr_t mSdf3DLightDefault;
     sdf3DFogDefaultPtr_t mSdf3DFogDefault;
 
-    // $f12 and $f13 into sdfCorePacketGen. The walk runs ahead of generation, so a frame uses
-    // the previous frame's pair and only the first falls back to the fitted config values.
+    // $f12 and $f13 into sdfCorePacketGen, taken from the root as sdfModelLinkOt takes them.
     f32 mFaceDivSoftenTerm = 0.0f;
     f32 mFaceDivBiasTerm = 0.0f;
-    bool mFaceDivTermsSeen = false;
     bool mFaceDivParmSeen = false;
     // Per material packet, so the second pass interpolates the engine's endpoints, not ours.
     std::unordered_map<u32, MeshRamp> mFaceDivRamps;

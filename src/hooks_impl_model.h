@@ -20,10 +20,8 @@ public:
 
     void sdfModelLinkOt(sdfModelRootNodePtr_t aRoot, Frame* frame);
 
-    /// So the ramp's coordinate is read from the guest rather than fitted.
-    /// @fn corePktSetFaceDivParm
-    /// @note SLUS-20911 0x002B6A30
-    void setFaceDivTerms(f32 soften, f32 bias);
+    /// The terms sdfCorePacketGen receives, against the ones the walk took from its root.
+    void checkFaceDivTerms(f32 soften, f32 bias);
 
     /// Reads the ramp corePktMakeFaceDivParm left on the caller's stack, keyed by the material
     /// packet the cb names.

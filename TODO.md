@@ -1023,7 +1023,10 @@ right.
       `sdfCorePacketGen` takes them in `$f16`/`$f17` and that neither could be read. Both halves were
       wrong. 0x2B91A8 and 0x2B91B0 save **`$f12` and `$f13`** into `$f20`/`$f21` and 0x2B9230/0x2B923C
       hand them straight back to `corePktSetFaceDivParm`, so a pre-hook at the entry reads them out
-      of `regs->fpr`. `setFaceDivTerms` does that; Config is now only the first-frame fallback.
+      of `regs->fpr`. The walk now takes them where `sdfModelLinkOt` does (0x2B1E74..0x2B1E84:
+      the root's own under flags & 2, else `sdfFaceDivSoften` and `sdfFaceDivBias`), before its
+      meshes are made, and `checkFaceDivTerms` holds the call's pair to it. Config's fitted pair is
+      gone; a root with its own terms had been drawn with the previous call's.
 
       The guest's values on field unknown realm are **soften 7, bias 0**, which is what the sweep
       below had fitted, so that scene does not move. `smt3_field_underground_facility` does, 6.338 to
@@ -1039,8 +1042,8 @@ right.
 
       Both minima land exactly on the globals `sdfFaceDivSoften` (7) and `sdfFaceDivBias` (0), which
       is independent confirmation of two values the disassembly can only be guessed at for. They are
-      `Config::faceDivSoften` and `faceDivBias` (`SDF_FACEDIV_SOFTEN`, `SDF_FACEDIV_BIAS`), each
-      documented as fitted so the next reader can re-derive rather than trust them.
+      `Config::faceDivSoften` and `faceDivBias` (`SDF_FACEDIV_SOFTEN`, `SDF_FACEDIV_BIAS`) until
+      the walk read them from the root.
 
       Scores do not move from the placeholder `0.5 + 0.5*dot`, and the reason is measured rather
       than assumed: the second pass shows only through a mask that is 72% transparent, and on the
