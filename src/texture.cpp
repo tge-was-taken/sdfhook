@@ -68,7 +68,8 @@ void TextureCache::add(TMX_HEADER_PTR_t aTex, TexHandle handle, Frame* frame) {
 
     const bool fourBit = tmx.pixelFormat == sdfPsmt4;
     const bool paletted = fourBit || tmx.pixelFormat == sdfPsmt8;
-    if (!paletted && tmx.pixelFormat != sdfPsmct32) {
+    const bool packed24 = tmx.pixelFormat == sdfPsmct24;
+    if (!paletted && !packed24 && tmx.pixelFormat != sdfPsmct32) {
         reportUnsupported("TMX pixelFormat", tmx.pixelFormat);
         mFailed++;
         return;
@@ -79,7 +80,7 @@ void TextureCache::add(TMX_HEADER_PTR_t aTex, TexHandle handle, Frame* frame) {
 
     const u32 dataStart = aTex.addr + (tmx.compression & 0xF0) + sdfTmxDataGap;
     const usize texels = usize(width) * height;
-    const usize pixelBytes = fourBit ? texels / 2 : (paletted ? texels : texels * 4);
+    const usize pixelBytes = fourBit ? texels / 2 : paletted ? texels : texels * (packed24 ? 3 : 4);
 
     const u8* pixels = u8Ptr_t{dataStart + clutBytes}.slice(u32(pixelBytes));
     const u8* clutSource =
@@ -106,6 +107,12 @@ void TextureCache::add(TMX_HEADER_PTR_t aTex, TexHandle handle, Frame* frame) {
     upload.rgba.resize(texels * 4);
     for (usize texel = 0; texel < texels; texel++) {
         u8* out = &upload.rgba[texel * 4];
+        if (packed24) {
+            // The GS takes a 24-bit texel's alpha from TEXA at the draw.
+            std::memcpy(out, pixels + texel * 3, 3);
+            out[3] = 0x80;
+            continue;
+        }
         if (!paletted) {
             std::memcpy(out, pixels + texel * 4, 4);
             continue;

@@ -2406,6 +2406,20 @@ right.
         from TEXA's TA0, where we sampled the target's own. Underground 4.910 -> 4.371 against
         4.287 hooked; unknown realm 4.591 -> 4.240.
 
+- [ ] **X10: what a play session met that no savestate has.** A 12,511-frame window run (a build
+      from before the frame-setup packets were consumed) reported, beyond what is fixed since:
+      - Materials with the multi-texture bit whose `mtexAlgo` reads as a color (0x80XXXXXX, 22
+        values), with `mtexAlpha` giving ALPHA reserved terms (0x83, 0xC2, 0x2E, ...) and a second
+        TEX0 past 1024 texels. The guest reads the same words (0x2B8C6C..0x2B8C8C), so either the
+        engine really sends that pass or we read the wrong packet of the material's two. The walk
+        reads the one filled last frame, since `sdfMatListUpdatePacket` rewrites this frame's after
+        the entry, so a material's first frame reads a packet nothing has filled yet; that would
+        give exactly these words. The algo path itself is modelled now: past 3 the pass keeps the
+        first pass's colors.
+      - `sdfModelTempPacketLinkOt` running, and a 24-bit TMX asset (decoded now; a mesh that
+        samples one is reported, since TEXA sets its alpha and only the sprite shader applies it).
+      An F9 capture of each scene is what it takes to measure them.
+
 - [ ] **X7: a run whose GL is llvmpipe aborts at exit**, in a thread-local destructor of an
       unloaded library. With `GALLIUM_DRIVER=d3d12` it exits cleanly.
 

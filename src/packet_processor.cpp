@@ -1090,6 +1090,10 @@ void PacketProcessor::emitMeshes(u32 packet) {
         // VU1 places a poly by the transform in force at its packet.
         if (mesh.chainTransform && mesh.bones.size() == 1) mesh.bones[0] = mPrimTransform;
         checkChainLighting(mesh);
+        // A 24-bit texel's alpha is TEXA's, which only the sprite shader applies.
+        if ((mesh.attrBits & sdfCoreAttrTextured) && GsTex0::decode(mesh.tex0).psm == sdfPsmct24) {
+            reportUnsupported("mesh with a 24-bit texture", u32(mDecoder.getRegister(sdfGsAddrTexa)));
+        }
         if (!h.config->noTransmitState) mesh.gs = mDecoder.getContext(0);
         mFrame.order.push_back({DrawRef::Kind::Mesh, index});
         h.coverage.placedDraws[mesh.producer]++;
