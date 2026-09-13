@@ -214,6 +214,15 @@ struct DrawMesh {
 
     /// Drawn by VU1's spriteOne..spriteFour, which unpack no material.
     bool billboard = false;
+
+    /// A billboard's centre, camera axes and corner offsets, so its corners can be rebuilt under
+    /// the transform the chain sends its batch with.
+    struct BillboardFrame {
+        f32 centre[3];
+        f32 right[3];
+        f32 up[3];
+        f32 offset[4][2];
+    } billboardFrame{};
     Rgba ambient{0x80, 0x80, 0x80, 0x80};
     Rgba specular{0, 0, 0, 0};
 

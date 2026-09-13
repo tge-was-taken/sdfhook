@@ -1424,6 +1424,7 @@ struct sdfBillBoardTMPacket_t {
     u32 pad[3];
 };
 SDF_STATIC_ASSERT_SIZE(sdfBillBoardTMPacket_t, 56);
+using sdfBillBoardTMPacketPtr_t = guest_ptr<sdfBillBoardTMPacket_t>;
 SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardTMPacket_t, dma_qwc, 0x00);
 SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardTMPacket_t, dma_pad, 0x02);
 SDF_STATIC_ASSERT_OFFSETOF(sdfBillBoardTMPacket_t, dma_id, 0x03);

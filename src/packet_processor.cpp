@@ -196,9 +196,11 @@ private:
     void processTexBindPacket(const ChainEntry& entry);
     void processGsStatePacket(const ChainEntry& entry, PacketType type);
     void processCarriedPacket(const ChainEntry& entry, PacketType type);
-    void processTransformPacket(const ChainEntry& entry, PacketType type);
-    void processMaterialPacket(const ChainEntry& entry, PacketType type);
+    void processTransformPacket(const ChainEntry& entry);
+    void processMaterialPacket(const ChainEntry& entry);
     void processLightPacket(const ChainEntry& entry);
+    void processBillboardTransformPacket(const ChainEntry& entry);
+    void placeBillboardCorners(DrawMesh& mesh) const;
     void processFogPacket(const ChainEntry& entry);
     void processViewportPacket(const ChainEntry& entry);
     void checkChainLighting(const DrawMesh& mesh);
@@ -249,6 +251,7 @@ private:
     sdfMatPacketPtr_t mPrimMaterial;
     sdf3DLightParallelPacketPtr_t mChainLight;
     sdf3DFogPacketPtr_t mChainFog;
+    f32 mBillboardTm[6] = {1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
     u32 mIdentityTm = 0;
 
     /// The last texture looked up was tried and cannot be had, as against still on its way.
@@ -437,20 +440,20 @@ void PacketProcessor::processPacketOfType(const ChainEntry& entry, PacketType ty
         case PacketType::DrawFrame:
         case PacketType::FrameBuffer:
         case PacketType::RefGif:
-        case PacketType::GifRegisters: processGsStatePacket(entry, type); break;
-        case PacketType::Transform: processTransformPacket(entry, type); break;
+        case PacketType::GifRegisters:
+        case PacketType::DirectRef: processGsStatePacket(entry, type); break;
+        case PacketType::Transform: processTransformPacket(entry); break;
         case PacketType::LightParallel: processLightPacket(entry); break;
         case PacketType::Fog: processFogPacket(entry); break;
         case PacketType::Viewport: processViewportPacket(entry); break;
-        case PacketType::Material: processMaterialPacket(entry, type); break;
+        case PacketType::Material: processMaterialPacket(entry); break;
         // Our shaders stand in for the microcode, so there is nothing in it to read.
         case PacketType::VuMicrocode: break;
         case PacketType::Terminator: processEmptyPacket(entry); break;
         case PacketType::TransformRef:
         case PacketType::MaterialRef:
         case PacketType::DrawParams:
-        case PacketType::BillboardTransform:
-        case PacketType::DirectRef:
+        case PacketType::BillboardTransform: processBillboardTransformPacket(entry); break;
         case PacketType::PacketHeader:
         case PacketType::VifSetup: processCarriedPacket(entry, type); break;
         case PacketType::Empty: processEmptyPacket(entry); break;
@@ -522,7 +525,7 @@ void PacketProcessor::processCarriedPacket(const ChainEntry& entry, PacketType t
 
 /// sdf3DPrimSetTmPacket's matrix, which VU1 places the polys after it by. A model node's own
 /// transforms are its span's, and a producer's hook may still carry this one.
-void PacketProcessor::processTransformPacket(const ChainEntry& entry, PacketType type) {
+void PacketProcessor::processTransformPacket(const ChainEntry& entry) {
     const u32 target = entry.getRefTarget();
     const sdfMatrix4Ptr_t matrix{target ? target : entry.at + sdfQwordBytes};
     if (!matrix) {
@@ -530,7 +533,33 @@ void PacketProcessor::processTransformPacket(const ChainEntry& entry, PacketType
         return;
     }
     std::memcpy(&mPrimTransform, &*matrix, sizeof(mPrimTransform));
-    processCarriedPacket(entry, type);
+}
+
+/// matrixScale's axes and offset (0x05FB), which the sprite programs build every corner from.
+void PacketProcessor::processBillboardTransformPacket(const ChainEntry& entry) {
+    const sdfBillBoardTMPacketPtr_t packet{entry.at};
+    if (!packet || entry.getRefTarget()) {
+        reportUnsupported("billboard transform not sent inline", entry.getId());
+        return;
+    }
+    std::memcpy(mBillboardTm, packet->tm, sizeof(mBillboardTm));
+}
+
+/// A corner is the centre plus axisU * x + axisV * y + the offset, in the camera's own plane.
+void PacketProcessor::placeBillboardCorners(DrawMesh& mesh) const {
+    static constexpr f32 kIdentity[6] = {1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
+    if (std::memcmp(mBillboardTm, kIdentity, sizeof(kIdentity)) == 0) return;
+    const DrawMesh::BillboardFrame& frame = mesh.billboardFrame;
+    for (usize c = 0; c < 4 && c < mesh.vertices.size(); c++) {
+        const f32 x = frame.offset[c][0];
+        const f32 y = frame.offset[c][1];
+        const f32 across = mBillboardTm[0] * x + mBillboardTm[2] * y + mBillboardTm[4];
+        const f32 down = mBillboardTm[1] * x + mBillboardTm[3] * y + mBillboardTm[5];
+        MeshInfluence& at = mesh.vertices[c].influence[0];
+        at.x = frame.centre[0] + frame.right[0] * across + frame.up[0] * down;
+        at.y = frame.centre[1] + frame.right[1] * across + frame.up[1] * down;
+        at.z = frame.centre[2] + frame.right[2] * across + frame.up[2] * down;
+    }
 }
 
 /// VU1 lights and fogs a stream with the last light and fog the chain uploaded, whoever linked
@@ -584,11 +613,10 @@ void PacketProcessor::checkChainLighting(const DrawMesh& mesh) {
 
 /// sdf3DPrimLinkMat's material, which VU1 textures the polys after it with. A model node's own
 /// materials are its span's.
-void PacketProcessor::processMaterialPacket(const ChainEntry& entry, PacketType type) {
+void PacketProcessor::processMaterialPacket(const ChainEntry& entry) {
     const u32 target = entry.getRefTarget();
     if (target) mPrimMaterial = sdfMatPacketPtr_t{target};
     else reportUnsupported("material packet with no REF", entry.getId());
-    processCarriedPacket(entry, type);
 }
 
 /// An upload stales what was read from GS memory there, which the decoder has passed on; a
@@ -960,6 +988,7 @@ void PacketProcessor::emitMeshes(u32 packet) {
         if (mesh.billboard) {
             takeChainTexture(mesh);
             scaleTexelUvs(mesh);
+            placeBillboardCorners(mesh);
         }
         if (mesh.chainTransform && (mesh.attrBits & sdfCoreAttrTextured)) takePrimMaterial(mesh);
         // VU1 places a poly by the transform in force at its packet.

@@ -917,9 +917,16 @@ void ModelHooks::sdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Fram
         // Texels from the batch's 12.4; the texture and its size are the chain's.
         constexpr f32 kTexel = 1.0f / 16.0f;
         mesh.vertices.resize(4);
+        for (usize axis = 0; axis < 3; axis++) {
+            mesh.billboardFrame.centre[axis] = centre[axis];
+            mesh.billboardFrame.right[axis] = right[axis];
+            mesh.billboardFrame.up[axis] = up[axis];
+        }
         for (u32 c = 0; c < 4; c++) {
             MeshVertex& out = mesh.vertices[c];
             const VTX_t& at = offset[c];
+            mesh.billboardFrame.offset[c][0] = at.x;
+            mesh.billboardFrame.offset[c][1] = at.y;
             const sdfVector3_t world{centre.x + right[0] * at.x + up[0] * at.y,
                                      centre.y + right[1] * at.x + up[1] * at.y,
                                      centre.z + right[2] * at.x + up[2] * at.y};
