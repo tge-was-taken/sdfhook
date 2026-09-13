@@ -183,6 +183,10 @@ public:
     void submit();
     void end();
 
+    /// Hands the submitted frame to the renderer with the textures it saw for the first time,
+    /// which the frame callback reads from GS memory before calling this.
+    void flushHeld();
+
     u64 getSubmittedFrames() const { return mSubmittedFrames; }
     u64 getDiscardedFrames() const { return mDiscardedFrames; }
 
@@ -194,6 +198,7 @@ private:
     TextureCache* mTextures = nullptr;
     Trace* mTrace = nullptr;
     Frame* mBuilding = nullptr;
+    Frame* mHeld = nullptr;
     std::vector<LinkedPacket> mPending;
     bool mSubmitted = false;
     u64 mSubmittedFrames = 0;

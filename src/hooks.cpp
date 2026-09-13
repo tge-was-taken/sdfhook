@@ -906,9 +906,17 @@ void FrameBuilder::submit() {
             if (ref.kind == DrawRef::Kind::Sprite) mTrace->onSprite(mBuilding->sprites[ref.index]);
         }
     }
-    mRenderer->submit(mBuilding);
+    if (mHeld) flushHeld();
+    mHeld = mBuilding;
     mBuilding = nullptr;
     mClaims.clear();
+}
+
+void FrameBuilder::flushHeld() {
+    if (!mHeld || !mRenderer) return;
+    if (mTextures) mTextures->drainRecovered(*mHeld);
+    mRenderer->submit(mHeld);
+    mHeld = nullptr;
 }
 
 void FrameBuilder::end() {

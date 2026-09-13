@@ -48,6 +48,12 @@ public:
     /// An IMAGE transfer replaced part of GS memory, so what was read from there is stale.
     void onGsUpload(u64 bitbltbuf, u64 trxreg);
 
+    /// A frame buffer sampled before the renderer has a previous frame of its own: a state starts
+    /// mid-scene, and until then only GS memory holds the frame before.
+    void wantFrameSeed(u64 tex0) {
+        if (!mFrameSeedRead) mWantedFrameSeed = tex0;
+    }
+
     /// Call only from the frame callback: the read blocks on the GS thread, unsafe from a hook.
     void recoverQueued();
 
@@ -133,6 +139,8 @@ private:
     };
 
     FontSheetWanted mWantedSheet;
+    u64 mWantedFrameSeed = 0;
+    bool mFrameSeedRead = false;
     u32 mFontSheetTbp = 0;
     u32 mFontSheetWidth = 0;
 

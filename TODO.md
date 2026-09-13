@@ -2378,8 +2378,22 @@ right.
       - **TFX, TCC and fog** are in the sprite shader, after PCSX2's `tfx_fs.glsl`. No savestate
         draws them, so they are unmeasured.
       - **Streamed textures.** GS memory is read at the frame boundary, so a texture uploaded twice
-        in one frame reads as the last upload. The font is routed to its glyph sheet; anything else
-        streamed would need GS memory shadowed from the chain's IMAGE transfers.
+        in one frame reads as the last upload. The font is routed to its glyph sheet. Everything
+        else reaches GS memory through `sdfImageSetReq`'s queue (`sdfImageSetCb`, the IPU's movie
+        frames included), which `sdfImageSetTrans` sends ahead of a chain. It is walked at
+        `sdfGrReqDraw` and stales what was read from GS memory where it lands: the title's movie
+        had been read once, 2.941 -> 1.221 (the title has no feedback). A copy of GS memory built
+        from the uploads themselves scored 1.274, because the queue is sent at the next
+        `sdfGrDrawFrame`, which can be for an earlier chain than the one built beside it. No
+        capture streams anything but the movie; the only in-chain IMAGE transfer is
+        `sdfSetLoadImage`'s depth buffer, reported.
+      - **Feedback after a load.** `fldDrawFrameSprite` blends 0.375 of the previous frame, which
+        the renderer lacks for its first frame after a state load, so the image converged from
+        black: 020 scored 8.7 at frame 6 and 2.7 at frame 10. The first frame's previous is read
+        from GS memory (`kFrameSeedHandle`): 019 12.6 -> 6.8, 020 8.7 -> 3.1, 021 8.2 -> 2.5, 008
+        5.9 -> 5.0. 005 5.5 -> 7.3, 007 5.1 -> 6.0, 015 12.5 -> 16.1 and 016 10.5 -> 10.9 got
+        worse; 005 and 007 score the same at frame 10 (7.8, 6.8), so black had been hiding scenes
+        we draw too bright. 015 is 10.8 at frame 10 (M5).
       - **Feedback zoom.** Mostly solved: the frame is sampled as PSMCT24, whose alpha the GS takes
         from TEXA's TA0, where we sampled the target's own. Underground 4.910 -> 4.371 against
         4.287 hooked; unknown realm 4.591 -> 4.240.
@@ -2456,8 +2470,8 @@ right.
     reads raw values per texel through the format's own `readPixel`, the way
     `GSLocalMemory::SaveBMP` does, and the palette lookup happens on our side.
   - **Never read from inside a hook.** The read runs on the GS thread and blocks for it, so it is
-    queued at the lookup and drained in the runner's frame callback; the uploads reach the next
-    frame the builder opens. A draw goes untextured once and resolves after that.
+    queued at the lookup and drained in the runner's frame callback. A frame is held until that
+    callback, so the read lands in the frame that asked rather than the one after it.
 
   Worth 167.60 -> 11.47 on field unknown realm and 54.05 -> 8.44 on the title screen. On field
   underground facility, whose 33 textures already decoded, it took the unresolved `DrwSprite2D`

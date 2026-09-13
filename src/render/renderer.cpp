@@ -759,6 +759,7 @@ void Renderer::present() {
     getScreenRect(&x, &y, &width, &height);
     mFrames[mCurrent].blitToScreen(x, y, width, height);
     mCurrent ^= 1;
+    mPresented++;
 }
 
 void Renderer::represent() {
@@ -987,6 +988,12 @@ void Renderer::drawMeshes(const Frame& frame, const std::vector<u32>& indices) {
         } else {
             glUniform1i(solidOn, int(index) == mHighlight ? 1 : 0);
             glUniform3f(solid, 1.0f, 0.0f, 1.0f);
+        }
+        // Every texture a frame names is uploaded before it is drawn, so one missing never will be.
+        if (!mPickPass && mesh.texHandle.addr && (mesh.attrBits & sdfCoreAttrTextured) &&
+            !findTexture(mesh.texHandle)) {
+            reportUnsupported("mesh texture never uploaded", mesh.texHandle.addr);
+            glUniform1i(solidOn, 1);
         }
         if (mesh.bones.size() > kMaxPaletteBones) {
             reportUnsupported("bones in one mesh", u32(mesh.bones.size()));
@@ -1230,14 +1237,23 @@ void Renderer::drawSprites(const Frame& frame, const std::vector<u32>& indices) 
         const bool isFeedback = sprite.texHandle.addr == kPreviousFrameHandle;
         const bool noFeedback = mConfig->noFeedback;
         if (isFeedback && noFeedback) continue;
-        const Texture* entry = findTexture(sprite.texHandle);
-        const bool hasTexture = isFeedback || entry != nullptr;
+        const Texture* seed =
+            isFeedback && !mPresented ? findTexture(TexHandle{kFrameSeedHandle}) : nullptr;
+        if (isFeedback && !mPresented && !seed) {
+            reportUnsupported("frame feedback with no previous frame", 0);
+        }
+        const bool samplesTarget = isFeedback && !seed;
+        const Texture* entry = seed ? seed : findTexture(sprite.texHandle);
+        const bool hasTexture = samplesTarget || entry != nullptr;
+        const bool neverUploaded = sprite.texHandle.addr && !hasTexture;
+        if (neverUploaded) reportUnsupported("sprite texture never uploaded", sprite.texHandle.addr);
+        const bool unhandled = sprite.unhandled || neverUploaded;
         mVerts.clear();
-        const f32 texWidth = isFeedback ? kGuestWidth : entry ? entry->width : 1.0f;
-        const f32 texHeight = isFeedback ? kGuestHeight : entry ? entry->height : 1.0f;
+        const f32 texWidth = samplesTarget ? kGuestWidth : entry ? entry->width : 1.0f;
+        const f32 texHeight = samplesTarget ? kGuestHeight : entry ? entry->height : 1.0f;
         triangulate(sprite, texWidth, texHeight, mVerts);
         // GL puts a render target's origin at the bottom left, the guest's is at the top.
-        if (isFeedback) {
+        if (samplesTarget) {
             for (ScreenVertex& vertex : mVerts) vertex.v = 1.0f - vertex.v;
         }
 
@@ -1245,22 +1261,22 @@ void Renderer::drawSprites(const Frame& frame, const std::vector<u32>& indices) 
         attribs.reserve(mVerts.size() * 8);
         for (ScreenVertex& v : mVerts) {
             // Magenta, as the mesh shader paints an unmodelled state.
-            if (sprite.unhandled) v.color = Rgba{0xFF, 0x00, 0xFF, 0x80};
+            if (unhandled) v.color = Rgba{0xFF, 0x00, 0xFF, 0x80};
             mBounds.add(v);
             attribs.insert(attribs.end(), {v.x, v.y, v.u, v.v, v.color.r / 255.0f,
                                            v.color.g / 255.0f, v.color.b / 255.0f,
                                            v.color.a / 255.0f, v.z, v.fog});
         }
         applySpriteBlend(sprite);
-        if (sprite.unhandled) applyBlend(GsBlend{});
-        glUniform1i(textured, hasTexture && !sprite.unhandled ? 1 : 0);
+        if (unhandled) applyBlend(GsBlend{});
+        glUniform1i(textured, hasTexture && !unhandled ? 1 : 0);
         glUniform1i(texFunction, int(sprite.textureFunction));
         glUniform1i(texAlpha, sprite.textureAlpha ? 1 : 0);
         glUniform1f(texelAlpha, sprite.texelAlpha);
-        glUniform1i(fogOn, sprite.fogs && !sprite.unhandled ? 1 : 0);
+        glUniform1i(fogOn, sprite.fogs && !unhandled ? 1 : 0);
         glUniform3f(fogColor, sprite.fogColor.r / 255.0f, sprite.fogColor.g / 255.0f,
                     sprite.fogColor.b / 255.0f);
-        const bool alphaTests = sdfGetTestAte(sprite.test) && !sprite.unhandled;
+        const bool alphaTests = sdfGetTestAte(sprite.test) && !unhandled;
         glUniform1i(atest, alphaTests ? int(sdfGetTestAtst(sprite.test)) : int(sdfAtstAlways));
         glUniform1f(atestRef, f32(sdfGetTestAref(sprite.test)));
         if (sprite.hasDepth) {
@@ -1284,7 +1300,7 @@ void Renderer::drawSprites(const Frame& frame, const std::vector<u32>& indices) 
         if (hasTexture) {
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D,
-                          isFeedback ? mFrames[mCurrent ^ 1].getTexture() : entry->name);
+                          samplesTarget ? mFrames[mCurrent ^ 1].getTexture() : entry->name);
             applySpriteSampler(sprite, isFeedback);
         }
         glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(attribs.size() * sizeof(f32)), attribs.data(),

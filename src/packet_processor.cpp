@@ -256,8 +256,6 @@ private:
 
     /// The last texture looked up was tried and cannot be had, as against still on its way.
     bool mTextureMissing = false;
-    // GS memory is read at the frame boundary, so a texture first named here has no pixels yet.
-    bool mTexturePending = false;
 
     std::unordered_map<u32, LinkedPacket> mLinked;
     std::unordered_map<u32, std::vector<u32>> mSpritesByPacket;
@@ -645,6 +643,10 @@ bool PacketProcessor::decodeTransfer(const ChainEntry& entry) {
     mDecoder.feed(entry.tag, target ? target : entry.at + sdfQwordBytes);
     for (const GsUpload& upload : mDecoder.getUploads()) {
         h.textures.onGsUpload(upload.bitbltbuf, upload.trxreg);
+        const u32 dpsm = u32((upload.bitbltbuf >> 56) & 0x3F);
+        if (dpsm == sdfPsmz32 || dpsm == sdfPsmz24 || dpsm == sdfPsmz16 || dpsm == sdfPsmz16s) {
+            reportUnsupported("depth buffer written by an IMAGE transfer", dpsm);
+        }
     }
     // FBP counts 2048-word pages, TBP0 64-word blocks.
     for (const u32 frame : {sdfGsAddrFrame1, sdfGsAddrFrame2}) {
@@ -786,7 +788,6 @@ bool PacketProcessor::convertPrimitive(const GsPrimitive& primitive, DrawSprite*
     sprite.fogColor = Rgba::unpack(u32(state.fogcol & 0xFFFFFF));
     sprite.frameMask = sdfGetFrameMask(state.frame);
     mTextureMissing = false;
-    mTexturePending = false;
     if (sdfGetPrimTme(prim)) {
         sprite.texHandle = resolveTexture(state.tex0);
         sprite.hasSampler = true;
@@ -826,7 +827,6 @@ PacketProcessor::Verdict PacketProcessor::judgePrimitive(const GsPrimitive& prim
     if (sdfGetTestZte(test) && sdfGetTestZtst(test) == sdfZtstNever) return Verdict::Invisible;
     if (sdfGetPrimTme(prim)) {
         if (!sprite.texHandle.addr && mTextureMissing) return unhonoured("decoded texture not found");
-        if (!sprite.texHandle.addr && mTexturePending) return unhonoured("decoded texture not read yet");
     }
     if (state.pabe & 1) return unhonoured("decoded primitive under PABE");
     if (state.fba & 1) return unhonoured("decoded primitive under FBA");
@@ -913,7 +913,10 @@ void PacketProcessor::scaleTexelUvs(DrawMesh& mesh) {
 
 TexHandle PacketProcessor::resolveTexture(u64 tex0) {
     const u32 tbp0 = GsTex0::decode(tex0).tbp0;
-    if (h.textures.isFrameBuffer(tbp0)) return TexHandle{kPreviousFrameHandle};
+    if (h.textures.isFrameBuffer(tbp0)) {
+        h.textures.wantFrameSeed(tex0);
+        return TexHandle{kPreviousFrameHandle};
+    }
     if (h.textures.isFontSheet(tbp0)) return h.textures.getFontSheet(&mFrame);
     const auto bound = mBoundTextures.find(tex0);
     TexHandle handle;
@@ -924,8 +927,6 @@ TexHandle PacketProcessor::resolveTexture(u64 tex0) {
         handle = h.textures.getHandleForGsTex0(tex0, &mFrame);
         mTextureMissing = !handle.addr && h.textures.isGsTex0Missing(tex0);
     }
-    mTexturePending = !handle.addr && !mTextureMissing;
-    if (mTexturePending) reportUnsupported("decoded texture read from GS memory a frame late, tbp", tbp0);
     return handle;
 }
 
@@ -1040,6 +1041,22 @@ void PacketProcessor::countUnreached() {
 /// @disc SLUS-20911
 /// @address 0x002AD980
 /// @function sdfGrDrawFrame
+void readImageQueue(HookContext& h) {
+    const sdfImageSetCbPtr_t cb{pcsx2hook_find_symbol(h.runtime, "sdfImageSetCb")};
+    if (!cb || !cb->tagHead) return;
+    const u32 tail = cb->tagTail.addr & 0x0FFFFFFFu;
+    GsDecoder decoder;
+    DmaChain chain(cb->tagHead.addr);
+    ChainEntry entry;
+    while (chain.next(entry) && entry.at != tail) {
+        const u32 target = entry.getRefTarget();
+        decoder.feed(entry.tag, target ? target : entry.at + sdfQwordBytes);
+        for (const GsUpload& upload : decoder.getUploads()) {
+            h.textures.onGsUpload(upload.bitbltbuf, upload.trxreg);
+        }
+    }
+}
+
 void processCommandStream(HookContext& h, u32 aTag, Frame& frame) {
     PacketProcessor(h, frame).run(aTag);
 }

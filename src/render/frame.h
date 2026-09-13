@@ -32,6 +32,9 @@ using Matrix4Ptr_t = guest_ptr<struct Matrix4>;
 /// Sampled by the engine to blur over itself. Our output, not guest memory, so a reserved handle.
 constexpr u32 kPreviousFrameHandle = 0xFFFFFFFF;
 
+/// The frame GS memory held when the run started, which a blur samples before we have drawn one.
+constexpr u32 kFrameSeedHandle = 0xFFFFFFFE;
+
 /// ALPHA 0x44, (Cs - Cd) * As + Cd, which the engine sets for every sprite table.
 constexpr u64 kGsAlphaBlend = 0x44;
 

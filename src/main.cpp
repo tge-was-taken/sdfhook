@@ -97,6 +97,7 @@ void onFrame(uint32_t frame, void* user) {
     App& app = *static_cast<App*>(user);
     if (app.trace) app.trace->onFrame(frame);
     app.hooks.textures.recoverQueued();
+    app.hooks.frames.flushHeld();
     if (frame % 600 == 0) log.debug("frame {}", frame);
 
     const bool wanted = app.config.captureFrame && frame == app.config.captureFrame;

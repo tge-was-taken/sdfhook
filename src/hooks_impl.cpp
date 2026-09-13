@@ -57,6 +57,7 @@ void sdfGrReqDraw(HookContext& h, u32 aTag) {
     // A trace-only run has no renderer and so no frame, but its packets are still accounted.
     Frame none;
     Frame* frame = h.frames.getFrame();
+    readImageQueue(h);
     processCommandStream(h, aTag, frame ? *frame : none);
     if (frame) h.model.traceMeshes(*frame);
     takeFrameCensus(h, aTag);

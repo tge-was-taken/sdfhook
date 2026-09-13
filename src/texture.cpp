@@ -271,7 +271,7 @@ TexHandle TextureCache::getHandleForTex0(TexHandle key, u64 tex0) {
     if (alias != mAlias.end()) return alias->second;
     // The read is not safe from inside a hook, so it waits for the frame boundary as handles do.
     mWantedTex0.emplace(key, tex0);
-    return {};
+    return key;
 }
 
 namespace {
@@ -395,9 +395,9 @@ TexHandle TextureCache::getHandle(TexHandle wanted, Frame*) {
     }
 
     // Nothing registered it in this window, but the GS still holds the pixels. The read is not safe
-    // from here, so the handle waits for the frame boundary and the draw goes untextured once.
+    // from here, so it happens at the frame boundary, before the frame that asked is drawn.
     mWanted.insert(wanted);
-    return {};
+    return wanted;
 }
 
 void TextureCache::wantFontSheet(u32 addr, u32 bufWidth, u32 width, u32 height) {
@@ -432,6 +432,12 @@ bool TextureCache::recoverFontSheet() {
 void TextureCache::recoverQueued() {
     if (!mConfig->recoverTexturesFromGs || !mRuntime) return;
     if (mWantedSheet.addr && mFontSheet.index.empty()) recoverFontSheet();
+    if (mWantedFrameSeed) {
+        if (recoverTex0(TexHandle{kFrameSeedHandle}, mWantedFrameSeed)) mRecovered++;
+        mRecoveryAttempts++;
+        mWantedFrameSeed = 0;
+        mFrameSeedRead = true;
+    }
 
     // A material that named a TEX0 with no handle: the register is in hand, so no packet is read.
     for (auto it = mWantedTex0.begin(); it != mWantedTex0.end();) {

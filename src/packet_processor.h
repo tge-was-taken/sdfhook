@@ -9,4 +9,8 @@ namespace sdfhook {
 /// span. The draws come from what the producers recorded, in the order the chain transmits them.
 void processCommandStream(HookContext& h, u32 aTag, Frame& frame);
 
+/// sdfImageSetTrans sends the queued uploads ahead of the chain, so what was read from GS memory
+/// there is stale.
+void readImageQueue(HookContext& h);
+
 }  // namespace sdfhook

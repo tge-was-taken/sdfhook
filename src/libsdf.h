@@ -2100,7 +2100,7 @@ constexpr sdfTex0_t sdfDecodeTex0(u64 value) {
                      u32((value >> 56) & 0x1F)};
 }
 
-// GS pixel storage modes, the ones this game's textures use.
+// GS pixel storage modes, the ones this game's textures and depth buffers use.
 enum sdfPsm_t : u32 {
     sdfPsmct32 = 0x00,
     sdfPsmct24 = 0x01,
@@ -2111,6 +2111,10 @@ enum sdfPsm_t : u32 {
     sdfPsmt8h = 0x1B,
     sdfPsmt4hl = 0x24,
     sdfPsmt4hh = 0x2C,
+    sdfPsmz32 = 0x30,
+    sdfPsmz24 = 0x31,
+    sdfPsmz16 = 0x32,
+    sdfPsmz16s = 0x3A,
 };
 
 enum sdfPrimType_t : u32 {
@@ -2239,6 +2243,21 @@ struct sdfImageSetParm_t {
 SDF_STATIC_ASSERT_SIZE(sdfImageSetParm_t, 24);
 SDF_STATIC_ASSERT_OFFSETOF(sdfImageSetParm_t, gsAddr, 0x0C);
 SDF_STATIC_ASSERT_OFFSETOF(sdfImageSetParm_t, width, 0x14);
+
+// The uploads sdfImageSetReq queued, which sdfImageSetTrans sends down channel 1 ahead of the
+// frame's chain. tagHead is a DMA address; tagTail is where the next packet's NEXT tag will go.
+struct sdfImageSetCb_t {
+    s32 semaId;
+    sdfVoidPtr_t packetHead;
+    sdfVoidPtr_t packetTail;
+    sdfVoidPtr_t tagHead;
+    sdfVoidPtr_t tagTail;
+};
+SDF_STATIC_ASSERT_SIZE(sdfImageSetCb_t, 20);
+SDF_STATIC_ASSERT_OFFSETOF(sdfImageSetCb_t, tagHead, 0x0C);
+SDF_STATIC_ASSERT_OFFSETOF(sdfImageSetCb_t, tagTail, 0x10);
+
+using sdfImageSetCbPtr_t = guest_ptr<sdfImageSetCb_t>;
 
 // What fclDrawSpriteCore draws: a texture, a UV rectangle packed two per word, and a color.
 using fclSprite_PTR_t = guest_ptr<struct fclSprite_t>;
