@@ -545,14 +545,18 @@ void PacketProcessor::processFogPacket(const ChainEntry& entry) {
     mChainFog = sdf3DFogPacketPtr_t{target ? target - sdfQwordBytes : entry.at};
 }
 
-/// VU1's screen mapping, which the meshes' depth is built from out of sdf3DScreenParam.
+/// VU1's screen mapping, which the meshes' depth is built from.
 void PacketProcessor::processViewportPacket(const ChainEntry& entry) {
     const sdf3DViewportPacketPtr_t viewport{entry.getRefTarget() ? entry.getRefTarget() : entry.at};
     if (!viewport) {
         reportUnsupported("viewport packet outside guest memory", entry.at);
         return;
     }
-    if (viewport->scale.z != mFrame.depthScale || viewport->trans.z != mFrame.depthOffset) {
+    // A frame with no model walk never read sdf3DScreenParam, and its polys still need a depth.
+    if (mFrame.depthScale == 0.0f && mFrame.depthOffset == 0.0f) {
+        mFrame.depthScale = viewport->scale.z;
+        mFrame.depthOffset = viewport->trans.z;
+    } else if (viewport->scale.z != mFrame.depthScale || viewport->trans.z != mFrame.depthOffset) {
         reportUnsupported("viewport packet with a depth mapping other than sdf3DScreenParam's", 0);
     }
 }
