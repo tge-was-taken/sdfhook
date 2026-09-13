@@ -166,7 +166,7 @@ uniform int uRefMapPass;     // the reflection pass samples a ramp, so it needs 
 uniform int uOverlayPass;    // sdf3DSpecularTex: the texture alone, unlit
 uniform vec2 uProjScale;     // the projection's x and y, so a normal can leave clip space
 uniform float uRefMapRow;
-uniform int uMtexPass;       // 0 first pass, 1 the ramp, 2 a constant color, 3 keep the colors
+uniform int uMtexPass;       // 0 first pass, 1 the ramp, 2 a constant color, 3 the first's colors
 uniform vec3 uMtexDiffuse;
 uniform float uMtexConstant;
 uniform vec3 uMtexRampLo;     // the endpoints corePktMakeFaceDivParm wrote, when they were captured
@@ -175,8 +175,6 @@ uniform int uMtexRampKnown;
 uniform float uMtexSoften;
 uniform float uMtexBias;
 
-// An unmodelled state paints magenta: a silent fallback is a gap that looks healthy every run.
-const vec3 kUnhandled = vec3(1.0, 0.0, 1.0);
 uniform vec4 uFog;   // scale, minimum, maximum, offset
 uniform int uFogOn;
 uniform vec2 uPixelOffset;
@@ -232,8 +230,6 @@ void main() {
     } else if (uMtexPass == 2) {
         // corePktSetConstColor is the product of two colors over 128, not the material's alone.
         vLit = uMtexDiffuse * uDrawColor;
-    } else if (uMtexPass > 2) {
-        vLit = kUnhandled;
     }
     if (uUnlitColors != 0) vLit = vec3(1.0);
     if (uDebugNormal != 0) vLit = normalize(facing) * 0.5 + 0.5;
@@ -314,8 +310,6 @@ uniform int uOverlayPass;
 
 const float kPs2Alpha = 255.0 / 128.0;
 
-// An unmodelled state paints magenta: a silent fallback is a gap that looks healthy every run.
-const vec3 kUnhandled = vec3(1.0, 0.0, 1.0);
 
 // Quantised as the GS does: AREF 128 against a normalised 1.0 is a knife-edge in float, and
 // fragments either side of it write depth at random.
@@ -342,7 +336,7 @@ void main() {
         lit = sdfMeshRamp(normalize(vNormal), uMtexRampLo, uMtexRampDelta, uMtexRampKnown != 0,
                           uMtexDiffuse, uLightBase, uAmbient, uLightAmbient, uDrawColor,
                           uLightDir[0], uMtexConstant, uMtexSoften, uMtexBias);
-    } else if (uLit != 0 && uMtexPass == 0 && uRefMapPass == 0) {
+    } else if (uLit != 0 && (uMtexPass == 0 || uMtexPass == 3) && uRefMapPass == 0) {
         lit = sdfMeshLit(normalize(vNormal), true, uAmbient, uDiffuse, uDrawColor, uLightAmbient,
                          uLightBase, uLightFull, uLightDir[0], uLightDir[1], uLightDir[2],
                          uLightColor[1], uLightColor[2], uFlatten, uFaceDivSoften, uFaceDivBias,

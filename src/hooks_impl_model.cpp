@@ -203,7 +203,8 @@ void ModelHooks::readMultiTexturePacket(const sdfMat_t& material, sdfMatPacketPt
     mesh.multi.clamp = packet->mtexClampData;
     mesh.multi.diffuse = Rgba::unpack(packet->mtexDiffuse);
     mesh.multi.on = mesh.multi.texHandle.addr != 0;
-    // 0x2B8C4C: the ramp runs only where the two diffuse colors differ, and only under algo 3.
+    // 0x2B8C74, unsigned: below 3 ramps where the two diffuse colors differ, 3 is a constant color,
+    // and the rest, an unramped one included, keep the first pass's colors.
     mesh.multi.algo = packet->mtexAlgo;
     // 0x2B8C90: the packet's own two colors, at +8 and +12. Taking the first from sdfMat_t is a
     // different value and claims a ramp on meshes the engine never ramps.
@@ -214,7 +215,6 @@ void ModelHooks::readMultiTexturePacket(const sdfMat_t& material, sdfMatPacketPt
     if (const auto it = mParser.mFaceDivRamps.find(packet.addr); it != mParser.mFaceDivRamps.end()) {
         mesh.multi.rampColors = it->second;
     }
-    if (packet->mtexAlgo > 3) reportUnsupported("corePktEmitMultiTexPass mtexAlgo", packet->mtexAlgo);
 
 }
 /// Culls a node by its bounds against the VU0 clip codes the engine tests.
