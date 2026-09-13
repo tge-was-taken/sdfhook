@@ -57,21 +57,43 @@ void ModelHooks::readFaceDivParm(corePktCbPtr_t aCb, sdfVector4Ptr_t aParm) {
         log.info("  lo {} {} {}, delta {} {} {}", lo[0], lo[1], lo[2], delta[0], delta[1], delta[2]);
     }
 }
+MeshLighting getLighting(const sdf3DLightParallelPacket_t& light) {
+    MeshLighting lighting{};
+    for (u32 i = 0; i < kParallelLights; i++) {
+        for (usize axis = 0; axis < 3; axis++) {
+            // normal is a matrix whose columns are the light vectors, so a light reads down them.
+            lighting.direction[i][axis] = light.normal[axis][i];
+            lighting.color[i][axis] = light.color[i][axis];
+        }
+        lighting.base[i] = light.colorBase[i];
+        lighting.ambientColor[i] = light.color[3][i];
+        lighting.fullColor[i] = light.color[4][i];
+    }
+    return lighting;
+}
+
+// F is per vertex, 255 keeping the color and 0 replacing it with FOGCOL. VU1 builds it as
+// `fogParm[2] + fogParm[3] / w` clamped to fogParm[0]..fogParm[1] (0x04DC, 0x04DF, 0x04E3).
+MeshFog getFog(const sdf3DFogPacket_t& fog) {
+    MeshFog out;
+    const u32 fogcol = u32(fog.fogColor);
+    out.on = true;
+    out.minimum = fog.fogParm[0] / 255.0f;
+    out.maximum = fog.fogParm[1] / 255.0f;
+    out.offset = fog.fogParm[2] / 255.0f;
+    out.scale = fog.fogParm[3] / 255.0f;
+    out.color[0] = f32(fogcol & 0xFF) / 255.0f;
+    out.color[1] = f32((fogcol >> 8) & 0xFF) / 255.0f;
+    out.color[2] = f32((fogcol >> 16) & 0xFF) / 255.0f;
+    return out;
+}
+
 void ModelHooks::readLighting(sdf3DLightParallelPacketPtr_t aLight) {
     mParser.mLighting = {};
     const sdf3DLightParallelPacketPtr_t light = aLight ? aLight : mParser.mSdf3DLightDefault.readOr();
     if (!light) return;
-
-    for (u32 i = 0; i < kParallelLights; i++) {
-        for (usize axis = 0; axis < 3; axis++) {
-            // normal is a matrix whose columns are the light vectors, so a light reads down them.
-            mParser.mLighting.direction[i][axis] = light->normal[axis][i];
-            mParser.mLighting.color[i][axis] = light->color[i][axis];
-        }
-        mParser.mLighting.base[i] = light->colorBase[i];
-        mParser.mLighting.ambientColor[i] = light->color[3][i];
-        mParser.mLighting.fullColor[i] = light->color[4][i];
-    }
+    mParser.mLighting = getLighting(*light);
+    mParser.mLightPackets.insert(light.addr);
 
     static std::set<u32> shown;
     if (mParser.mConfig->dumpLight && shown.insert(light.addr).second) {
@@ -96,22 +118,12 @@ void ModelHooks::readLighting(sdf3DLightParallelPacketPtr_t aLight) {
         log.dump(row.take());
     }
 }
-// F is per vertex, 255 keeping the color and 0 replacing it with FOGCOL. VU1 builds it as
-// `fogParm[2] + fogParm[3] / w` clamped to fogParm[0]..fogParm[1] (0x04DC, 0x04DF, 0x04E3).
 void ModelHooks::readFog(sdf3DFogPacketPtr_t aFog) {
     mParser.mFog = {};
     const sdf3DFogPacketPtr_t fog = aFog ? aFog : mParser.mSdf3DFogDefault.readOr();
     if (!fog) return;
-
-    const u32 fogcol = u32(fog->fogColor);
-    mParser.mFog.on = true;
-    mParser.mFog.minimum = fog->fogParm[0] / 255.0f;
-    mParser.mFog.maximum = fog->fogParm[1] / 255.0f;
-    mParser.mFog.offset = fog->fogParm[2] / 255.0f;
-    mParser.mFog.scale = fog->fogParm[3] / 255.0f;
-    mParser.mFog.color[0] = f32(fogcol & 0xFF) / 255.0f;
-    mParser.mFog.color[1] = f32((fogcol >> 8) & 0xFF) / 255.0f;
-    mParser.mFog.color[2] = f32((fogcol >> 16) & 0xFF) / 255.0f;
+    mParser.mFog = getFog(*fog);
+    mParser.mFogPackets.insert(fog.addr);
 }
 // The sampler state lives in the material's packet, which sdfMatUpdatePacketBasic fills from the
 // texture handle rather than from the material.

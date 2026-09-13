@@ -2,6 +2,7 @@
 
 #include <map>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "pcsx2hook/pcsx2hook.h"
 #include "guest_ptr.h"
@@ -182,6 +183,10 @@ public:
     /// @todo TODO.md V19: nothing calls it while that entry's remaining producers are unhooked.
     bool isWorldSpace(const sdfVector3_t& point, f32 out[3]) const;
 
+    /// A root's light or fog packet, which a model's chain REFs past its DMA tag.
+    bool isLightPacket(u32 addr) const { return mLightPackets.contains(addr); }
+    bool isFogPacket(u32 addr) const { return mFogPackets.contains(addr); }
+
     /// Spans the frame, not one root: every root links into the chain a mesh is matched against.
     void beginFrame(u32 frame) {
         mLinkIndex = 0;
@@ -273,6 +278,8 @@ private:
     sdfModelNodeListPtr_t mNodeList;
     MeshLighting mLighting{};
     MeshFog mFog{};
+    std::unordered_set<u32> mLightPackets;
+    std::unordered_set<u32> mFogPackets;
     /// sdfBillBoardMakeN gets the geometry alone, so the handle comes from the call that fills.
     dds3BillboardTagPtr_t mDds3BillboardTag;
     std::unordered_map<u32, u32> mBillboardOt;

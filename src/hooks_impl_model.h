@@ -6,6 +6,12 @@ namespace sdfhook {
 
 /// What each hooked engine function does, over the parser's state. ModelParser decodes the mesh
 /// formats these hand it; this is the other half, so a hook handler stays pure transport.
+/// The lighting VU1 takes from a parallel light packet.
+MeshLighting getLighting(const sdf3DLightParallelPacket_t& light);
+
+/// The fog term a fog packet carries.
+MeshFog getFog(const sdf3DFogPacket_t& fog);
+
 class ModelHooks {
 public:
     using NodeDraw = ModelParser::NodeDraw;

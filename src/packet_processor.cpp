@@ -11,6 +11,7 @@
 #include "gif.h"
 #include "gs_decoder.h"
 #include "hooks_impl.h"
+#include "hooks_impl_model.h"
 #include "json.h"
 #include "libsdf.h"
 #include "log.h"
@@ -197,9 +198,13 @@ private:
     void processCarriedPacket(const ChainEntry& entry, PacketType type);
     void processTransformPacket(const ChainEntry& entry, PacketType type);
     void processMaterialPacket(const ChainEntry& entry, PacketType type);
+    void processLightPacket(const ChainEntry& entry);
+    void processFogPacket(const ChainEntry& entry);
+    void processViewportPacket(const ChainEntry& entry);
+    void checkChainLighting(const DrawMesh& mesh);
     void processEmptyPacket(const ChainEntry& entry);
     void processTransferPacket(const ChainEntry& entry, PacketType type);
-    void reportUnreadPacket(PacketType type);
+    void reportUnreadPacket(u32 at, PacketType type);
 
     bool decodeTransfer(const ChainEntry& entry);
     void emitDecodedPrimitives(const ChainEntry& entry);
@@ -242,6 +247,8 @@ private:
     /// What sdf3DPrimSetTmPacket last put in the chain, identity until then and after a reset.
     Matrix4 mPrimTransform{};
     sdfMatPacketPtr_t mPrimMaterial;
+    sdf3DLightParallelPacketPtr_t mChainLight;
+    sdf3DFogPacketPtr_t mChainFog;
     u32 mIdentityTm = 0;
 
     /// The last texture looked up was tried and cannot be had, as against still on its way.
@@ -285,6 +292,12 @@ PacketType PacketProcessor::getType(u32 at) const {
     if (filled != h.packetTypes.end() && filled->second == PacketType::Transform) return filled->second;
     // sdf3DPrimLinkResetTm REFs the engine's own identity matrix.
     const sdfDmaTagPtr_t tag{at};
+    // A model sends its root's light and fog by a REF to the data past the packet's own tag.
+    if (tag && sdfDmaIsRef(*tag)) {
+        const u32 packet = (tag->addr & 0x0FFFFFFFu) - sdfQwordBytes;
+        if (h.model.isLightPacket(packet)) return PacketType::LightParallel;
+        if (h.model.isFogPacket(packet)) return PacketType::Fog;
+    }
     if (mIdentityTm && tag && sdfDmaIsRef(*tag) && (tag->addr & 0x0FFFFFFFu) == mIdentityTm) {
         return getPacketTypeByGlobal("sdf3DPrimIdentityTm");
     }
@@ -426,18 +439,19 @@ void PacketProcessor::processPacketOfType(const ChainEntry& entry, PacketType ty
         case PacketType::RefGif:
         case PacketType::GifRegisters: processGsStatePacket(entry, type); break;
         case PacketType::Transform: processTransformPacket(entry, type); break;
+        case PacketType::LightParallel: processLightPacket(entry); break;
+        case PacketType::Fog: processFogPacket(entry); break;
+        case PacketType::Viewport: processViewportPacket(entry); break;
         case PacketType::Material: processMaterialPacket(entry, type); break;
+        // Our shaders stand in for the microcode, so there is nothing in it to read.
+        case PacketType::VuMicrocode: break;
+        case PacketType::Terminator: processEmptyPacket(entry); break;
         case PacketType::TransformRef:
-        case PacketType::Viewport:
-        case PacketType::LightParallel:
-        case PacketType::Fog:
         case PacketType::MaterialRef:
         case PacketType::DrawParams:
-        case PacketType::VuMicrocode:
         case PacketType::BillboardTransform:
         case PacketType::DirectRef:
         case PacketType::PacketHeader:
-        case PacketType::Terminator:
         case PacketType::VifSetup: processCarriedPacket(entry, type); break;
         case PacketType::Empty: processEmptyPacket(entry); break;
         case PacketType::Clear: processSpritePacket(entry); break;
@@ -503,7 +517,7 @@ void PacketProcessor::processGsStatePacket(const ChainEntry&, PacketType) {}
 /// Taken from the producer's call rather than the packet, so one that no producer with recorded
 /// draws linked is unread.
 void PacketProcessor::processCarriedPacket(const ChainEntry& entry, PacketType type) {
-    if (!mClaimed.contains(entry.at)) reportUnreadPacket(type);
+    if (!mClaimed.contains(entry.at)) reportUnreadPacket(entry.at, type);
 }
 
 /// sdf3DPrimSetTmPacket's matrix, which VU1 places the polys after it by. A model node's own
@@ -517,6 +531,51 @@ void PacketProcessor::processTransformPacket(const ChainEntry& entry, PacketType
     }
     std::memcpy(&mPrimTransform, &*matrix, sizeof(mPrimTransform));
     processCarriedPacket(entry, type);
+}
+
+/// VU1 lights and fogs a stream with the last light and fog the chain uploaded, whoever linked
+/// them; a stream mesh is checked against them where it is placed.
+void PacketProcessor::processLightPacket(const ChainEntry& entry) {
+    const u32 target = entry.getRefTarget();
+    mChainLight = sdf3DLightParallelPacketPtr_t{target ? target - sdfQwordBytes : entry.at};
+}
+
+void PacketProcessor::processFogPacket(const ChainEntry& entry) {
+    const u32 target = entry.getRefTarget();
+    mChainFog = sdf3DFogPacketPtr_t{target ? target - sdfQwordBytes : entry.at};
+}
+
+/// VU1's screen mapping, which the meshes' depth is built from out of sdf3DScreenParam.
+void PacketProcessor::processViewportPacket(const ChainEntry& entry) {
+    const sdf3DViewportPacketPtr_t viewport{entry.getRefTarget() ? entry.getRefTarget() : entry.at};
+    if (!viewport) {
+        reportUnsupported("viewport packet outside guest memory", entry.at);
+        return;
+    }
+    if (viewport->scale.z != mFrame.depthScale || viewport->trans.z != mFrame.depthOffset) {
+        reportUnsupported("viewport packet with a depth mapping other than sdf3DScreenParam's", 0);
+    }
+}
+
+void PacketProcessor::checkChainLighting(const DrawMesh& mesh) {
+    if (mesh.packetType != sdfPacketDmaCall) return;
+    if (mChainLight) {
+        const MeshLighting sent = getLighting(*mChainLight);
+        if (std::memcmp(sent.direction, mesh.lighting.direction, sizeof(sent.direction)) ||
+            std::memcmp(sent.color, mesh.lighting.color, sizeof(sent.color)) ||
+            std::memcmp(sent.base, mesh.lighting.base, sizeof(sent.base)) ||
+            std::memcmp(sent.fullColor, mesh.lighting.fullColor, sizeof(sent.fullColor))) {
+            reportUnsupported("stream mesh lit other than by the chain's light", mChainLight.addr);
+        }
+    }
+    if (mChainFog && mesh.fog.on) {
+        const MeshFog sent = getFog(*mChainFog);
+        if (sent.scale != mesh.fog.scale || sent.offset != mesh.fog.offset ||
+            sent.minimum != mesh.fog.minimum || sent.maximum != mesh.fog.maximum ||
+            std::memcmp(sent.color, mesh.fog.color, sizeof(sent.color))) {
+            reportUnsupported("stream mesh fogged other than by the chain's fog", mChainFog.addr);
+        }
+    }
 }
 
 /// sdf3DPrimLinkMat's material, which VU1 textures the polys after it with. A model node's own
@@ -540,8 +599,10 @@ void PacketProcessor::processEmptyPacket(const ChainEntry& entry) {
     if (entry.tag.qwc) reportUnsupported("empty packet with a payload", entry.tag.qwc);
 }
 
-void PacketProcessor::reportUnreadPacket(PacketType type) {
-    const std::string what = std::string("unread packet: ") + getPacketTypeName(type);
+void PacketProcessor::reportUnreadPacket(u32 at, PacketType type) {
+    const LinkedPacket* linked = findLinked(at);
+    const std::string what = std::string("unread packet: ") + getPacketTypeName(type) + " from " +
+                             (linked ? getLinker(*linked) : "an unlinked tag");
     reportUnsupported(what.c_str(), u32(type));
 }
 
@@ -899,6 +960,7 @@ void PacketProcessor::emitMeshes(u32 packet) {
         if (mesh.chainTransform && (mesh.attrBits & sdfCoreAttrTextured)) takePrimMaterial(mesh);
         // VU1 places a poly by the transform in force at its packet.
         if (mesh.chainTransform && mesh.bones.size() == 1) mesh.bones[0] = mPrimTransform;
+        checkChainLighting(mesh);
         if (!h.config->noTransmitState) mesh.gs = mDecoder.getContext(0);
         mFrame.order.push_back({DrawRef::Kind::Mesh, index});
         h.coverage.placedDraws[mesh.producer]++;

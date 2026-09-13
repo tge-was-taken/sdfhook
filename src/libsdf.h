@@ -867,6 +867,7 @@ struct sdf3DViewportPacket_t {
     u32 pad[2];
 };
 SDF_STATIC_ASSERT_SIZE(sdf3DViewportPacket_t, 208);
+using sdf3DViewportPacketPtr_t = guest_ptr<sdf3DViewportPacket_t>;
 SDF_STATIC_ASSERT_OFFSETOF(sdf3DViewportPacket_t, dmatag, 0x00);
 SDF_STATIC_ASSERT_OFFSETOF(sdf3DViewportPacket_t, cameraTm, 0x10);
 SDF_STATIC_ASSERT_OFFSETOF(sdf3DViewportPacket_t, TM, 0x50);
