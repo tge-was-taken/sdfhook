@@ -78,11 +78,11 @@ void recordBuiltPacket(HookContext& h, const char* aBuilder, const u32 (&aArgs)[
 /// @fn sdf2DMakeTexPacket
 /// @note SLUS-20911 0x002B9C20
 void sdf2DMakeTexPacket(HookContext& h, u32 aPacket, TexHandle aTexHndl, u32 aCtx) {
-    if (aCtx) {
-        reportUnsupported("2D texture packet for GS context 2", aCtx);
+    if (aCtx > 1) {
+        reportUnsupported("2D texture packet for GS context", aCtx);
         return;
     }
-    h.texturePackets[aPacket] = aTexHndl.addr;
+    h.texturePackets[aPacket] = {aTexHndl.addr, aCtx};
 }
 
 void recordReturnedPacket(HookContext& h, const char* aBuilder, u32 aPacket) {

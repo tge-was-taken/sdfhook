@@ -277,7 +277,13 @@ struct HookContext {
 
     /// The texture each 2D texture packet binds, by the packet's address, so the chain walk knows
     /// what a sprite that names none samples.
-    std::unordered_map<u32, u32> texturePackets;
+    struct TexturePacket {
+        u32 handle = 0;
+
+        /// Which GS context's TEX0 the packet writes.
+        u32 context = 0;
+    };
+    std::unordered_map<u32, TexturePacket> texturePackets;
 
 
     /// How often each builder ran, so a hook that claims nothing can be told from one that never

@@ -561,8 +561,10 @@ void PacketProcessor::processTexBindPacket(const ChainEntry& entry) {
         reportUnsupported("2D texture packet with no recorded texture", entry.tag.qwc);
         return;
     }
-    mBoundTexture = TexHandle{binds->second};
-    mBoundTextures[mDecoder.getRegister(sdfGsAddrTex01)] = mBoundTexture;
+    const TexHandle handle{binds->second.handle};
+    // A hooked sprite that names no texture draws in context 1.
+    if (!binds->second.context) mBoundTexture = handle;
+    mBoundTextures[mDecoder.getRegister(sdfGsAddrTex01 + binds->second.context)] = handle;
 }
 
 /// The decoder has stored every register; what a draw cannot honour is reported where it is
