@@ -1792,7 +1792,16 @@ constexpr u32 sdfGetTex1Mmin(u64 r) { return u32((r >> 6) & 7); }
 // CLAMP's wrap mode per axis: 0 repeat, 1 clamp, 2 region repeat, 3 region clamp.
 constexpr u32 sdfGetClampWms(u64 r) { return u32(r & 3); }
 constexpr u32 sdfGetClampWmt(u64 r) { return u32((r >> 2) & 3); }
-enum sdfWrapMode_t : u32 { sdfWrapRepeat = 0, sdfWrapClamp = 1 };
+enum sdfWrapMode_t : u32 {
+    sdfWrapRepeat = 0,
+    sdfWrapClamp = 1,
+    sdfWrapRegionClamp = 2,
+    sdfWrapRegionRepeat = 3,
+};
+constexpr u32 sdfGetClampMinu(u64 r) { return u32((r >> 4) & 0x3FF); }
+constexpr u32 sdfGetClampMaxu(u64 r) { return u32((r >> 14) & 0x3FF); }
+constexpr u32 sdfGetClampMinv(u64 r) { return u32((r >> 24) & 0x3FF); }
+constexpr u32 sdfGetClampMaxv(u64 r) { return u32((r >> 34) & 0x3FF); }
 
 // A VIF code, which is how a mesh body names each of its vertex arrays.
 enum sdfVifCommand_t : u32 {

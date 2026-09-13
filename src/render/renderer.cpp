@@ -59,6 +59,9 @@ uniform vec3 uFogColor;
 uniform int uAtest;
 uniform float uAtestRef;
 uniform int uAtestInvert;  // AFAIL's half: the fragments that fail
+uniform ivec2 uRegionClamp; // CLAMP's WMS and WMT are REGION_CLAMP
+uniform vec4 uRegion;       // MINU, MAXU, MINV, MAXV in texels
+uniform vec2 uTexSize;
 
 // In the GS's integer units, as the mesh shader tests.
 bool isAlphaTestFailing(float normalised) {
@@ -72,12 +75,20 @@ bool isAlphaTestFailing(float normalised) {
         || (uAtest == 7 && a == uAtestRef);
 }
 
+// Half a texel in from each bound keeps a bilinear tap inside the region, as the GS clamps each.
+vec2 clampToRegion(vec2 uv) {
+    vec2 texel = uv * uTexSize;
+    if (uRegionClamp.x != 0) texel.x = clamp(texel.x, uRegion.x + 0.5, uRegion.y + 0.5);
+    if (uRegionClamp.y != 0) texel.y = clamp(texel.y, uRegion.z + 0.5, uRegion.w + 0.5);
+    return texel / uTexSize;
+}
+
 // The GS's texture functions, as PCSX2's tfx_fs.glsl has them. The vertex color is Cf / 255 with
 // Af / 128, the texel Ct / 255 with At / 255, so modulating doubles.
 void main() {
     oColor = vColor;
     if (uTextured != 0) {
-        vec4 t = texture(uTexture, vUv);
+        vec4 t = texture(uTexture, clampToRegion(vUv));
         if (uTexelAlpha >= 0.0) t.a = uTexelAlpha;
         vec3 modulated = t.rgb * vColor.rgb * 2.0;
         float vertexA = vColor.a * 128.0 / 255.0;
@@ -488,7 +499,7 @@ void applySpriteSampler(const DrawSprite& sprite, bool isFeedback) {
     const GLint edge = isFeedback ? GL_CLAMP_TO_EDGE : GL_REPEAT;
     const auto getWrap = [&](u32 mode) {
         if (!sprite.hasSampler) return edge;
-        if (mode > sdfWrapClamp) reportUnsupported("decoded sprite region wrap", mode);
+        if (mode == sdfWrapRegionRepeat) reportUnsupported("decoded sprite region repeat", mode);
         return mode == sdfWrapRepeat ? GL_REPEAT : GL_CLAMP_TO_EDGE;
     };
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, magLinear ? GL_LINEAR : GL_NEAREST);
@@ -1207,6 +1218,9 @@ void Renderer::drawSprites(const Frame& frame, const std::vector<u32>& indices) 
     const int texFunction = glGetUniformLocation(mProgram, "uTexFunction");
     const int texAlpha = glGetUniformLocation(mProgram, "uTexAlpha");
     const int texelAlpha = glGetUniformLocation(mProgram, "uTexelAlpha");
+    const int regionClamp = glGetUniformLocation(mProgram, "uRegionClamp");
+    const int region = glGetUniformLocation(mProgram, "uRegion");
+    const int texSize = glGetUniformLocation(mProgram, "uTexSize");
     const int fogOn = glGetUniformLocation(mProgram, "uFogOn");
     const int fogColor = glGetUniformLocation(mProgram, "uFogColor");
     glBindVertexArray(mVao);
@@ -1281,6 +1295,13 @@ void Renderer::drawSprites(const Frame& frame, const std::vector<u32>& indices) 
         glUniform1i(texFunction, int(sprite.textureFunction));
         glUniform1i(texAlpha, sprite.textureAlpha ? 1 : 0);
         glUniform1f(texelAlpha, sprite.texelAlpha);
+        const bool regions = sprite.hasSampler && !samplesTarget;
+        glUniform2i(regionClamp,
+                    regions && sdfGetClampWms(sprite.clamp) == sdfWrapRegionClamp ? 1 : 0,
+                    regions && sdfGetClampWmt(sprite.clamp) == sdfWrapRegionClamp ? 1 : 0);
+        glUniform4f(region, f32(sdfGetClampMinu(sprite.clamp)), f32(sdfGetClampMaxu(sprite.clamp)),
+                    f32(sdfGetClampMinv(sprite.clamp)), f32(sdfGetClampMaxv(sprite.clamp)));
+        glUniform2f(texSize, texWidth, texHeight);
         glUniform1i(fogOn, sprite.fogs && !unhandled ? 1 : 0);
         glUniform3f(fogColor, sprite.fogColor.r / 255.0f, sprite.fogColor.g / 255.0f,
                     sprite.fogColor.b / 255.0f);
