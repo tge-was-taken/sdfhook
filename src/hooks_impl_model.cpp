@@ -883,11 +883,14 @@ void ModelHooks::sdfBillBoardMakeN(sdfBillBoardBatchPtr_t aBatch, u32 aNum, Fram
     axis(tm.m[0][0], tm.m[1][0], tm.m[2][0], right);
     axis(tm.m[0][1], tm.m[1][1], tm.m[2][1], up);
 
-    // The node above the batch names its table; the GS trace puts the specters' additive batches at
-    // ALPHA 0x48 with TEST 0x71801, which is what table 2 decodes to, so a miss says so rather than
-    // silently picking one.
+    // The node above the batch names its table; an effect's batch has no node. The chain's ALPHA and
+    // TEST replace the table's, so only the debug switches that keep the table read a miss.
     const auto found = mParser.mBillboardOt.find(aBatch.addr);
-    if (found == mParser.mBillboardOt.end()) reportUnsupported("billboard batch with no ordering table", 0);
+    const bool tableRead =
+        mParser.mConfig && (mParser.mConfig->noTransmitState || mParser.mConfig->otMax < 3);
+    if (found == mParser.mBillboardOt.end() && tableRead) {
+        reportUnsupported("billboard batch with no ordering table", 0);
+    }
     const u32 otIndex = found != mParser.mBillboardOt.end() ? found->second : 2;
 
     for (u32 i = 0; i < aNum; i++) {
