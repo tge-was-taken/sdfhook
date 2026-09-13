@@ -448,10 +448,10 @@ void PacketProcessor::processPacketOfType(const ChainEntry& entry, PacketType ty
         // Our shaders stand in for the microcode, so there is nothing in it to read.
         case PacketType::VuMicrocode: break;
         case PacketType::Terminator: processEmptyPacket(entry); break;
+        case PacketType::BillboardTransform: processBillboardTransformPacket(entry); break;
         case PacketType::TransformRef:
         case PacketType::MaterialRef:
         case PacketType::DrawParams:
-        case PacketType::BillboardTransform: processBillboardTransformPacket(entry); break;
         case PacketType::PacketHeader:
         case PacketType::VifSetup: processCarriedPacket(entry, type); break;
         case PacketType::Empty: processEmptyPacket(entry); break;
