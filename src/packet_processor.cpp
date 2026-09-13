@@ -211,7 +211,7 @@ private:
     bool decodeTransfer(const ChainEntry& entry);
     void emitDecodedPrimitives(const ChainEntry& entry);
     bool convertPrimitive(const GsPrimitive& primitive, DrawSprite* sprite);
-    f32 getDepth(u32 z) const;
+    f32 getDepth(u32 z);
     enum class Verdict { Honoured, Invisible, Unhonoured };
     Verdict judgePrimitive(const GsPrimitive& primitive, const DrawSprite& sprite,
                            const char** why) const;
@@ -252,6 +252,9 @@ private:
     sdf3DLightParallelPacketPtr_t mChainLight;
     sdf3DFogPacketPtr_t mChainFog;
     f32 mBillboardTm[6] = {1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
+
+    /// The one z past 24 bits this frame, which the depth clamp orders nearest of all.
+    u32 mWideZ = 0;
     u32 mIdentityTm = 0;
 
     /// The last texture looked up was tried and cannot be had, as against still on its way.
@@ -697,9 +700,13 @@ void PacketProcessor::emitDecodedPrimitives(const ChainEntry& entry) {
 }
 
 /// GS z as normalised device depth, 1 - 2z / 2^24, which the meshes write too. Exact in the float
-/// depth buffer for every 24-bit z; ZBUF's 32-bit format would lose the low bits.
-f32 PacketProcessor::getDepth(u32 z) const {
-    if (z >> 24) reportUnsupported("decoded z past 24 bits", z);
+/// depth buffer for every 24-bit z; a wider one clamps to the near plane, still exact while it is
+/// the only one (the HUD's 0xFFFFFFFF).
+f32 PacketProcessor::getDepth(u32 z) {
+    if (z >> 24) {
+        if (mWideZ && z != mWideZ) reportUnsupported("second decoded z past 24 bits in a frame", z);
+        mWideZ = z;
+    }
     return 1.0f - 2.0f * (f32(z) / 16777216.0f);
 }
 
