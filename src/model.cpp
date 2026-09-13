@@ -487,10 +487,9 @@ void ModelParser::reportFaceDiv(const char* what, f32 value) {
 
 
 
-DrawMesh ModelParser::startStreamMesh(u32 at, const NodeDraw& draw) const {
+DrawMesh ModelParser::startStreamMesh(u32 link, const NodeDraw& draw) const {
     DrawMesh mesh;
-    // The chain names the stream by a REF to its first quadword.
-    mesh.linkAddr = at;
+    mesh.linkAddr = link;
     mesh.producer = "sdfModelLinkOt";
     mesh.sortZ = draw.sortZ;
     mesh.otIndex = draw.otIndex;
@@ -520,9 +519,9 @@ void ModelParser::finishStreamMesh(DrawMesh& mesh, sdfMatPtr_t aMat, Frame* fram
     if (frame) frame->addMesh(std::move(mesh));
 }
 
-bool ModelParser::readVifStreamMesh(u32 at, u32 end, const NodeDraw& draw, sdfMatPtr_t aMat,
-                                    Frame* frame) {
-    DrawMesh mesh = startStreamMesh(at, draw);
+bool ModelParser::readVifStreamMesh(u32 at, u32 end, u32 link, const NodeDraw& draw,
+                                    sdfMatPtr_t aMat, Frame* frame) {
+    DrawMesh mesh = startStreamMesh(link, draw);
     mesh.bones.push_back(draw.model);
 
     bool first = true;
@@ -623,13 +622,13 @@ bool ModelParser::readVifStreamMesh(u32 at, u32 end, const NodeDraw& draw, sdfMa
 
 /// A skinned stream runs one VU1 pass per bone, each sending that bone's positions (weight in w)
 /// and normals; the last also carries the faces, texcoords and colors.
-bool ModelParser::readWeightedVifStream(u32 at, u32 end, const NodeDraw& draw, sdfMatPtr_t aMat,
+bool ModelParser::readWeightedVifStream(u32 at, u32 end, u32 link, const NodeDraw& draw, sdfMatPtr_t aMat,
                                         const std::vector<Matrix4>& bones, Frame* frame) {
     if (bones.empty() || bones.size() > kMaxBones) {
         reportUnsupported("weighted stream bone count", u32(bones.size()));
         return false;
     }
-    DrawMesh mesh = startStreamMesh(at, draw);
+    DrawMesh mesh = startStreamMesh(link, draw);
     mesh.bones = bones;
 
     const u32 lastPass = u32(bones.size()) - 1;

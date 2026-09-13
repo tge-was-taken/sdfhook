@@ -2421,6 +2421,11 @@ right.
       packet's last TM row, rotated by `corePktWorldLightMtxCache` unless the mesh is weighted
       (0x2B8D2C..0x2B8D80, COP2 to decode), so every reflection pass samples column 0.
 
+- [ ] **M5: the native shot sometimes lands a frame late.** The same capture scores 5.3 or 9.7
+      (006) and 10.5 or 14.3 (013) run to run; the log says "shot of frame 3" in one and "frame 2"
+      in the other while the emulator's shot is identical. A score change under 5 points on a
+      capture needs a second run before it counts.
+
 - [ ] **B1: battle's remaining differences.** Billboard quads carried the vertex default 0x80
       instead of their batch color, which reached the shader only through the light term, so
       their alpha was 128 however faint the batch; now each corner takes the batch color, drawn

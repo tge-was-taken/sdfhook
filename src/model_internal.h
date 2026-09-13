@@ -62,7 +62,8 @@ inline Matrix4 MultMatrixRev(const Matrix4& aLeft, const Matrix4& aMatrix) {
 // The six bits VCLIP sets. sdfModelCheckBounds ANDs them across the corners, so only agreement
 // matters, not which plane each names.
 inline u32 getClipCode(const f32 v[4]) {
-    const f32 w = v[3];
+    // VCLIP judges against |w|, so a corner behind the eye is not outside every plane at once.
+    const f32 w = std::fabs(v[3]);
     u32 code = 0;
     for (int axis = 0; axis < 3; axis++) {
         if (v[axis] > w) code |= 1u << (2 * axis);

@@ -533,8 +533,8 @@ void ModelHooks::sdfModelTempPacketLinkOt(guest_ref<sdfModelRootNode_t> root, Fr
                 // @optout 0x2B1C78..0x2B1CE3 dma: builds the material REF packet and links it
                 const sdfMatPtr_t mat{readListItem(root->matList, packet->matIndex)};
                 if (!mParser.readVifStreamMesh(packet->dataPtr.addr,
-                                       packet->dataPtr.addr + 16u * packet->qwc, packetDraw, mat,
-                                       frame)) {
+                                       packet->dataPtr.addr + 16u * packet->qwc,
+                                       packet->dataPtr.addr, packetDraw, mat, frame)) {
                     mParser.mTrace.countStrayRef();
                 }
             }
@@ -586,14 +586,14 @@ void ModelHooks::sdfModelLinkShapedDrawPacket(guest_ref<sdfModelRootNode_t> root
                                                 u32(sizeof(sdfModelShapeEntry_t)) * targets[t]}
                     .readOr();
             if (!entry.dataPtr) continue;
-            if (!mParser.readVifStreamMesh(entry.dataPtr.addr, entry.dataPtr.addr + 16u * entry.qwc, draw,
-                                   mat, frame)) {
+            if (!mParser.readVifStreamMesh(entry.dataPtr.addr, entry.dataPtr.addr + 16u * entry.qwc,
+                                   entry.dataPtr.addr, draw, mat, frame)) {
                 mParser.mTrace.countStrayRef();
             }
         }
         // The list's own stream closes the chain, which is the mesh the targets deform.
-        if (!mParser.readVifStreamMesh(list->next.addr, list->next.addr + 16u * list->count, draw, mat,
-                               frame)) {
+        if (!mParser.readVifStreamMesh(list->next.addr, list->next.addr + 16u * list->count,
+                               list->next.addr, draw, mat, frame)) {
             mParser.mTrace.countStrayRef();
         }
     }
@@ -985,8 +985,8 @@ void ModelHooks::sdfModelSetNormalDrawPacket(const NodeDraw& draw, u32 chainAddr
         const u32 end = target + 16u * qwc;
         const sdfCoreBatchHeaderPtr_t header{code.next};
         const bool weighted = header && (header->packetBits & sdfCorePacketWeights);
-        const bool read = weighted ? mParser.readWeightedVifStream(target, end, draw, mat, bones, frame)
-                                   : mParser.readVifStreamMesh(target, end, draw, mat, frame);
+        const bool read = weighted ? mParser.readWeightedVifStream(target, end, at, draw, mat, bones, frame)
+                                   : mParser.readVifStreamMesh(target, end, at, draw, mat, frame);
         if (!read) mParser.mTrace.countStrayRef();
         bones.clear();
     }
