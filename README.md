@@ -1,11 +1,87 @@
 # sdfhook
 
+> **An AI experiment, and deprecated.** Almost all of this was written by Claude Code, as a test of
+> how far an agent gets on a reverse engineering problem that has a number attached to it. It got
+> further than expected: the quiet scenes land within a few channel values of the emulated frame,
+> from the game's own geometry, textures, lighting and draw order. It is still not a renderer to
+> play the game on, and it is no longer worked on. `CLAUDE.md` is the operational reference it was
+> written against and `TODO.md` is where it stopped, with the evidence for each open item.
+
 A native renderer for SDF, the engine SMT3 Nocturne (SLUS-20911) is built on. SDF is Atlus's own
 library, statically linked into the ELF, so there is no middleware boundary to cut at the way
 RenderWare gives one; the cut is at `sdfModelLinkOt` instead.
 
-Nothing is reimplemented yet. This phase hooks the draw path and records what it does, so the data
-flow is known before any of it is replaced.
+Nothing of the engine is reimplemented. The renderer hooks the draw path, decodes the DMA chain the
+game sends to the GS, and draws that with GL; the guest keeps running under a PCSX2 fork
+(`pcsx2-hook`) that provides the hooks and the reference frame buffer.
+
+## Status
+
+`scripts/refdiff_all.sh` scores each scene against the emulated frame buffer at 512x448, as the
+mean absolute channel difference out of 255. Lower is better.
+
+| scene | score |
+|---|---|
+| title screen | 1.22 |
+| menu main | 2.02 |
+| menu loading file 1 | 2.08 |
+| field unknown realm | 4.23 |
+| battle unknown realm | 4.26 |
+| field underground facility | 4.37 |
+
+So a quiet scene is within a few channel values of the hardware, and the error that is left is
+mostly the uniform brightness offset below. Battle effects are a different story, 8 to 32 on the
+captures TODO.md lists.
+
+### What works
+
+- **The 2D is decoded, not hooked.** `gs_decoder.cpp` reads the chain as VIF1 and the GIF do and
+  keeps the whole register file, so a primitive kicked in a packet nothing hooked still draws.
+- **Order is the DMA chain**, replayed at `sdfGrReqDraw` with GS state per context, not the order
+  the hooks fired in.
+- **VU1 is read, not guessed.** All 1884 instructions of the one microprogram SDF uploads are
+  transcribed in `docs/vu1/`, checked address by address against the listing by
+  `scripts/vucheck.py`, and the shader's lighting carries the VU addresses it came from. That is
+  where the three-light sum, the per-vertex clamp, light 0's color being a difference, and the
+  sphere-map reflection pass come from. The toon ramp is the one deliberate departure, sampled per
+  fragment where VU1 has it per vertex.
+- **Meshes**: all four packet types (rigid, weighted, blend shape, VIF stream), skinned on the GPU,
+  with the engine's lighting, fog and toon ramp, and back-face culling off the per-draw sign.
+- **Depth** holds GS z as `1 - z / 2^24`, so decoded draws and meshes test against each other the
+  way the hardware has them.
+- **Textures** from registered assets, from the font sheet, and recovered out of GS memory for a
+  savestate taken after a load.
+- **Frame feedback**, the previous-frame blend the field and several effects depend on.
+- **Tooling**: a mesh picker in the window, per-vertex and per-register diffs against the hardware
+  (`vertdiff.py`, `gsdiff.py`), draw isolation on both sides, F9 captures, and a scoring sweep.
+- **`patches/`** is independent of all of the above and does work: hard patches of the retail ELF
+  for progressive 480p, widescreen, no blur, noclip and a free camera, for real hardware or any
+  emulator. See `patches/README.md`.
+
+### What does not
+
+- **The 3D scenes draw about 3.5 too bright** on every channel, and the mesh alpha is the unsolved
+  knot behind it (TODO.md V8). It is the largest single error left.
+- **Battle effects** are the worst case: dull ice, missing bloom, and effect polys' second texture
+  unmodelled (P3, B1).
+- **Field shadows** are decoded but off by default, last measured at about 22 points (V19).
+- **The reflection pass** samples the wrong axis (P8), and `flatten` reaches only light 0 (V23).
+- **Recovered battle textures** may be wrong, and are unverified (B2).
+- **The native shot sometimes lands a frame late**, worth several points on two captures (M5).
+- Anything no savestate reaches is reported rather than drawn, which is the point of the
+  `unsupported` channel, but it means play meets states the curated scenes never measured (X10).
+
+### What a checkout does not include
+
+- **`vendor/pcsx2-hook`**, the runner. Clone it there or set `PCSX2HOOK_TREE`.
+- **A BIOS, the disc and the savestates.** All user-supplied. `states/README.md` names the scenes
+  but the `.p2s` files are not in the tree, so no scored run is reproducible from a checkout alone.
+  `refdiff_all.sh` and `dump_scenes.sh` default `SDF_BIOS` and `SDF_ISO` to paths from this
+  machine; override both.
+- **`assets/SLUS-20911.facts`, `.packets` and `.pseudo.c`**, exported from an IDA database of the
+  disc that is also not here. `scripts/guestcheck.py` needs the facts; regenerate with
+  `scripts/ida_facts.py` and `scripts/export_packets.py`. The symbol map
+  (`assets/SLUS-20911.map`) is in the tree, so the hooks resolve and the build runs without them.
 
 ## Build
 
@@ -93,21 +169,22 @@ owns the window, the context and the loop; `Renderer` owns the GL objects and kn
 frame, on that thread and no other. The guest thread only ever touches the three-slot `FrameRing`,
 so a hook never blocks on the GPU.
 
-A frame's draws are decoded from the producers' arguments as the game calls them, each recording
-the packet that carries it. At `sdfGrReqDraw`, the first moment the content is both complete and
-known to be wanted, one walk follows the frame's DMA chain the way channel 1 sends it, replays the
-GS state, and puts the draws in that order. The renderer draws that order and nothing else. `dds3DrawProcess` is `sdfGrReqDraw`'s only
-caller, so returning from it without one means `dds3DrawFlag & 0x2000000` skipped the submission:
-the game built the frame and threw it away, and dropping the packets leaves the previous frame on
-screen the way the hardware does. None of the three sample states exercises that path.
+A frame's draws are decoded from the producers' arguments as the game calls them, each recording the
+packet that carries it. At `sdfGrReqDraw`, the first moment the content is both complete and known
+to be wanted, one walk follows the frame's DMA chain the way channel 1 sends it, replays the GS
+state, and puts the draws in that order. The renderer draws that order and nothing else.
+`dds3DrawProcess` is `sdfGrReqDraw`'s only caller, so returning from it without one means
+`dds3DrawFlag & 0x2000000` skipped the submission: the game built the frame and threw it away, and
+dropping the packets leaves the previous frame on screen the way the hardware does. None of the
+three sample states exercises that path.
 
-Sprites are the only geometry drawn so far, and every one the GS rasterizes is decoded: 42, 104 and
-34 per frame on field, battle and menu, matching the GS trace exactly.
+Every sprite the GS rasterizes is decoded: 42, 104 and 34 per frame on field, battle and menu,
+matching the GS trace exactly.
 
-That came from hooking `sdfDrawTagLink` rather than the producers. Every render function links its
-packet through it, so one hook is a complete inventory of a frame: the return address names the
-producer and the packet says what it draws. Hunting producers by name found four candidates and
-missed the two that mattered.
+The 2D inventory came from hooking `sdfDrawTagLink` rather than the producers. Every render
+function links its packet through it, so one hook is a complete inventory of a frame: the return
+address names the producer and the packet says what it draws. Hunting producers by name found four
+candidates and missed the two that mattered.
 
 A packet is read at the submit, not at the link, because it is linked before its contents are
 written. It is a DMA tag followed by its own quadwords, and those hold **several GIF tags in a row**
@@ -132,11 +209,11 @@ no geometry, following REF tags to their data. That is how the A+D case was foun
 The draw space is 512x224, which the GS magnifies 2x vertically to the 512x448 it presents;
 `XYOFFSET` is 1792,1936 in whole pixels. That is measured rather than assumed: the blur sprite in
 `dds3DrawProcess` is exactly 0,0..512,224 at zero zoom, and every battle sprite lands inside the
-rect. Sprites still draw untextured, so they are flat quads in the right places.
+rect.
 
-Not yet drawn: triangle fans and strips (17464 and 472 vertices a run on field), and the billboards,
-which go through VU1 as object-space corners and a transform packet, so there is no GIF geometry to
-read at link time.
+Geometry VU1 builds carries no GIF vertices, so meshes and billboards come from their producers'
+arguments (`sdfModelLinkOt`, `sdfCorePacketGen`, `drawSprite3D`) and everything else is read from
+the chain. CLAUDE.md's "The migration boundary" says which is which and why.
 
 ## Where the addresses come from
 
