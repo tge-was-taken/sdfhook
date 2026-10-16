@@ -11,3 +11,5 @@ assets/
 
 # Symlink into the build tree for the language server.
 compile_commands.json
+# Patched game executables are the publisher's code.
+patches/out/
