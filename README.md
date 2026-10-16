@@ -41,7 +41,9 @@ captures TODO.md lists.
   the hooks fired in.
 - **VU1 is read, not guessed.** All 1884 instructions of the one microprogram SDF uploads are
   transcribed in `docs/vu1/`, checked address by address against the listing by
-  `scripts/vucheck.py`, and the shader's lighting carries the VU addresses it came from. That is
+  `scripts/vucheck.py`, and the shader's lighting carries the VU addresses it came from. The
+  decompiler that produced it (`scripts/vu2c.py`, pcsx2-hook's, copied in) is here too, so the
+  transcription regenerates from a checkout. That is
   where the three-light sum, the per-vertex clamp, light 0's color being a difference, and the
   sphere-map reflection pass come from. The toon ramp is the one deliberate departure, sampled per
   fragment where VU1 has it per vertex.

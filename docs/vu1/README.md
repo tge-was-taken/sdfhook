@@ -1,14 +1,20 @@
 # VU1 microcode
 
-`docs/vu1/vu1_image.c` is the pseudo-C of the one program SDF uploads, from `vu1_images.jsonl` through
-pcsx2-hook's `scripts/vu2c.py`. Captured on `smt3_field_unknown_realm`; the image is the same in
-every scene, since SDF uploads one and dispatches inside it.
+`docs/vu1/vu1_image.c` is the pseudo-C of the one program SDF uploads, from `vu1_images.jsonl`
+through `scripts/vu2c.py`. Captured on `smt3_field_unknown_realm`; the image is the same in every
+scene, since SDF uploads one and dispatches inside it.
+
+`scripts/vu2c.py` is pcsx2-hook's, copied in so this directory regenerates from a checkout of this
+repo alone; it needs nothing but the standard library. pcsx2-hook has the maintained one.
 
 Regenerate with:
 
     PCSX2HOOK_VU_TRACE=1 PCSX2HOOK_DUMP_DIR=dumps/vu1 ./build/bin/sdfhook "$SDF_ISO"
-    python3 ~/projects/pcsx2-hook/pcsx2-hook/scripts/vu2c.py docs/vu1/vu1_images.jsonl \
+    python3 scripts/vu2c.py docs/vu1/vu1_images.jsonl \
         --clean --flow --keep-nops --names docs/vu1/vu1_names.txt > docs/vu1/vu1_image.c
+
+The command above reproduces the checked-in `vu1_image.c` byte for byte, and
+`scripts/vu2c.py --selftest` passes 32 cases.
 
 **`--keep-nops` is not optional.** Without it 81 of the 1884 addresses are omitted, every range in
 every transcription reads as incomplete, and `vucheck.py` reports gaps that are not there.
